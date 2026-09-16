@@ -30,6 +30,8 @@ import { ConfirmarCambioEmailDto } from './dto/confirmar-cambio-email.dto';
 
 @Injectable()
 export class AuthService {
+  private readonly DUMMY_HASH =
+    '$2b$10$CwTycUXWue0Thq9StjUM0uJ8gcCX5eNiUV5NcH3H0aP5Z2v5X6dS2';
   private readonly googleClient: OAuth2Client;
 
   constructor(
@@ -183,21 +185,12 @@ export class AuthService {
       },
     });
 
-    if (!usuario) {
-      throw new NotFoundException(
-        'Usuario no encontrado en el sistema',
-      );
-    }
+    const passwordValida = usuario
+      ? await bcrypt.compare(dto.password, usuario.password)
+      : await bcrypt.compare(dto.password, this.DUMMY_HASH);
 
-    const passwordValida = await bcrypt.compare(
-      dto.password,
-      usuario.password,
-    );
-
-    if (!passwordValida) {
-      throw new UnauthorizedException(
-        'Contraseña incorrecta, intente nuevamente',
-      );
+    if (!usuario || !passwordValida) {
+      throw new UnauthorizedException('Correo o contraseña incorrectos');
     }
 
     if (!usuario.emailVerificado) {
@@ -904,7 +897,7 @@ export class AuthService {
   // RECUPERAR CONTRASEÑA
   // ============================================================
 
-  async forgotPassword(
+    async forgotPassword(
     dto: ForgotPasswordDto,
   ) {
     const usuario =
@@ -914,32 +907,30 @@ export class AuthService {
         },
       });
 
-    if (!usuario) {
-      throw new NotFoundException(
-        'No existe una cuenta registrada con ese correo',
+    // Se firma y se envía solo si existe, pero la respuesta hacia
+    // afuera es idéntica en ambos casos (evita enumeración de cuentas).
+    if (usuario) {
+      const resetToken =
+        this.jwtService.sign(
+          {
+            sub: usuario.id,
+            type: 'password-reset',
+          },
+          {
+            expiresIn: '1h',
+          },
+        );
+
+      void this.mailService.sendPasswordResetEmail(
+        usuario.email,
+        usuario.nombre,
+        resetToken,
       );
     }
 
-    const resetToken =
-      this.jwtService.sign(
-        {
-          sub: usuario.id,
-          type: 'password-reset',
-        },
-        {
-          expiresIn: '1h',
-        },
-      );
-
-    void this.mailService.sendPasswordResetEmail(
-      usuario.email,
-      usuario.nombre,
-      resetToken,
-    );
-
     return {
       mensaje:
-        'Se envió un enlace para restablecer tu contraseña. Revisa tu correo.',
+        'Si existe una cuenta con ese correo, te enviamos un enlace para restablecer tu contraseña.',
     };
   }
 
