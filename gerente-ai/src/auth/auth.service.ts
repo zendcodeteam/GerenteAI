@@ -28,6 +28,8 @@ import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { CambiarEmailDto } from './dto/cambiar-email.dto';
 import { ConfirmarCambioEmailDto } from './dto/confirmar-cambio-email.dto';
 
+const BCRYPT_ROUNDS = 12;
+
 @Injectable()
 export class AuthService {
   private readonly DUMMY_HASH =
@@ -52,7 +54,7 @@ export class AuthService {
   async register(dto: RegisterDto) {
     const hashedPassword = await bcrypt.hash(
       dto.password,
-      10,
+      BCRYPT_ROUNDS,
     );
 
     try {
@@ -191,6 +193,22 @@ export class AuthService {
 
     if (!usuario || !passwordValida) {
       throw new UnauthorizedException('Correo o contraseña incorrectos');
+    }
+
+    // Re-hashear en el login si la contraseña fue creada con un factor menor a 12
+    try {
+      if (bcrypt.getRounds(usuario.password) < BCRYPT_ROUNDS) {
+        const rehashedPassword = await bcrypt.hash(
+          dto.password,
+          BCRYPT_ROUNDS,
+        );
+        await this.prisma.usuario.update({
+          where: { id: usuario.id },
+          data: { password: rehashedPassword },
+        });
+      }
+    } catch {
+      // Si getRounds falla por formato no estándar, no interrumpir el flujo de login
     }
 
     if (!usuario.emailVerificado) {
@@ -452,7 +470,7 @@ export class AuthService {
     const randomPassword =
       await bcrypt.hash(
         `${google.googleId}-${crypto.randomUUID()}`,
-        10,
+        BCRYPT_ROUNDS,
       );
 
     // ------------------------------------------------------------
@@ -978,7 +996,7 @@ export class AuthService {
     const hashedPassword =
       await bcrypt.hash(
         dto.newPassword,
-        10,
+        BCRYPT_ROUNDS,
       );
 
     await this.prisma.usuario.update({
