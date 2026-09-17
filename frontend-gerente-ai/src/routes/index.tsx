@@ -105,6 +105,23 @@ const ResetPasswordPage = lazy(() =>
 );
 
 // ============================================================
+// LEGAL PAGES
+// PUBLIC - NO REQUIEREN AUTENTICACIÓN
+// ============================================================
+
+const TerminosPage = lazy(() =>
+  import("@/features/legal").then((m) => ({
+    default: m.TerminosPage,
+  }))
+);
+
+const PrivacidadPage = lazy(() =>
+  import("@/features/legal").then((m) => ({
+    default: m.PrivacidadPage,
+  }))
+);
+
+// ============================================================
 // INVESTOR DASHBOARD
 // PUBLIC - NO REQUIERE AUTENTICACIÓN
 // ============================================================
@@ -212,6 +229,31 @@ export function AppRoutes() {
       <Route
         path="/caracteristicas"
         element={<FeaturesPage />}
+      />
+
+      {/* ======================================================
+          LEGAL ROUTES
+          PUBLIC - ACCESSIBLE WITHOUT AUTHENTICATION
+          ====================================================== */}
+
+      {/* Términos de servicio */}
+      <Route
+        path="/terminos"
+        element={
+          <Suspense fallback={<PageSkeleton />}>
+            <TerminosPage />
+          </Suspense>
+        }
+      />
+
+      {/* Política de privacidad */}
+      <Route
+        path="/privacidad"
+        element={
+          <Suspense fallback={<PageSkeleton />}>
+            <PrivacidadPage />
+          </Suspense>
+        }
       />
 
       {/* Investor Dashboard público */}

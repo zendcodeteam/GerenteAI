@@ -25,6 +25,16 @@ export interface RegisterCredentials {
   telefono?: string;
   nombreNegocio?: string;
   whatsappUsername?: string;
+
+  /**
+   * Consentimientos legales aceptados durante el registro.
+   *
+   * El backend registra cada documento por separado:
+   * - Términos de servicio
+   * - Política de privacidad
+   */
+  termsAccepted: boolean;
+  privacyAccepted: boolean;
 }
 
 export interface BackendAuthResponse {

@@ -7,6 +7,7 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 
@@ -31,6 +32,14 @@ type AuthUser = {
   rolGlobal: string;
 };
 
+type RequestWithIp = {
+  ip?: string;
+  headers: {
+    'x-forwarded-for'?: string;
+    'x-real-ip'?: string;
+  };
+};
+
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
@@ -40,8 +49,14 @@ export class AuthController {
   // ============================================================
 
   @Post('register')
-  register(@Body() dto: RegisterDto) {
-    return this.authService.register(dto);
+  register(
+    @Body() dto: RegisterDto,
+    @Req() req: RequestWithIp,
+  ) {
+    return this.authService.register(
+      dto,
+      this.getClientIp(req),
+    );
   }
 
   // ============================================================
@@ -76,9 +91,7 @@ export class AuthController {
    *
    * Si el correo de Google no pertenece a una cuenta existente
    * de Luka, AuthService devuelve un error indicando que debe
-   * utilizar el flujo de registro:
-   *
-   *     POST /auth/google/register
+   * utilizar el flujo de registro.
    */
   @Post('google')
   googleLogin(@Body() dto: GoogleLoginDto) {
@@ -103,7 +116,8 @@ export class AuthController {
    *   - Teléfono colombiano
    *   - Nombre del negocio
    *   - Usuario de WhatsApp (opcional)
-   *   - Confirmación de términos
+   *   - Aceptación de Términos de servicio
+   *   - Autorización para el tratamiento de datos personales
    *
    * El AuthService se encarga de crear:
    *
@@ -112,12 +126,55 @@ export class AuthController {
    *   UsuarioNegocio
    *   Sede principal
    *   UsuarioSede
+   *   Consentimientos legales
    *
    * y finalmente devuelve el JWT de sesión.
    */
   @Post('google/register')
-  googleRegister(@Body() dto: GoogleRegisterDto) {
-    return this.authService.googleRegister(dto);
+  googleRegister(
+    @Body() dto: GoogleRegisterDto,
+    @Req() req: RequestWithIp,
+  ) {
+    return this.authService.googleRegister(
+      dto,
+      this.getClientIp(req),
+    );
+  }
+
+  // ============================================================
+  // OBTENER IP DEL CLIENTE
+  // ============================================================
+
+  /**
+   * Obtiene la IP del cliente teniendo en cuenta que Luka
+   * puede ejecutarse detrás de un proxy o balanceador.
+   *
+   * En producción, plataformas como Render pueden enviar
+   * la IP original mediante X-Forwarded-For.
+   *
+   * Se toma únicamente la primera IP de la cadena.
+   */
+  private getClientIp(req: RequestWithIp): string {
+    const forwardedFor = req.headers['x-forwarded-for'];
+
+    if (forwardedFor) {
+      const firstIp = forwardedFor
+        .split(',')
+        .map((ip) => ip.trim())
+        .find(Boolean);
+
+      if (firstIp) {
+        return firstIp;
+      }
+    }
+
+    const realIp = req.headers['x-real-ip']?.trim();
+
+    if (realIp) {
+      return realIp;
+    }
+
+    return req.ip?.trim() || 'unknown';
   }
 
   // ============================================================

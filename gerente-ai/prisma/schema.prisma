@@ -7,6 +7,422 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model Usuario {
+  id                     String                @id @default(uuid())
+  nombre                 String
+  telefono               String?
+  email                  String                @unique
+  password               String
+  googleId               String?               @unique
+  emailVerificado        Boolean               @default(false)
+  rolGlobal              RolGlobal             @default(CLIENTE)
+  plan                   Int                   @default(1)
+  createdAt              DateTime              @default(now())
+  consentimientosLegales ConsentimientoLegal[]
+  pagos                  Pago[]
+  negocios               UsuarioNegocio[]
+  sedes                  UsuarioSede[]
+}
+
+model ConsentimientoLegal {
+  id         String         @id @default(uuid())
+  usuarioId  String
+  documento  DocumentoLegal
+  version    String
+  aceptadoEn DateTime       @default(now())
+  ipAddress  String
+  createdAt  DateTime       @default(now())
+  usuario    Usuario        @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@index([usuarioId])
+  @@index([documento])
+  @@index([usuarioId, documento])
+}
+
+model Negocio {
+  id                 String             @id @default(uuid())
+  nombre             String
+  telefonoContacto   String?
+  telefonoSecundario String?
+  contexto           String?
+  /// Dia en que arranca el periodo contable del negocio (1 a 28).
+  ///
+  /// No todos cierran el mes calendario: hay negocios cuyo periodo va del 21 al
+  /// 20 del mes siguiente. El dia de cierre no se guarda porque se deduce
+  /// (inicio - 1) y guardar los dos permitiria dejarlos inconsistentes.
+  ///
+  /// Se limita a 28 para que exista en todos los meses: un periodo que empiece
+  /// el 30 no tendria fecha valida en febrero.
+  diaInicioPeriodo   Int                @default(1)
+  plan               Int                @default(1)
+  planVenceEl        DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  consumosIa         ConsumoIa[]
+  notificaciones     NotificacionPlan[]
+  pagos              Pago[]
+  reportes           Reporte[]
+  sedes              Sede[]
+  usuariosNegocio    UsuarioNegocio[]
+}
+
+model Sede {
+  id               String            @id @default(uuid())
+  nombre           String
+  telefono         String?           @unique
+  whatsappUserId   String?           @unique
+  whatsappUsername String?
+  direccion        String?
+  contexto         String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  negocioId        String
+  abonos           Abono[]
+  clientes         Cliente[]
+  compras          Compra[]
+  consumosIa       ConsumoIa[]
+  gastos           Gasto[]
+  mensajes         Mensaje[]
+  productos        Producto[]
+  proveedores      Proveedor[]
+  repartos         RepartoUtilidad[]
+  reportes         Reporte[]
+  negocio          Negocio           @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  usuariosSede     UsuarioSede[]
+  ventas           Venta[]
+
+  @@index([negocioId, createdAt])
+}
+
+model UsuarioNegocio {
+  id        String  @id @default(uuid())
+  role      Role    @default(ADMIN)
+  usuarioId String
+  negocioId String
+  negocio   Negocio @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@unique([usuarioId, negocioId])
+}
+
+model UsuarioSede {
+  id        String  @id @default(uuid())
+  role      Role    @default(ADMIN)
+  usuarioId String
+  sedeId    String
+  sede      Sede    @relation(fields: [sedeId], references: [id], onDelete: Cascade)
+  usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+
+  @@unique([usuarioId, sedeId])
+}
+
+model Mensaje {
+  id            String     @id @default(uuid())
+  rol           RolMensaje
+  contenido     String
+  fecha         DateTime   @default(now())
+  sedeId        String
+  /// Los movimientos que este mensaje reporto, cuando es una respuesta de Luka.
+  ///
+  /// Es lo que permite que "eliminame esto", citando el mensaje donde Luka
+  /// listo cuatro compras, borre EXACTAMENTE esas cuatro. Sin los ids, el
+  /// backend solo veia el texto del mensaje citado y tenia que adivinar por
+  /// fecha: en un caso real listo cinco movimientos en vez de cuatro y el
+  /// usuario confirmo sin revisar.
+  movimientoIds String[]   @default([])
+  /// Quien lo escribio: telefono o identidad de WhatsApp del remitente.
+  ///
+  /// El historial es por sede, y sin esto las conversaciones de dos empleados
+  /// del mismo negocio se mezclaban: Luka le contestaba a uno con el contexto
+  /// del otro. Nulo en los mensajes de Luka y en los anteriores a este campo.
+  remitente     String?
+  /// Id del mensaje en WhatsApp (wamid).
+  ///
+  /// Es lo que permite encontrar el mensaje que alguien cita al responder:
+  /// Meta manda en el webhook el wamid del mensaje citado, y sin guardarlo no
+  /// habia forma de saber de cual hablaba. Nulo en los mensajes viejos y en
+  /// los que aun no se han confirmado como enviados.
+  ///
+  /// El indice es normal y NO unico a proposito: un constraint unico nuevo
+  /// hace que `prisma db push` se niegue a correr sin --accept-data-loss, y
+  /// ese flag le daria permiso permanente para borrar columnas y tablas en
+  /// cualquier despliegue futuro. Aqui el wamid siempre se busca acotado por
+  /// sede, asi que un indice corriente hace exactamente el mismo trabajo.
+  wamid         String?
+  sede          Sede       @relation(fields: [sedeId], references: [id], onDelete: Cascade)
+
+  @@index([sedeId, fecha])
+  @@index([wamid])
+}
+
+model Reporte {
+  id        String   @id @default(uuid())
+  tipo      String
+  contenido Json
+  fecha     DateTime @default(now())
+  negocioId String
+  sedeId    String?
+  negocio   Negocio  @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  sede      Sede?    @relation(fields: [sedeId], references: [id], onDelete: Cascade)
+}
+
+model Producto {
+  id             String          @id @default(uuid())
+  nombre         String
+  stock          Int             @default(0)
+  stockMinimo    Int             @default(0)
+  precioCompra   Decimal
+  precioVenta    Decimal
+  sedeId         String
+  detallesCompra DetalleCompra[]
+  detallesVenta  DetalleVenta[]
+  sede           Sede            @relation(fields: [sedeId], references: [id], onDelete: Cascade)
+
+  @@index([sedeId])
+}
+
+model Cliente {
+  id             String  @id @default(uuid())
+  nombre         String
+  telefono       String?
+  saldoPendiente Decimal @default(0.0)
+  sedeId         String
+  abonos         Abono[]
+  sede           Sede    @relation(fields: [sedeId], references: [id], onDelete: Cascade)
+  ventas         Venta[]
+}
+
+model Proveedor {
+  id        String   @id @default(uuid())
+  nombre    String
+  telefono  String?
+  correo    String?
+  direccion String?
+  sedeId    String
+  compras   Compra[]
+  sede      Sede     @relation(fields: [sedeId], references: [id], onDelete: Cascade)
+}
+
+model Venta {
+  id               String             @id @default(uuid())
+  tipo             TipoVenta          @default(CONTADO)
+  total            Decimal
+  saldoPendiente   Decimal            @default(0)
+  fechaVencimiento DateTime?
+  fecha            DateTime           @default(now())
+  /// Concepto en palabras ("Venta de panes", "Ventas del dia").
+  /// Sin esto no se puede buscar un ingreso por su nombre, como si se hace
+  /// con los gastos a traves de `Gasto.descripcion`.
+  descripcion      String?
+  /// Como se recibio el dinero. null = no se especifico.
+  metodoPago       MetodoPago?
+  /// Agrupa las partes de un mismo total: la venta general y sus desgloses
+  /// por metodo de pago comparten `grupoId`. null = movimiento suelto.
+  grupoId          String?
+  clienteId        String?
+  sedeId           String
+  abonos           Abono[]
+  detalles         DetalleVenta[]
+  recordatorios    RecordatorioFiado?
+  cliente          Cliente?           @relation(fields: [clienteId], references: [id])
+  sede             Sede               @relation(fields: [sedeId], references: [id], onDelete: Cascade)
+
+  @@index([sedeId, fecha])
+  @@index([clienteId, saldoPendiente])
+  @@index([grupoId])
+}
+
+model RecordatorioFiado {
+  id        String   @id @default(uuid())
+  ventaId   String   @unique
+  /// Saldo que quedaba pendiente cuando se aviso, para poder auditarlo.
+  saldo     Decimal
+  enviadoEl DateTime @default(now())
+  venta     Venta    @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+
+  @@index([enviadoEl])
+}
+
+model DetalleVenta {
+  id         String   @id @default(uuid())
+  cantidad   Int
+  precio     Decimal
+  ventaId    String
+  productoId String
+  producto   Producto @relation(fields: [productoId], references: [id])
+  venta      Venta    @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+
+  @@index([productoId])
+}
+
+model Compra {
+  id          String          @id @default(uuid())
+  total       Decimal
+  fecha       DateTime        @default(now())
+  proveedorId String?
+  sedeId      String
+  proveedor   Proveedor?      @relation(fields: [proveedorId], references: [id])
+  sede        Sede            @relation(fields: [sedeId], references: [id], onDelete: Cascade)
+  detalles    DetalleCompra[]
+
+  @@index([sedeId, fecha])
+}
+
+model DetalleCompra {
+  id         String   @id @default(uuid())
+  cantidad   Int
+  costo      Decimal
+  compraId   String
+  productoId String
+  compra     Compra   @relation(fields: [compraId], references: [id], onDelete: Cascade)
+  producto   Producto @relation(fields: [productoId], references: [id])
+
+  @@index([productoId])
+}
+
+model Gasto {
+  id          String         @id @default(uuid())
+  descripcion String
+  monto       Decimal
+  categoria   CategoriaGasto
+  fecha       DateTime       @default(now())
+  /// Como se pago. null = no se especifico.
+  metodoPago  MetodoPago?
+  /// Agrupa las partes de un mismo total (ver `Venta.grupoId`).
+  grupoId     String?
+  sedeId      String
+  sede        Sede           @relation(fields: [sedeId], references: [id], onDelete: Cascade)
+
+  @@index([sedeId, fecha])
+  @@index([grupoId])
+}
+
+/// Reparto de utilidades entre el dueno y los trabajadores.
+///
+/// Va en su propia tabla y no como un gasto mas: repartir ganancias no es un
+/// costo del negocio, y mezclarlo con los gastos distorsionaria los margenes.
+model RepartoUtilidad {
+  id             String              @id @default(uuid())
+  beneficiario   BeneficiarioReparto
+  /// Nombre concreto cuando se conoce ("Maria", "Don Jose").
+  nombre         String?
+  /// Porcentaje del total repartido, de 0 a 100.
+  porcentaje     Decimal
+  /// Monto que le corresponde, ya calculado.
+  monto          Decimal
+  /// Utilidad total que se repartio, para poder reconstruir el calculo.
+  totalRepartido Decimal
+  /// Une las partes de un mismo reparto.
+  grupoId        String
+  fecha          DateTime            @default(now())
+  sedeId         String
+  sede           Sede                @relation(fields: [sedeId], references: [id], onDelete: Cascade)
+
+  @@index([sedeId, fecha])
+  @@index([grupoId])
+}
+
+model Abono {
+  id        String   @id @default(uuid())
+  monto     Decimal
+  fecha     DateTime @default(now())
+  clienteId String
+  sedeId    String
+  ventaId   String?
+  cliente   Cliente  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  sede      Sede     @relation(fields: [sedeId], references: [id], onDelete: Cascade)
+  venta     Venta?   @relation(fields: [ventaId], references: [id])
+
+  @@index([sedeId, fecha])
+  @@index([clienteId])
+}
+
+model Pago {
+  id                 String     @id @default(uuid())
+  referencia         String     @unique
+  plan               Int
+  ciclo              CicloPago
+  montoEnCentavos    Int
+  moneda             String     @default("COP")
+  estado             EstadoPago @default(PENDIENTE)
+  wompiTransaccionId String?    @unique
+  datosWompi         Json?
+  procesadoEl        DateTime?
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+  negocioId          String
+  usuarioId          String
+  negocio            Negocio    @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  usuario            Usuario    @relation(fields: [usuarioId], references: [id])
+
+  @@index([negocioId, createdAt])
+}
+
+model NotificacionPlan {
+  id        String   @id @default(uuid())
+  tipo      String
+  venceEl   DateTime
+  enviadoEl DateTime @default(now())
+  negocioId String
+  negocio   Negocio  @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+
+  @@unique([negocioId, tipo, venceEl])
+  @@index([negocioId])
+}
+
+/// Registro persistente del consumo de IA de Luka.
+///
+/// Guarda cada llamada realizada al proveedor de IA para poder:
+/// - controlar las cuotas de mensajes de cada plan;
+/// - conocer el consumo real de tokens;
+/// - conocer el costo acumulado;
+/// - saber que proveedor/modelo fue utilizado;
+/// - diagnosticar llamadas fallidas;
+/// - generar reportes historicos de consumo.
+///
+/// Las llamadas exitosas son las que cuentan para la cuota. Las fallidas
+/// tambien se almacenan para diagnostico, pero `exitosa = false`.
+model ConsumoIa {
+  id           String   @id @default(uuid())
+  /// Negocio al que pertenece el consumo.
+  negocioId    String
+  /// Sede desde la que se produjo el consumo.
+  ///
+  /// Es nullable porque algunos consumos pueden originarse a nivel de negocio
+  /// y no estar asociados a una sede concreta.
+  sedeId       String?
+  /// Funcionalidad que produjo el consumo.
+  /// Ejemplos: "whatsapp", "chat", "reportes", etc.
+  feature      String
+  /// Identificador del proveedor de IA utilizado.
+  /// Ejemplos: "openai", "anthropic", etc.
+  providerId   String
+  /// Modelo concreto utilizado.
+  /// Ejemplos: "gpt-4o-mini", "gpt-5", etc.
+  model        String
+  /// Tokens enviados al modelo.
+  inputTokens  Int
+  /// Tokens generados por el modelo.
+  outputTokens Int
+  /// Costo estimado de la llamada en USD.
+  costoUsd     Decimal
+  /// Latencia total de la llamada en milisegundos.
+  latenciaMs   Int?
+  /// Indica si la llamada fue exitosa.
+  exitosa      Boolean
+  /// Código interno del error cuando la llamada falla.
+  errorCode    String?
+  createdAt    DateTime @default(now())
+  negocio      Negocio  @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  sede         Sede?    @relation(fields: [sedeId], references: [id], onDelete: Cascade)
+
+  @@index([negocioId, createdAt])
+  @@index([sedeId, createdAt])
+  @@index([providerId, createdAt])
+  @@index([feature, createdAt])
+  @@index([exitosa, createdAt])
+}
+
 enum Role {
   ADMIN
 }
@@ -21,9 +437,12 @@ enum TipoVenta {
   FIADO
 }
 
-/// Como entro o salio el dinero. Permite desglosar una venta total en sus
-/// partes ("1.500.000 en efectivo, 200.000 en transferencia") sin perder la
-/// relacion con el total, que se conserva en `grupoId`.
+/// Documentos legales cuya aceptación debe quedar registrada.
+enum DocumentoLegal {
+  TERMINOS_SERVICIO
+  POLITICA_PRIVACIDAD
+}
+
 enum MetodoPago {
   EFECTIVO
   TRANSFERENCIA
@@ -62,470 +481,4 @@ enum EstadoPago {
 enum CicloPago {
   MENSUAL
   ANUAL
-}
-
-model Usuario {
-  id              String    @id @default(uuid())
-  nombre          String
-  telefono        String?
-  email           String    @unique // Login para el dashboard
-  password        String // Contraseña encriptada para el dashboard
-  googleId        String?   @unique // Identificador único de la cuenta de Google
-  emailVerificado Boolean   @default(false)
-  rolGlobal       RolGlobal @default(CLIENTE)
-  plan            Int       @default(1) // 1=Gratis (1 sede), 2=Básico (4 sedes), etc.
-  createdAt       DateTime  @default(now())
-
-  negocios UsuarioNegocio[] // Para dueños/socios del negocio
-  sedes    UsuarioSede[] // Para administradores/empleados de sede
-  pagos    Pago[]
-}
-
-model Negocio {
-  id                 String  @id @default(uuid())
-  nombre             String
-  telefonoContacto   String? // Teléfono general/administrativo (no usado por el bot)
-  telefonoSecundario String?
-  contexto           String? @db.Text // Contexto general de IA para el negocio
-
-  /// Dia en que arranca el periodo contable del negocio (1 a 28).
-  ///
-  /// No todos cierran el mes calendario: hay negocios cuyo periodo va del 21 al
-  /// 20 del mes siguiente. El dia de cierre no se guarda porque se deduce
-  /// (inicio - 1) y guardar los dos permitiria dejarlos inconsistentes.
-  ///
-  /// Se limita a 28 para que exista en todos los meses: un periodo que empiece
-  /// el 30 no tendria fecha valida en febrero.
-  diaInicioPeriodo Int @default(1)
-
-  plan        Int       @default(1)
-  planVenceEl DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-
-  usuariosNegocio UsuarioNegocio[]
-  sedes           Sede[]
-  reportes        Reporte[]
-  pagos           Pago[]
-  notificaciones  NotificacionPlan[]
-  consumosIa      ConsumoIa[]
-}
-
-model Sede {
-  id               String   @id @default(uuid())
-  nombre           String
-  telefono         String?  @unique // Línea de WhatsApp independiente para el bot de esta sede
-  whatsappUserId   String?  @unique
-  whatsappUsername String?
-  direccion        String?
-  contexto         String?  @db.Text // Contexto de IA individual para la sede
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-
-  negocioId String
-  negocio   Negocio @relation(fields: [negocioId], references: [id], onDelete: Cascade)
-
-  // Relaciones operacionales independientes por sede
-  usuariosSede UsuarioSede[]
-  mensajes     Mensaje[]
-  productos    Producto[]
-  clientes     Cliente[]
-  proveedores  Proveedor[]
-  ventas       Venta[]
-  compras      Compra[]
-  gastos       Gasto[]
-  reportes     Reporte[]
-  abonos       Abono[]
-  repartos     RepartoUtilidad[]
-  consumosIa   ConsumoIa[]
-
-  @@index([negocioId, createdAt])
-}
-
-model UsuarioNegocio {
-  id   String @id @default(uuid())
-  role Role   @default(ADMIN)
-
-  usuarioId String
-  usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
-
-  negocioId String
-  negocio   Negocio @relation(fields: [negocioId], references: [id], onDelete: Cascade)
-
-  @@unique([usuarioId, negocioId])
-}
-
-model UsuarioSede {
-  id   String @id @default(uuid())
-  role Role   @default(ADMIN)
-
-  usuarioId String
-  usuario   Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
-
-  sedeId String
-  sede   Sede   @relation(fields: [sedeId], references: [id], onDelete: Cascade)
-
-  @@unique([usuarioId, sedeId])
-}
-
-model Mensaje {
-  id        String     @id @default(uuid())
-  rol       RolMensaje
-  contenido String     @db.Text
-  fecha     DateTime   @default(now())
-
-  /// Id del mensaje en WhatsApp (wamid).
-  ///
-  /// Es lo que permite encontrar el mensaje que alguien cita al responder:
-  /// Meta manda en el webhook el wamid del mensaje citado, y sin guardarlo no
-  /// habia forma de saber de cual hablaba. Nulo en los mensajes viejos y en
-  /// los que aun no se han confirmado como enviados.
-  ///
-  /// El indice es normal y NO unico a proposito: un constraint unico nuevo
-  /// hace que `prisma db push` se niegue a correr sin --accept-data-loss, y
-  /// ese flag le daria permiso permanente para borrar columnas y tablas en
-  /// cualquier despliegue futuro. Aqui el wamid siempre se busca acotado por
-  /// sede, asi que un indice corriente hace exactamente el mismo trabajo.
-  wamid String?
-
-  /// Los movimientos que este mensaje reporto, cuando es una respuesta de Luka.
-  ///
-  /// Es lo que permite que "eliminame esto", citando el mensaje donde Luka
-  /// listo cuatro compras, borre EXACTAMENTE esas cuatro. Sin los ids, el
-  /// backend solo veia el texto del mensaje citado y tenia que adivinar por
-  /// fecha: en un caso real listo cinco movimientos en vez de cuatro y el
-  /// usuario confirmo sin revisar.
-  movimientoIds String[] @default([])
-
-  /// Quien lo escribio: telefono o identidad de WhatsApp del remitente.
-  ///
-  /// El historial es por sede, y sin esto las conversaciones de dos empleados
-  /// del mismo negocio se mezclaban: Luka le contestaba a uno con el contexto
-  /// del otro. Nulo en los mensajes de Luka y en los anteriores a este campo.
-  remitente String?
-
-  sedeId String
-  sede   Sede   @relation(fields: [sedeId], references: [id], onDelete: Cascade)
-
-  @@index([sedeId, fecha])
-  @@index([wamid])
-}
-
-model Reporte {
-  id        String   @id @default(uuid())
-  tipo      String
-  contenido Json
-  fecha     DateTime @default(now())
-
-  negocioId String
-  negocio   Negocio @relation(fields: [negocioId], references: [id], onDelete: Cascade)
-
-  sedeId String?
-  sede   Sede?   @relation(fields: [sedeId], references: [id], onDelete: Cascade)
-}
-
-model Producto {
-  id           String  @id @default(uuid())
-  nombre       String
-  stock        Int     @default(0)
-  stockMinimo  Int     @default(0)
-  precioCompra Decimal
-  precioVenta  Decimal
-
-  sedeId String
-  sede   Sede   @relation(fields: [sedeId], references: [id], onDelete: Cascade)
-
-  detallesVenta  DetalleVenta[]
-  detallesCompra DetalleCompra[]
-
-  @@index([sedeId])
-}
-
-model Cliente {
-  id             String  @id @default(uuid())
-  nombre         String
-  telefono       String?
-  saldoPendiente Decimal @default(0.0) // Para las ventas "FIADAS"
-
-  sedeId String
-  sede   Sede   @relation(fields: [sedeId], references: [id], onDelete: Cascade)
-
-  ventas Venta[]
-  abonos Abono[]
-}
-
-model Proveedor {
-  id        String  @id @default(uuid())
-  nombre    String
-  telefono  String?
-  correo    String?
-  direccion String?
-
-  sedeId String
-  sede   Sede   @relation(fields: [sedeId], references: [id], onDelete: Cascade)
-
-  compras Compra[]
-}
-
-model Venta {
-  id               String    @id @default(uuid())
-  tipo             TipoVenta @default(CONTADO)
-  total            Decimal
-  saldoPendiente   Decimal   @default(0)
-  fechaVencimiento DateTime?
-  fecha            DateTime  @default(now())
-
-  /// Concepto en palabras ("Venta de panes", "Ventas del dia").
-  /// Sin esto no se puede buscar un ingreso por su nombre, como si se hace
-  /// con los gastos a traves de `Gasto.descripcion`.
-  descripcion String?
-
-  /// Como se recibio el dinero. null = no se especifico.
-  metodoPago MetodoPago?
-
-  /// Agrupa las partes de un mismo total: la venta general y sus desgloses
-  /// por metodo de pago comparten `grupoId`. null = movimiento suelto.
-  grupoId String?
-
-  clienteId String?
-  cliente   Cliente? @relation(fields: [clienteId], references: [id], onDelete: SetNull)
-
-  sedeId String
-  sede   Sede   @relation(fields: [sedeId], references: [id], onDelete: Cascade)
-
-  detalles DetalleVenta[]
-  abonos   Abono[]
-
-  recordatorios RecordatorioFiado[]
-
-  @@index([sedeId, fecha])
-  @@index([clienteId, saldoPendiente])
-  @@index([grupoId])
-}
-
-model RecordatorioFiado {
-  id        String   @id @default(uuid())
-  ventaId   String   @unique
-  venta     Venta    @relation(fields: [ventaId], references: [id], onDelete: Cascade)
-
-  /// Saldo que quedaba pendiente cuando se aviso, para poder auditarlo.
-  saldo     Decimal
-  enviadoEl DateTime @default(now())
-
-  @@index([enviadoEl])
-}
-
-model DetalleVenta {
-  id       String  @id @default(uuid())
-  cantidad Int
-  precio   Decimal // Precio al que se vendió en ese momento
-
-  ventaId String
-  venta   Venta  @relation(fields: [ventaId], references: [id], onDelete: Cascade)
-
-  productoId String
-  producto   Producto @relation(fields: [productoId], references: [id], onDelete: Restrict)
-
-  @@index([productoId])
-}
-
-model Compra {
-  id    String   @id @default(uuid())
-  total Decimal
-  fecha DateTime @default(now())
-
-  proveedorId String?
-  proveedor   Proveedor? @relation(fields: [proveedorId], references: [id], onDelete: SetNull)
-
-  sedeId String
-  sede   Sede   @relation(fields: [sedeId], references: [id], onDelete: Cascade)
-
-  detalles DetalleCompra[]
-
-  @@index([sedeId, fecha])
-}
-
-model DetalleCompra {
-  id       String  @id @default(uuid())
-  cantidad Int
-  costo    Decimal // Costo al que se compró en ese momento
-
-  compraId String
-  compra   Compra  @relation(fields: [compraId], references: [id], onDelete: Cascade)
-
-  productoId String
-  producto   Producto @relation(fields: [productoId], references: [id], onDelete: Restrict)
-
-  @@index([productoId])
-}
-
-model Gasto {
-  id          String         @id @default(uuid())
-  descripcion String
-  monto       Decimal
-  categoria   CategoriaGasto
-  fecha       DateTime       @default(now())
-
-  /// Como se pago. null = no se especifico.
-  metodoPago MetodoPago?
-
-  /// Agrupa las partes de un mismo total (ver `Venta.grupoId`).
-  grupoId String?
-
-  sedeId String
-  sede   Sede   @relation(fields: [sedeId], references: [id], onDelete: Cascade)
-
-  @@index([sedeId, fecha])
-  @@index([grupoId])
-}
-
-/// Reparto de utilidades entre el dueno y los trabajadores.
-///
-/// Va en su propia tabla y no como un gasto mas: repartir ganancias no es un
-/// costo del negocio, y mezclarlo con los gastos distorsionaria los margenes.
-model RepartoUtilidad {
-  id             String              @id @default(uuid())
-  beneficiario   BeneficiarioReparto
-
-  /// Nombre concreto cuando se conoce ("Maria", "Don Jose").
-  nombre         String?
-
-  /// Porcentaje del total repartido, de 0 a 100.
-  porcentaje     Decimal
-
-  /// Monto que le corresponde, ya calculado.
-  monto          Decimal
-
-  /// Utilidad total que se repartio, para poder reconstruir el calculo.
-  totalRepartido Decimal
-
-  /// Une las partes de un mismo reparto.
-  grupoId String
-
-  fecha DateTime @default(now())
-
-  sedeId String
-  sede   Sede   @relation(fields: [sedeId], references: [id], onDelete: Cascade)
-
-  @@index([sedeId, fecha])
-  @@index([grupoId])
-}
-
-model Abono {
-  id    String   @id @default(uuid())
-  monto Decimal
-  fecha DateTime @default(now())
-
-  clienteId String
-  cliente   Cliente @relation(fields: [clienteId], references: [id], onDelete: Cascade)
-
-  sedeId String
-  sede   Sede   @relation(fields: [sedeId], references: [id], onDelete: Cascade)
-
-  ventaId String?
-  venta   Venta?  @relation(fields: [ventaId], references: [id], onDelete: SetNull)
-
-  @@index([sedeId, fecha])
-  @@index([clienteId])
-}
-
-model Pago {
-  id                 String     @id @default(uuid())
-  referencia         String     @unique // la que viaja a Wompi; es la llave con la que el webhook encuentra el pago
-  plan               Int // 1..4, el mismo número que Negocio.plan
-  ciclo              CicloPago
-  montoEnCentavos    Int // Wompi trabaja en centavos, no en pesos
-  moneda             String     @default("COP")
-  estado             EstadoPago @default(PENDIENTE)
-  wompiTransaccionId String?    @unique // lo devuelve Wompi; único para que un evento repetido no se procese dos veces
-  datosWompi         Json? // el evento crudo, para depurar cuando algo no cuadre
-  procesadoEl        DateTime?
-  createdAt          DateTime   @default(now())
-  updatedAt          DateTime   @updatedAt
-
-  negocioId String
-  negocio   Negocio @relation(fields: [negocioId], references: [id], onDelete: Cascade)
-
-  usuarioId String
-  usuario   Usuario @relation(fields: [usuarioId], references: [id])
-
-  @@index([negocioId, createdAt])
-}
-
-model NotificacionPlan {
-  id        String   @id @default(uuid())
-  tipo      String // "previo" | "vencido" | "vencido_seguimiento"
-  venceEl   DateTime // el vencimiento al que corresponde este aviso
-  enviadoEl DateTime @default(now())
-
-  negocioId String
-  negocio   Negocio @relation(fields: [negocioId], references: [id], onDelete: Cascade)
-
-  @@unique([negocioId, tipo, venceEl])
-  @@index([negocioId])
-}
-
-/// Registro persistente del consumo de IA de Luka.
-///
-/// Guarda cada llamada realizada al proveedor de IA para poder:
-/// - controlar las cuotas de mensajes de cada plan;
-/// - conocer el consumo real de tokens;
-/// - conocer el costo acumulado;
-/// - saber que proveedor/modelo fue utilizado;
-/// - diagnosticar llamadas fallidas;
-/// - generar reportes historicos de consumo.
-///
-/// Las llamadas exitosas son las que cuentan para la cuota. Las fallidas
-/// tambien se almacenan para diagnostico, pero `exitosa = false`.
-model ConsumoIa {
-  id String @id @default(uuid())
-
-  /// Negocio al que pertenece el consumo.
-  negocioId String
-  negocio   Negocio @relation(fields: [negocioId], references: [id], onDelete: Cascade)
-
-  /// Sede desde la que se produjo el consumo.
-  ///
-  /// Es nullable porque algunos consumos pueden originarse a nivel de negocio
-  /// y no estar asociados a una sede concreta.
-  sedeId String?
-  sede   Sede? @relation(fields: [sedeId], references: [id], onDelete: Cascade)
-
-  /// Funcionalidad que produjo el consumo.
-  /// Ejemplos: "whatsapp", "chat", "reportes", etc.
-  feature String
-
-  /// Identificador del proveedor de IA utilizado.
-  /// Ejemplos: "openai", "anthropic", etc.
-  providerId String
-
-  /// Modelo concreto utilizado.
-  /// Ejemplos: "gpt-4o-mini", "gpt-5", etc.
-  model String
-
-  /// Tokens enviados al modelo.
-  inputTokens Int
-
-  /// Tokens generados por el modelo.
-  outputTokens Int
-
-  /// Costo estimado de la llamada en USD.
-  costoUsd Decimal
-
-  /// Latencia total de la llamada en milisegundos.
-  latenciaMs Int?
-
-  /// Indica si la llamada fue exitosa.
-  exitosa Boolean
-
-  /// Código interno del error cuando la llamada falla.
-  errorCode String?
-
-  createdAt DateTime @default(now())
-
-  @@index([negocioId, createdAt])
-  @@index([sedeId, createdAt])
-  @@index([providerId, createdAt])
-  @@index([feature, createdAt])
-  @@index([exitosa, createdAt])
 }

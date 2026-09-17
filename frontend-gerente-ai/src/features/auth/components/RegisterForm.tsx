@@ -46,6 +46,7 @@ export function RegisterForm() {
     password: "",
     confirmPassword: "",
     termsAccepted: false,
+    privacyAccepted: false,
   });
 
   const [showPassword, setShowPassword] = useState(false);
@@ -202,7 +203,11 @@ export function RegisterForm() {
     }
 
     if (!formData.termsAccepted) {
-      return "Debes aceptar los Términos y la Política de Privacidad.";
+      return "Debes aceptar los Términos de servicio.";
+    }
+
+    if (!formData.privacyAccepted) {
+      return "Debes aceptar la Política de privacidad.";
     }
 
     return null;
@@ -238,7 +243,11 @@ export function RegisterForm() {
     }
 
     if (!formData.termsAccepted) {
-      return "Debes aceptar los Términos y la Política de Privacidad.";
+      return "Debes aceptar los Términos de servicio.";
+    }
+
+    if (!formData.privacyAccepted) {
+      return "Debes aceptar la Política de privacidad.";
     }
 
     return null;
@@ -265,11 +274,15 @@ export function RegisterForm() {
 
       try {
         await googleRegister(
-          googleCredential,
-          formData.phone.trim(),
-          formData.businessName.trim(),
-          normalizeWhatsappUsername(formData.whatsappUsername) || undefined,
-        );
+        googleCredential,
+        formData.phone.trim(),
+        formData.businessName.trim(),
+        normalizeWhatsappUsername(formData.whatsappUsername) || undefined,
+        {
+          termsAccepted: formData.termsAccepted,
+          privacyAccepted: formData.privacyAccepted,
+        },
+      );
 
         window.location.href = "/";
       } catch (err) {
@@ -304,6 +317,8 @@ export function RegisterForm() {
         whatsappUsername: normalizeWhatsappUsername(
           formData.whatsappUsername,
         ),
+        termsAccepted: formData.termsAccepted,
+        privacyAccepted: formData.privacyAccepted,
       });
 
       setIsSuccess(true);
@@ -314,7 +329,7 @@ export function RegisterForm() {
 
   /* ================================================================
      GOOGLE SUCCESS
-
+     
      IMPORTANTE:
      Google NO crea la cuenta aquí.
      Solo obtenemos el credential y pasamos al segundo paso.
@@ -384,7 +399,10 @@ export function RegisterForm() {
               : { opacity: 0, y: 18 }
           }
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: shouldReduceMotion ? 0 : 0.7, ease }}
+          transition={{
+            duration: shouldReduceMotion ? 0 : 0.7,
+            ease,
+          }}
           className="flex w-full max-w-[560px] flex-col items-center justify-center px-6 text-center sm:px-10 lg:px-12"
         >
           <motion.div
@@ -394,7 +412,10 @@ export function RegisterForm() {
                 : { opacity: 0, scale: 0.85 }
             }
             animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: shouldReduceMotion ? 0 : 0.55, ease }}
+            transition={{
+              duration: shouldReduceMotion ? 0 : 0.55,
+              ease,
+            }}
             className="flex h-16 w-16 items-center justify-center rounded-2xl border border-emerald-500/15 bg-emerald-500/[0.07]"
           >
             <CheckCircle2 className="h-8 w-8 text-emerald-500" />
@@ -439,7 +460,10 @@ export function RegisterForm() {
               : { opacity: 0, y: 12 }
           }
           animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: shouldReduceMotion ? 0 : 0.55, ease }}
+          transition={{
+            duration: shouldReduceMotion ? 0 : 0.55,
+            ease,
+          }}
           className="flex min-h-0 flex-1 flex-col justify-center"
         >
           {/* ========================================================
@@ -476,10 +500,17 @@ export function RegisterForm() {
               <AnimatePresence>
                 {displayError && (
                   <motion.div
-                    initial={shouldReduceMotion ? { opacity: 1 } : { opacity: 0, y: -6 }}
+                    initial={
+                      shouldReduceMotion
+                        ? { opacity: 1 }
+                        : { opacity: 0, y: -6 }
+                    }
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -6 }}
-                    transition={{ duration: shouldReduceMotion ? 0 : 0.3, ease }}
+                    transition={{
+                      duration: shouldReduceMotion ? 0 : 0.3,
+                      ease,
+                    }}
                     className="mt-4"
                   >
                     <AuthErrorAlert error={displayError} />
@@ -503,6 +534,7 @@ export function RegisterForm() {
 
                   <div className="relative">
                     <Phone className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/35" />
+
                     <input
                       id="google-register-phone"
                       type="tel"
@@ -512,7 +544,9 @@ export function RegisterForm() {
                       disabled={formDisabled}
                       autoComplete="tel"
                       value={formData.phone}
-                      onChange={(event) => updateField("phone", event.target.value)}
+                      onChange={(event) =>
+                        updateField("phone", event.target.value)
+                      }
                       className="h-[50px] w-full rounded-[14px] border border-border/80 bg-background pl-10 pr-4 text-[13px] font-medium text-foreground outline-none transition-all duration-300 placeholder:text-muted-foreground/35 focus:border-primary/50 focus:ring-4 focus:ring-primary/8 disabled:cursor-not-allowed disabled:opacity-60"
                     />
                   </div>
@@ -536,6 +570,7 @@ export function RegisterForm() {
 
                   <div className="relative">
                     <MessageCircle className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/35" />
+
                     <input
                       id="google-register-whatsapp"
                       type="text"
@@ -544,7 +579,10 @@ export function RegisterForm() {
                       autoComplete="off"
                       value={formData.whatsappUsername}
                       onChange={(event) =>
-                        updateField("whatsappUsername", event.target.value)
+                        updateField(
+                          "whatsappUsername",
+                          event.target.value,
+                        )
                       }
                       className="h-[50px] w-full rounded-[14px] border border-border/80 bg-background pl-10 pr-4 text-[13px] font-medium text-foreground outline-none transition-all duration-300 placeholder:text-muted-foreground/35 focus:border-primary/50 focus:ring-4 focus:ring-primary/8 disabled:cursor-not-allowed disabled:opacity-60"
                     />
@@ -566,6 +604,7 @@ export function RegisterForm() {
 
                   <div className="relative">
                     <User className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/35" />
+
                     <input
                       id="google-register-business"
                       type="text"
@@ -575,7 +614,10 @@ export function RegisterForm() {
                       autoComplete="organization"
                       value={formData.businessName}
                       onChange={(event) =>
-                        updateField("businessName", event.target.value)
+                        updateField(
+                          "businessName",
+                          event.target.value,
+                        )
                       }
                       className="h-[50px] w-full rounded-[14px] border border-border/80 bg-background pl-10 pr-4 text-[13px] font-medium text-foreground outline-none transition-all duration-300 placeholder:text-muted-foreground/35 focus:border-primary/50 focus:ring-4 focus:ring-primary/8 disabled:cursor-not-allowed disabled:opacity-60"
                     />
@@ -589,7 +631,10 @@ export function RegisterForm() {
                     checked={formData.termsAccepted}
                     disabled={formDisabled}
                     onChange={(event) =>
-                      updateField("termsAccepted", event.target.checked)
+                      updateField(
+                        "termsAccepted",
+                        event.target.checked,
+                      )
                     }
                     className="mt-[2px] h-3.5 w-3.5 shrink-0 cursor-pointer accent-primary"
                   />
@@ -597,17 +642,38 @@ export function RegisterForm() {
                   <span className="text-[9px] leading-4 text-muted-foreground/65 sm:text-[10px]">
                     Acepto los{" "}
                     <Link
-                      to="/terms"
+                      to="/terminos"
                       className="font-semibold text-primary hover:opacity-70"
                     >
-                      Términos
+                      Términos de servicio
                     </Link>{" "}
-                    y la{" "}
+                    de Luka AI.
+                  </span>
+                </label>
+
+                {/* PRIVACY */}
+                <label className="flex cursor-pointer items-start gap-2.5">
+                  <input
+                    type="checkbox"
+                    checked={formData.privacyAccepted}
+                    disabled={formDisabled}
+                    onChange={(event) =>
+                      updateField(
+                        "privacyAccepted",
+                        event.target.checked,
+                      )
+                    }
+                    className="mt-[2px] h-3.5 w-3.5 shrink-0 cursor-pointer accent-primary"
+                  />
+
+                  <span className="text-[9px] leading-4 text-muted-foreground/65 sm:text-[10px]">
+                    Autorizo el tratamiento de mis datos personales de acuerdo
+                    con la{" "}
                     <Link
-                      to="/privacy"
+                      to="/privacidad"
                       className="font-semibold text-primary hover:opacity-70"
                     >
-                      Política de Privacidad
+                      Política de privacidad
                     </Link>{" "}
                     de Luka AI.
                   </span>
@@ -616,7 +682,9 @@ export function RegisterForm() {
                 {/* CTA */}
                 <motion.div
                   whileHover={
-                    shouldReduceMotion || formDisabled ? undefined : { y: -1 }
+                    shouldReduceMotion || formDisabled
+                      ? undefined
+                      : { y: -1 }
                   }
                   whileTap={
                     shouldReduceMotion || formDisabled
@@ -675,10 +743,17 @@ export function RegisterForm() {
               <AnimatePresence>
                 {displayError && (
                   <motion.div
-                    initial={shouldReduceMotion ? { opacity: 1 } : { opacity: 0, y: -6 }}
+                    initial={
+                      shouldReduceMotion
+                        ? { opacity: 1 }
+                        : { opacity: 0, y: -6 }
+                    }
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -6 }}
-                    transition={{ duration: shouldReduceMotion ? 0 : 0.3, ease }}
+                    transition={{
+                      duration: shouldReduceMotion ? 0 : 0.3,
+                      ease,
+                    }}
                     className="mt-4"
                   >
                     <AuthErrorAlert error={displayError} />
@@ -700,8 +775,10 @@ export function RegisterForm() {
                     >
                       Nombre completo
                     </label>
+
                     <div className="relative">
                       <User className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/35" />
+
                       <input
                         id="register-name"
                         type="text"
@@ -711,7 +788,10 @@ export function RegisterForm() {
                         autoComplete="name"
                         value={formData.fullName}
                         onChange={(event) =>
-                          updateField("fullName", event.target.value)
+                          updateField(
+                            "fullName",
+                            event.target.value,
+                          )
                         }
                         className="h-[50px] w-full rounded-[14px] border border-border/80 bg-background pl-10 pr-4 text-[13px] font-medium text-foreground outline-none transition-all duration-300 placeholder:text-muted-foreground/35 focus:border-primary/50 focus:ring-4 focus:ring-primary/8 disabled:cursor-not-allowed disabled:opacity-60"
                       />
@@ -725,8 +805,10 @@ export function RegisterForm() {
                     >
                       Correo electrónico
                     </label>
+
                     <div className="relative">
                       <Mail className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/35" />
+
                       <input
                         id="register-email"
                         type="email"
@@ -736,7 +818,10 @@ export function RegisterForm() {
                         autoComplete="email"
                         value={formData.email}
                         onChange={(event) =>
-                          updateField("email", event.target.value)
+                          updateField(
+                            "email",
+                            event.target.value,
+                          )
                         }
                         className="h-[50px] w-full rounded-[14px] border border-border/80 bg-background pl-10 pr-4 text-[13px] font-medium text-foreground outline-none transition-all duration-300 placeholder:text-muted-foreground/35 focus:border-primary/50 focus:ring-4 focus:ring-primary/8 disabled:cursor-not-allowed disabled:opacity-60"
                       />
@@ -753,8 +838,10 @@ export function RegisterForm() {
                     >
                       Celular
                     </label>
+
                     <div className="relative">
                       <Phone className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/35" />
+
                       <input
                         id="register-phone"
                         type="tel"
@@ -764,11 +851,15 @@ export function RegisterForm() {
                         autoComplete="tel"
                         value={formData.phone}
                         onChange={(event) =>
-                          updateField("phone", event.target.value)
+                          updateField(
+                            "phone",
+                            event.target.value,
+                          )
                         }
                         className="h-[50px] w-full rounded-[14px] border border-border/80 bg-background pl-10 pr-4 text-[13px] font-medium text-foreground outline-none transition-all duration-300 placeholder:text-muted-foreground/35 focus:border-primary/50 focus:ring-4 focus:ring-primary/8 disabled:cursor-not-allowed disabled:opacity-60"
                       />
                     </div>
+
                     <p className="text-[8px] leading-4 text-muted-foreground/55">
                       Incluye el código de país +57.
                     </p>
@@ -781,8 +872,10 @@ export function RegisterForm() {
                     >
                       WhatsApp
                     </label>
+
                     <div className="relative">
                       <MessageCircle className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/35" />
+
                       <input
                         id="register-whatsapp"
                         type="text"
@@ -791,11 +884,15 @@ export function RegisterForm() {
                         autoComplete="off"
                         value={formData.whatsappUsername}
                         onChange={(event) =>
-                          updateField("whatsappUsername", event.target.value)
+                          updateField(
+                            "whatsappUsername",
+                            event.target.value,
+                          )
                         }
                         className="h-[50px] w-full rounded-[14px] border border-border/80 bg-background pl-10 pr-4 text-[13px] font-medium text-foreground outline-none transition-all duration-300 placeholder:text-muted-foreground/35 focus:border-primary/50 focus:ring-4 focus:ring-primary/8 disabled:cursor-not-allowed disabled:opacity-60"
                       />
                     </div>
+
                     <p className="text-[8px] leading-4 text-muted-foreground/55">
                       Sin el @. Ejemplo: mariarodriguez.
                     </p>
@@ -810,6 +907,7 @@ export function RegisterForm() {
                   >
                     Nombre del negocio
                   </label>
+
                   <input
                     id="register-business"
                     type="text"
@@ -819,7 +917,10 @@ export function RegisterForm() {
                     autoComplete="organization"
                     value={formData.businessName}
                     onChange={(event) =>
-                      updateField("businessName", event.target.value)
+                      updateField(
+                        "businessName",
+                        event.target.value,
+                      )
                     }
                     className="h-[50px] w-full rounded-[14px] border border-border/80 bg-background px-4 text-[13px] font-medium text-foreground outline-none transition-all duration-300 placeholder:text-muted-foreground/35 focus:border-primary/50 focus:ring-4 focus:ring-primary/8 disabled:cursor-not-allowed disabled:opacity-60"
                   />
@@ -834,8 +935,10 @@ export function RegisterForm() {
                     >
                       Contraseña
                     </label>
+
                     <div className="relative">
                       <Lock className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/35" />
+
                       <input
                         id="register-password"
                         type={showPassword ? "text" : "password"}
@@ -845,15 +948,25 @@ export function RegisterForm() {
                         autoComplete="new-password"
                         value={formData.password}
                         onChange={(event) =>
-                          updateField("password", event.target.value)
+                          updateField(
+                            "password",
+                            event.target.value,
+                          )
                         }
                         className="h-[50px] w-full rounded-[14px] border border-border/80 bg-background pl-10 pr-12 text-[13px] font-medium tracking-[0.04em] text-foreground outline-none transition-all duration-300 placeholder:text-muted-foreground/35 focus:border-primary/50 focus:ring-4 focus:ring-primary/8 disabled:cursor-not-allowed disabled:opacity-60"
                       />
+
                       <button
                         type="button"
                         disabled={formDisabled}
-                        onClick={() => setShowPassword((value) => !value)}
-                        aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+                        onClick={() =>
+                          setShowPassword((value) => !value)
+                        }
+                        aria-label={
+                          showPassword
+                            ? "Ocultar contraseña"
+                            : "Mostrar contraseña"
+                        }
                         className="absolute right-1.5 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-xl text-muted-foreground/45 transition-all hover:bg-muted hover:text-foreground"
                       >
                         {showPassword ? (
@@ -872,8 +985,10 @@ export function RegisterForm() {
                     >
                       Confirmar contraseña
                     </label>
+
                     <div className="relative">
                       <Lock className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/35" />
+
                       <input
                         id="register-confirm-password"
                         type={showConfirmPassword ? "text" : "password"}
@@ -883,10 +998,14 @@ export function RegisterForm() {
                         autoComplete="new-password"
                         value={formData.confirmPassword}
                         onChange={(event) =>
-                          updateField("confirmPassword", event.target.value)
+                          updateField(
+                            "confirmPassword",
+                            event.target.value,
+                          )
                         }
                         className="h-[50px] w-full rounded-[14px] border border-border/80 bg-background pl-10 pr-12 text-[13px] font-medium tracking-[0.04em] text-foreground outline-none transition-all duration-300 placeholder:text-muted-foreground/35 focus:border-primary/50 focus:ring-4 focus:ring-primary/8 disabled:cursor-not-allowed disabled:opacity-60"
                       />
+
                       <button
                         type="button"
                         disabled={formDisabled}
@@ -917,18 +1036,49 @@ export function RegisterForm() {
                     checked={formData.termsAccepted}
                     disabled={formDisabled}
                     onChange={(event) =>
-                      updateField("termsAccepted", event.target.checked)
+                      updateField(
+                        "termsAccepted",
+                        event.target.checked,
+                      )
                     }
                     className="mt-[2px] h-3.5 w-3.5 shrink-0 cursor-pointer accent-primary"
                   />
+
                   <span className="text-[9px] leading-4 text-muted-foreground/65 sm:text-[10px]">
                     Acepto los{" "}
-                    <Link to="/terms" className="font-semibold text-primary hover:opacity-70">
-                      Términos
+                    <Link
+                      to="/terminos"
+                      className="font-semibold text-primary hover:opacity-70"
+                    >
+                      Términos de servicio
                     </Link>{" "}
-                    y la{" "}
-                    <Link to="/privacy" className="font-semibold text-primary hover:opacity-70">
-                      Política de Privacidad
+                    de Luka AI.
+                  </span>
+                </label>
+
+                {/* PRIVACY */}
+                <label className="flex cursor-pointer items-start gap-2.5">
+                  <input
+                    type="checkbox"
+                    checked={formData.privacyAccepted}
+                    disabled={formDisabled}
+                    onChange={(event) =>
+                      updateField(
+                        "privacyAccepted",
+                        event.target.checked,
+                      )
+                    }
+                    className="mt-[2px] h-3.5 w-3.5 shrink-0 cursor-pointer accent-primary"
+                  />
+
+                  <span className="text-[9px] leading-4 text-muted-foreground/65 sm:text-[10px]">
+                    Autorizo el tratamiento de mis datos personales de acuerdo
+                    con la{" "}
+                    <Link
+                      to="/privacidad"
+                      className="font-semibold text-primary hover:opacity-70"
+                    >
+                      Política de privacidad
                     </Link>{" "}
                     de Luka AI.
                   </span>
@@ -938,9 +1088,11 @@ export function RegisterForm() {
                 <div className="space-y-3 sm:space-y-3.5">
                   <div className="relative flex items-center">
                     <div className="h-px flex-1 bg-border/70" />
+
                     <span className="shrink-0 px-3 text-[8px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/40 sm:text-[9px]">
                       o continúa con
                     </span>
+
                     <div className="h-px flex-1 bg-border/70" />
                   </div>
 
@@ -953,7 +1105,9 @@ export function RegisterForm() {
                       <GoogleLogin
                         onSuccess={(credentialResponse) => {
                           if (credentialResponse.credential) {
-                            handleGoogleSuccess(credentialResponse.credential);
+                            handleGoogleSuccess(
+                              credentialResponse.credential,
+                            );
                           } else {
                             handleGoogleError();
                           }
@@ -989,7 +1143,9 @@ export function RegisterForm() {
                       googleButton.click();
                     }}
                     whileHover={
-                      shouldReduceMotion || formDisabled ? undefined : { y: -1 }
+                      shouldReduceMotion || formDisabled
+                        ? undefined
+                        : { y: -1 }
                     }
                     whileTap={
                       shouldReduceMotion || formDisabled
@@ -1002,6 +1158,7 @@ export function RegisterForm() {
                       {isGoogleLoading ? (
                         <>
                           <Loader2 className="h-4 w-4 animate-spin text-gray-500" />
+
                           <span className="text-gray-700">
                             Conectando con Google...
                           </span>
@@ -1017,19 +1174,23 @@ export function RegisterForm() {
                               fill="#4285F4"
                               d="M21.35 12.27c0-.72-.06-1.42-.18-2.09H12v3.96h5.24a4.48 4.48 0 0 1-1.94 2.94v2.45h3.14c1.84-1.69 2.91-4.18 2.91-7.26Z"
                             />
+
                             <path
                               fill="#34A853"
                               d="M12 21.74c2.63 0 4.84-.87 6.46-2.35l-3.14-2.45c-.87.58-1.98.92-3.32.92-2.55 0-4.71-1.72-5.49-4.04H3.27v2.53A9.75 9.75 0 0 0 12 21.74Z"
                             />
+
                             <path
                               fill="#FBBC05"
                               d="M6.51 13.82A5.86 5.86 0 0 1 6.2 12c0-.63.11-1.25.31-1.82V7.65H3.27A9.75 9.75 0 0 0 2.25 12c0 1.57.38 3.05 1.02 4.35l3.24-2.53Z"
                             />
+
                             <path
                               fill="#EA4335"
                               d="M12 6.14c1.43 0 2.71.49 3.72 1.45l2.79-2.79C16.84 3.24 14.63 2.26 12 2.26a9.75 9.75 0 0 0-8.73 5.39l3.24 2.53C7.29 7.86 9.45 6.14 12 6.14Z"
                             />
                           </svg>
+
                           <span>Continuar con Google</span>
                         </>
                       )}
@@ -1040,7 +1201,9 @@ export function RegisterForm() {
                 {/* CTA */}
                 <motion.div
                   whileHover={
-                    shouldReduceMotion || formDisabled ? undefined : { y: -1 }
+                    shouldReduceMotion || formDisabled
+                      ? undefined
+                      : { y: -1 }
                   }
                   whileTap={
                     shouldReduceMotion || formDisabled
@@ -1076,7 +1239,11 @@ export function RegisterForm() {
 
         {/* LOGIN */}
         <motion.div
-          initial={shouldReduceMotion ? { opacity: 1, y: 0 } : { opacity: 0, y: 7 }}
+          initial={
+            shouldReduceMotion
+              ? { opacity: 1, y: 0 }
+              : { opacity: 0, y: 7 }
+          }
           animate={{ opacity: 1, y: 0 }}
           transition={{
             duration: shouldReduceMotion ? 0 : 0.5,

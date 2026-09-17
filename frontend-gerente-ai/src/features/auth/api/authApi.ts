@@ -12,6 +12,11 @@ import {
   VerifyEmailResponse,
 } from '../types';
 
+type LegalConsentCredentials = {
+  termsAccepted: boolean;
+  privacyAccepted: boolean;
+};
+
 export const authApi = {
   /**
    * Iniciar sesión con email y password.
@@ -102,13 +107,20 @@ export const authApi = {
    *
    * Luka solicita adicionalmente:
    *
-   *   - Teléfono colombiano (obligatorio)
-   *   - Nombre del negocio (obligatorio)
+   *   - Teléfono colombiano
+   *   - Nombre del negocio
    *   - Usuario de WhatsApp (opcional)
+   *   - Aceptación de Términos de servicio
+   *   - Aceptación de Política de privacidad
    *
-   * El credential se envía directamente al backend.
-   * El backend valida el ID Token con Google antes
-   * de crear la cuenta.
+   * Los consentimientos legales se envían explícitamente
+   * al backend para que sean registrados junto con:
+   *
+   *   - Usuario
+   *   - Documento
+   *   - Versión
+   *   - Fecha y hora
+   *   - IP
    *
    * POST /auth/google/register
    */
@@ -116,7 +128,11 @@ export const authApi = {
     credential: string,
     telefono: string,
     nombreNegocio: string,
-    whatsappUsername?: string,
+    whatsappUsername: string | undefined,
+    legalConsent: {
+      termsAccepted: boolean;
+      privacyAccepted: boolean;
+    },
   ): Promise<AuthResponse> {
     if (!credential?.trim()) {
       throw new Error('No se recibió la credencial de Google.');
@@ -130,6 +146,14 @@ export const authApi = {
       throw new Error('El nombre del negocio es obligatorio.');
     }
 
+    if (!legalConsent.termsAccepted) {
+      throw new Error('Debes aceptar los Términos de servicio.');
+    }
+
+    if (!legalConsent.privacyAccepted) {
+      throw new Error('Debes aceptar la Política de privacidad.');
+    }
+
     const cleanUsername = whatsappUsername
       ? whatsappUsername.trim().replace(/^@+/, '')
       : undefined;
@@ -138,6 +162,9 @@ export const authApi = {
       credential: credential.trim(),
       telefono: telefono.trim(),
       nombreNegocio: nombreNegocio.trim(),
+
+      termsAccepted: legalConsent.termsAccepted,
+      privacyAccepted: legalConsent.privacyAccepted,
 
       ...(cleanUsername
         ? {
@@ -175,11 +202,25 @@ export const authApi = {
    *
    * El backend NO devuelve accessToken en el registro porque requiere
    * activación previa mediante el correo de verificación.
+   *
+   * Los consentimientos legales se envían junto con el registro.
+   *
+   * POST /auth/register
    */
-  async register(credentials: RegisterCredentials): Promise<AuthUser> {
+  async register(
+    credentials: RegisterCredentials & LegalConsentCredentials,
+  ): Promise<AuthUser> {
     const cleanUsername = credentials.whatsappUsername
       ? credentials.whatsappUsername.trim().replace(/^@+/, '')
       : undefined;
+
+    if (!credentials.termsAccepted) {
+      throw new Error('Debes aceptar los Términos de servicio.');
+    }
+
+    if (!credentials.privacyAccepted) {
+      throw new Error('Debes aceptar la Política de privacidad.');
+    }
 
     const payload = {
       nombre: credentials.nombre.trim(),
@@ -201,6 +242,9 @@ export const authApi = {
             whatsappUsername: cleanUsername,
           }
         : {}),
+
+      termsAccepted: credentials.termsAccepted,
+      privacyAccepted: credentials.privacyAccepted,
     };
 
     const raw = await apiClient<BackendAuthResponse | AuthUser>(
