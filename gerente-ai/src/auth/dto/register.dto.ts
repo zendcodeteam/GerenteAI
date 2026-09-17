@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsEmail,
   IsNotEmpty,
   IsOptional,
@@ -49,4 +50,10 @@ export class RegisterDto {
       'La contraseña debe contener al menos un carácter especial',
   })
   password!: string;
+
+  @IsBoolean()
+  termsAccepted!: boolean;
+
+  @IsBoolean()
+  privacyAccepted!: boolean;
 }

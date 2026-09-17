@@ -1,4 +1,6 @@
 import {
+  IsBoolean,
+  IsDefined,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -43,12 +45,10 @@ export class GoogleRegisterDto {
   @IsString()
   @IsNotEmpty()
   @MinLength(2, {
-    message:
-      'El nombre del negocio debe tener al menos 2 caracteres',
+    message: 'El nombre del negocio debe tener al menos 2 caracteres',
   })
   @MaxLength(100, {
-    message:
-      'El nombre del negocio no puede superar los 100 caracteres',
+    message: 'El nombre del negocio no puede superar los 100 caracteres',
   })
   nombreNegocio!: string;
 
@@ -70,4 +70,31 @@ export class GoogleRegisterDto {
       'El usuario de WhatsApp no puede superar los 100 caracteres',
   })
   whatsappUsername?: string;
+
+  /**
+   * Aceptación de los Términos de servicio.
+   *
+   * Debe ser true para completar el registro.
+   */
+  @IsDefined({
+    message: 'Debes aceptar los Términos de servicio',
+  })
+  @IsBoolean({
+    message: 'termsAccepted debe ser un valor booleano',
+  })
+  termsAccepted!: boolean;
+
+  /**
+   * Autorización para el tratamiento de datos personales
+   * conforme a la Política de privacidad.
+   *
+   * Debe ser true para completar el registro.
+   */
+  @IsDefined({
+    message: 'Debes aceptar la Política de privacidad',
+  })
+  @IsBoolean({
+    message: 'privacyAccepted debe ser un valor booleano',
+  })
+  privacyAccepted!: boolean;
 }

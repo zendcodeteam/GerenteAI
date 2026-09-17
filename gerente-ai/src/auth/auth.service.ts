@@ -7,7 +7,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { Prisma } from '@prisma/client';
+import { DocumentoLegal, Prisma } from '@prisma/client';
 import { OAuth2Client } from 'google-auth-library';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
@@ -30,10 +30,13 @@ import { ConfirmarCambioEmailDto } from './dto/confirmar-cambio-email.dto';
 
 const BCRYPT_ROUNDS = 12;
 
+const LEGAL_DOCUMENT_VERSION = '1.0';
+
 @Injectable()
 export class AuthService {
   private readonly DUMMY_HASH =
     '$2b$10$CwTycUXWue0Thq9StjUM0uJ8gcCX5eNiUV5NcH3H0aP5Z2v5X6dS2';
+
   private readonly googleClient: OAuth2Client;
 
   constructor(
@@ -51,21 +54,84 @@ export class AuthService {
   // REGISTRO TRADICIONAL
   // ============================================================
 
-  async register(dto: RegisterDto) {
+  async register(
+    dto: RegisterDto,
+    ipAddress: string,
+  ) {
+    // ----------------------------------------------------------
+    // VALIDAR ACEPTACIONES LEGALES
+    // ----------------------------------------------------------
+
+    if (!dto.termsAccepted) {
+      throw new BadRequestException(
+        'Debes aceptar los Términos de servicio para crear tu cuenta.',
+      );
+    }
+
+    if (!dto.privacyAccepted) {
+      throw new BadRequestException(
+        'Debes autorizar el tratamiento de tus datos personales de acuerdo con la Política de privacidad.',
+      );
+    }
+
     const hashedPassword = await bcrypt.hash(
       dto.password,
       BCRYPT_ROUNDS,
     );
 
     try {
-      const usuario = await this.prisma.usuario.create({
-        data: {
-          nombre: dto.nombre,
-          telefono: dto.telefono,
-          email: dto.email.trim().toLowerCase(),
-          password: hashedPassword,
-        },
-      });
+      const resultado =
+        await this.prisma.$transaction(
+          async (tx) => {
+            // --------------------------------------------------
+            // USUARIO
+            // --------------------------------------------------
+
+            const usuario =
+              await tx.usuario.create({
+                data: {
+                  nombre: dto.nombre,
+                  telefono: dto.telefono,
+                  email: dto.email.trim().toLowerCase(),
+                  password: hashedPassword,
+                },
+              });
+
+            // --------------------------------------------------
+            // ACEPTACIONES LEGALES
+            // --------------------------------------------------
+
+            const aceptadoEn = new Date();
+
+            await tx.consentimientoLegal.create({
+              data: {
+                usuarioId: usuario.id,
+                documento:
+                  DocumentoLegal.TERMINOS_SERVICIO,
+                version: LEGAL_DOCUMENT_VERSION,
+                aceptadoEn,
+                ipAddress,
+              },
+            });
+
+            await tx.consentimientoLegal.create({
+              data: {
+                usuarioId: usuario.id,
+                documento:
+                  DocumentoLegal.POLITICA_PRIVACIDAD,
+                version: LEGAL_DOCUMENT_VERSION,
+                aceptadoEn,
+                ipAddress,
+              },
+            });
+
+            return {
+              usuario,
+            };
+          },
+        );
+
+      const usuario = resultado.usuario;
 
       const verificationToken = this.jwtService.sign(
         {
@@ -136,11 +202,12 @@ export class AuthService {
       );
     }
 
-    const usuario = await this.prisma.usuario.findUnique({
-      where: {
-        id: payload.sub,
-      },
-    });
+    const usuario =
+      await this.prisma.usuario.findUnique({
+        where: {
+          id: payload.sub,
+        },
+      });
 
     if (!usuario) {
       throw new NotFoundException(
@@ -178,37 +245,57 @@ export class AuthService {
   async login(dto: LoginDto) {
     const email = dto.email.trim().toLowerCase();
 
-    const usuario = await this.prisma.usuario.findUnique({
-      where: {
-        email,
-      },
-      include: {
-        negocios: true,
-      },
-    });
+    const usuario =
+      await this.prisma.usuario.findUnique({
+        where: {
+          email,
+        },
+        include: {
+          negocios: true,
+        },
+      });
 
     const passwordValida = usuario
-      ? await bcrypt.compare(dto.password, usuario.password)
-      : await bcrypt.compare(dto.password, this.DUMMY_HASH);
+      ? await bcrypt.compare(
+          dto.password,
+          usuario.password,
+        )
+      : await bcrypt.compare(
+          dto.password,
+          this.DUMMY_HASH,
+        );
 
     if (!usuario || !passwordValida) {
-      throw new UnauthorizedException('Correo o contraseña incorrectos');
+      throw new UnauthorizedException(
+        'Correo o contraseña incorrectos',
+      );
     }
 
-    // Re-hashear en el login si la contraseña fue creada con un factor menor a 12
+    // Re-hashear en el login si la contraseña fue creada
+    // con un factor menor a 12.
     try {
-      if (bcrypt.getRounds(usuario.password) < BCRYPT_ROUNDS) {
-        const rehashedPassword = await bcrypt.hash(
-          dto.password,
-          BCRYPT_ROUNDS,
-        );
+      if (
+        bcrypt.getRounds(usuario.password) <
+        BCRYPT_ROUNDS
+      ) {
+        const rehashedPassword =
+          await bcrypt.hash(
+            dto.password,
+            BCRYPT_ROUNDS,
+          );
+
         await this.prisma.usuario.update({
-          where: { id: usuario.id },
-          data: { password: rehashedPassword },
+          where: {
+            id: usuario.id,
+          },
+          data: {
+            password: rehashedPassword,
+          },
         });
       }
     } catch {
-      // Si getRounds falla por formato no estándar, no interrumpir el flujo de login
+      // Si getRounds falla por formato no estándar,
+      // no interrumpir el flujo de login.
     }
 
     if (!usuario.emailVerificado) {
@@ -217,7 +304,8 @@ export class AuthService {
       );
     }
 
-    const usuarioNegocio = usuario.negocios[0];
+    const usuarioNegocio =
+      usuario.negocios[0];
 
     return this.buildAuthResponse(
       usuario.id,
@@ -270,7 +358,8 @@ export class AuthService {
       );
     }
 
-    const payload = ticket.getPayload();
+    const payload =
+      ticket.getPayload();
 
     if (!payload) {
       throw new UnauthorizedException(
@@ -279,9 +368,11 @@ export class AuthService {
     }
 
     const googleId = payload.sub;
+
     const email = payload.email
       ?.trim()
       .toLowerCase();
+
     const nombre = payload.name?.trim();
 
     if (!googleId) {
@@ -390,7 +481,26 @@ export class AuthService {
   // REGISTRO CON GOOGLE
   // ============================================================
 
-  async googleRegister(dto: GoogleRegisterDto) {
+  async googleRegister(
+    dto: GoogleRegisterDto,
+    ipAddress: string,
+  ) {
+    // ----------------------------------------------------------
+    // VALIDAR ACEPTACIONES LEGALES
+    // ----------------------------------------------------------
+
+    if (!dto.termsAccepted) {
+      throw new BadRequestException(
+        'Debes aceptar los Términos de servicio para crear tu cuenta.',
+      );
+    }
+
+    if (!dto.privacyAccepted) {
+      throw new BadRequestException(
+        'Debes autorizar el tratamiento de tus datos personales de acuerdo con la Política de privacidad.',
+      );
+    }
+
     const google =
       await this.validarGoogleCredential(
         dto.credential,
@@ -401,7 +511,9 @@ export class AuthService {
     // ------------------------------------------------------------
 
     const telefono =
-      this.normalizarTelefono(dto.telefono);
+      this.normalizarTelefono(
+        dto.telefono,
+      );
 
     const nombreNegocio =
       dto.nombreNegocio?.trim();
@@ -499,6 +611,37 @@ export class AuthService {
                   googleId: google.googleId,
                 },
               });
+
+            // --------------------------------------------------
+            // ACEPTACIONES LEGALES
+            // --------------------------------------------------
+
+            const aceptadoEn =
+              new Date();
+
+            await tx.consentimientoLegal.create({
+              data: {
+                usuarioId: usuario.id,
+                documento:
+                  DocumentoLegal.TERMINOS_SERVICIO,
+                version:
+                  LEGAL_DOCUMENT_VERSION,
+                aceptadoEn,
+                ipAddress,
+              },
+            });
+
+            await tx.consentimientoLegal.create({
+              data: {
+                usuarioId: usuario.id,
+                documento:
+                  DocumentoLegal.POLITICA_PRIVACIDAD,
+                version:
+                  LEGAL_DOCUMENT_VERSION,
+                aceptadoEn,
+                ipAddress,
+              },
+            });
 
             // --------------------------------------------------
             // NEGOCIO
@@ -601,13 +744,15 @@ export class AuthService {
   private normalizarTelefono(
     telefono?: string,
   ): string | null {
-    const raw = (telefono ?? '').trim();
+    const raw =
+      (telefono ?? '').trim();
 
     if (!raw) {
       return null;
     }
 
-    const digits = raw.replace(/\D/g, '');
+    const digits =
+      raw.replace(/\D/g, '');
 
     // 3001234567
     if (/^3\d{9}$/.test(digits)) {
@@ -748,7 +893,8 @@ export class AuthService {
     };
 
     return {
-      access_token: this.jwtService.sign(payload),
+      access_token:
+        this.jwtService.sign(payload),
 
       user: {
         id: usuarioId,
@@ -770,7 +916,8 @@ export class AuthService {
     const usuario =
       await this.prisma.usuario.findUnique({
         where: {
-          email: dto.email.trim().toLowerCase(),
+          email:
+            dto.email.trim().toLowerCase(),
         },
       });
 
@@ -869,7 +1016,8 @@ export class AuthService {
     const usuario =
       await this.prisma.usuario.findUnique({
         where: {
-          email: email.trim().toLowerCase(),
+          email:
+            email.trim().toLowerCase(),
         },
         select: {
           id: true,
@@ -915,13 +1063,14 @@ export class AuthService {
   // RECUPERAR CONTRASEÑA
   // ============================================================
 
-    async forgotPassword(
+  async forgotPassword(
     dto: ForgotPasswordDto,
   ) {
     const usuario =
       await this.prisma.usuario.findUnique({
         where: {
-          email: dto.email.trim().toLowerCase(),
+          email:
+            dto.email.trim().toLowerCase(),
         },
       });
 
@@ -965,9 +1114,10 @@ export class AuthService {
     };
 
     try {
-      payload = this.jwtService.verify(
-        dto.token,
-      );
+      payload =
+        this.jwtService.verify(
+          dto.token,
+        );
     } catch {
       throw new UnauthorizedException(
         'El enlace es inválido o expiró',
@@ -1048,7 +1198,9 @@ export class AuthService {
     }
 
     const nuevoEmail =
-      dto.nuevoEmail.trim().toLowerCase();
+      dto.nuevoEmail
+        .trim()
+        .toLowerCase();
 
     const emailExistente =
       await this.prisma.usuario.findUnique({
@@ -1101,9 +1253,10 @@ export class AuthService {
     };
 
     try {
-      payload = this.jwtService.verify(
-        dto.token,
-      );
+      payload =
+        this.jwtService.verify(
+          dto.token,
+        );
     } catch {
       throw new UnauthorizedException(
         'El enlace es inválido o expiró',
