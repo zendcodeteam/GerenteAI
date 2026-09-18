@@ -5,6 +5,7 @@ import { PageSkeleton } from "@/shared/components/ui/PageSkeleton";
 import { useAuth } from "@/features/auth";
 import { GuestRoute } from "./GuestRoute";
 import { ProtectedRoute } from "./ProtectedRoute";
+import { MasterRoute } from "./MasterRoute";
 import {
   FeaturesPage,
   LandingPageView,
@@ -105,6 +106,17 @@ const ResetPasswordPage = lazy(() =>
 );
 
 // ============================================================
+// MFA
+// PUEDE ACCEDERSE SIN JWT FINAL
+// ============================================================
+
+const MfaPage = lazy(() =>
+  import("@/features/auth").then((m) => ({
+    default: m.MfaPage,
+  }))
+);
+
+// ============================================================
 // LEGAL PAGES
 // PUBLIC - NO REQUIEREN AUTENTICACIÓN
 // ============================================================
@@ -181,6 +193,25 @@ export function AppRoutes() {
           }
         />
       </Route>
+
+      {/* ======================================================
+          MFA
+
+          IMPORTANTE:
+          Esta ruta NO está dentro de GuestRoute ni ProtectedRoute.
+
+          Durante MFA el MASTER todavía no posee el JWT definitivo.
+          MfaPage se encarga de comprobar si existe un flujo MFA
+          pendiente en AuthContext.
+          ====================================================== */}
+      <Route
+        path="/mfa"
+        element={
+          <Suspense fallback={<PageSkeleton />}>
+            <MfaPage />
+          </Suspense>
+        }
+      />
 
       {/* ======================================================
           TOKEN & EMAIL VERIFICATION ROUTES
@@ -374,46 +405,50 @@ export function AppRoutes() {
 
           {/* ==================================================
               ADMIN ROUTES
+
+              Requieren autenticación + rol MASTER.
               ================================================== */}
 
-          <Route
-            path="admin"
-            element={
-              <Suspense fallback={<PageSkeleton />}>
-                <AdminDashboardLayout />
-              </Suspense>
-            }
-          >
-            {/* /admin → /admin/crm */}
+          <Route element={<MasterRoute />}>
             <Route
-              index
-              element={
-                <Navigate
-                  to="crm"
-                  replace
-                />
-              }
-            />
-
-            {/* Admin CRM */}
-            <Route
-              path="crm"
+              path="admin"
               element={
                 <Suspense fallback={<PageSkeleton />}>
-                  <AdminCrmView />
+                  <AdminDashboardLayout />
                 </Suspense>
               }
-            />
+            >
+              {/* /admin → /admin/crm */}
+              <Route
+                index
+                element={
+                  <Navigate
+                    to="crm"
+                    replace
+                  />
+                }
+              />
 
-            {/* Admin Operations */}
-            <Route
-              path="ops"
-              element={
-                <Suspense fallback={<PageSkeleton />}>
-                  <AdminOpsView />
-                </Suspense>
-              }
-            />
+              {/* Admin CRM */}
+              <Route
+                path="crm"
+                element={
+                  <Suspense fallback={<PageSkeleton />}>
+                    <AdminCrmView />
+                  </Suspense>
+                }
+              />
+
+              {/* Admin Operations */}
+              <Route
+                path="ops"
+                element={
+                  <Suspense fallback={<PageSkeleton />}>
+                    <AdminOpsView />
+                  </Suspense>
+                }
+              />
+            </Route>
           </Route>
         </Route>
       </Route>

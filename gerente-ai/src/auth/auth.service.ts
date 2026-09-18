@@ -6,11 +6,18 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
+
 import { JwtService } from '@nestjs/jwt';
 import { DocumentoLegal, Prisma } from '@prisma/client';
 import { OAuth2Client } from 'google-auth-library';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
+
+import {
+  generateSecret,
+  generateURI,
+  verify as verifyTotp,
+} from 'otplib';
 
 import { PrismaService } from '../services/prisma.service';
 import { NegociosService } from '../services/negocios.service';
@@ -31,6 +38,106 @@ import { ConfirmarCambioEmailDto } from './dto/confirmar-cambio-email.dto';
 const BCRYPT_ROUNDS = 12;
 
 const LEGAL_DOCUMENT_VERSION = '1.0';
+
+/**
+ * ============================================================
+ * MFA
+ * ============================================================
+ *
+ * TOTP estándar:
+ *
+ * - SHA-1
+ * - 6 dígitos
+ * - 30 segundos
+ *
+ * Compatible con aplicaciones como:
+ *
+ * - Google Authenticator
+ * - Microsoft Authenticator
+ * - Authy
+ * - otras aplicaciones compatibles con TOTP
+ */
+
+const MFA_ISSUER = 'Luka AI';
+
+const MFA_TOKEN_EXPIRES_IN = '10m';
+
+const MFA_EPOCH_TOLERANCE_SECONDS = 30;
+
+/**
+ * ============================================================
+ * CIFRADO DEL SECRETO MFA
+ * ============================================================
+ *
+ * El secreto TOTP nunca se almacena en texto plano.
+ *
+ * MFA_ENCRYPTION_KEY:
+ *
+ * - 64 caracteres hexadecimales
+ * - 32 bytes
+ * - AES-256-GCM
+ */
+
+const MFA_ENCRYPTION_ALGORITHM = 'aes-256-gcm';
+
+const MFA_IV_LENGTH = 12;
+
+const MFA_AUTH_TAG_LENGTH = 16;
+
+const MFA_KEY_LENGTH = 32;
+
+type MfaPendingPurpose =
+  | 'setup'
+  | 'login';
+
+interface MfaPendingPayload {
+  sub: string;
+  type: 'mfa-pending';
+  purpose: MfaPendingPurpose;
+}
+
+export interface AuthenticatedUserResponse {
+  access_token: string;
+
+  user: {
+    id: string;
+    nombre: string;
+    negocioId: string | null;
+    role: string | null;
+    rolGlobal: string;
+  };
+}
+
+export interface MfaSetupResponse {
+  requiresMfa: true;
+  mfaRequiredAction: 'setup';
+  mfaToken: string;
+
+  user: {
+    id: string;
+    nombre: string;
+    email: string;
+    rolGlobal: string;
+  };
+}
+
+export interface MfaLoginResponse {
+  requiresMfa: true;
+  mfaRequiredAction: 'verify';
+  mfaToken: string;
+
+  user: {
+    id: string;
+    nombre: string;
+    email: string;
+    rolGlobal: string;
+  };
+}
+
+export type AuthResponse =
+  | AuthenticatedUserResponse
+  | MfaSetupResponse
+  | MfaLoginResponse;
 
 @Injectable()
 export class AuthService {
@@ -74,10 +181,11 @@ export class AuthService {
       );
     }
 
-    const hashedPassword = await bcrypt.hash(
-      dto.password,
-      BCRYPT_ROUNDS,
-    );
+    const hashedPassword =
+      await bcrypt.hash(
+        dto.password,
+        BCRYPT_ROUNDS,
+      );
 
     try {
       const resultado =
@@ -92,7 +200,9 @@ export class AuthService {
                 data: {
                   nombre: dto.nombre,
                   telefono: dto.telefono,
-                  email: dto.email.trim().toLowerCase(),
+                  email: dto.email
+                    .trim()
+                    .toLowerCase(),
                   password: hashedPassword,
                 },
               });
@@ -101,14 +211,16 @@ export class AuthService {
             // ACEPTACIONES LEGALES
             // --------------------------------------------------
 
-            const aceptadoEn = new Date();
+            const aceptadoEn =
+              new Date();
 
             await tx.consentimientoLegal.create({
               data: {
                 usuarioId: usuario.id,
                 documento:
                   DocumentoLegal.TERMINOS_SERVICIO,
-                version: LEGAL_DOCUMENT_VERSION,
+                version:
+                  LEGAL_DOCUMENT_VERSION,
                 aceptadoEn,
                 ipAddress,
               },
@@ -119,7 +231,8 @@ export class AuthService {
                 usuarioId: usuario.id,
                 documento:
                   DocumentoLegal.POLITICA_PRIVACIDAD,
-                version: LEGAL_DOCUMENT_VERSION,
+                version:
+                  LEGAL_DOCUMENT_VERSION,
                 aceptadoEn,
                 ipAddress,
               },
@@ -131,21 +244,23 @@ export class AuthService {
           },
         );
 
-      const usuario = resultado.usuario;
+      const usuario =
+        resultado.usuario;
 
-      const verificationToken = this.jwtService.sign(
-        {
-          sub: usuario.id,
-          type: 'email-verification',
-        },
-        {
-          expiresIn: '24h',
-        },
-      );
+      const verificationToken =
+        this.jwtService.sign(
+          {
+            sub: usuario.id,
+            type: 'email-verification',
+          },
+          {
+            expiresIn: '24h',
+          },
+        );
 
       /**
-       * El correo se dispara sin esperarlo: la respuesta no depende
-       * de que el SMTP conteste.
+       * El correo se dispara sin esperarlo:
+       * la respuesta no depende de que SMTP conteste.
        */
       void this.mailService.sendVerificationEmail(
         usuario.email,
@@ -153,10 +268,11 @@ export class AuthService {
         verificationToken,
       );
 
-      // No se devuelve accessToken a propósito.
+      // No se devuelve access_token a propósito.
       return {
         mensaje:
           'Cuenta creada. Revisa tu correo para activarla antes de iniciar sesión.',
+
         usuario: {
           id: usuario.id,
           nombre: usuario.nombre,
@@ -182,32 +298,42 @@ export class AuthService {
   // VERIFICACIÓN DE EMAIL
   // ============================================================
 
-  async verificarEmail(token: string) {
+  async verificarEmail(
+    token: string,
+  ) {
     let payload: {
       sub: string;
       type: string;
     };
 
     try {
-      payload = this.jwtService.verify(token);
+      payload =
+        this.jwtService.verify(
+          token,
+        );
     } catch {
       throw new UnauthorizedException(
         'El enlace de verificación es inválido o expiró',
       );
     }
 
-    if (payload.type !== 'email-verification') {
+    if (
+      payload.type !==
+      'email-verification'
+    ) {
       throw new UnauthorizedException(
         'Token inválido para esta operación',
       );
     }
 
     const usuario =
-      await this.prisma.usuario.findUnique({
-        where: {
-          id: payload.sub,
+      await this.prisma.usuario.findUnique(
+        {
+          where: {
+            id: payload.sub,
+          },
         },
-      });
+      );
 
     if (!usuario) {
       throw new NotFoundException(
@@ -233,7 +359,8 @@ export class AuthService {
     });
 
     return {
-      mensaje: 'Correo verificado correctamente',
+      mensaje:
+        'Correo verificado correctamente',
       usuarioId: usuario.id,
     };
   }
@@ -242,41 +369,63 @@ export class AuthService {
   // LOGIN TRADICIONAL
   // ============================================================
 
-  async login(dto: LoginDto) {
-    const email = dto.email.trim().toLowerCase();
+  async login(
+    dto: LoginDto,
+  ): Promise<AuthResponse> {
+    const email =
+      dto.email
+        .trim()
+        .toLowerCase();
 
     const usuario =
-      await this.prisma.usuario.findUnique({
-        where: {
-          email,
-        },
-        include: {
-          negocios: true,
-        },
-      });
+      await this.prisma.usuario.findUnique(
+        {
+          where: {
+            email,
+          },
 
-    const passwordValida = usuario
-      ? await bcrypt.compare(
-          dto.password,
-          usuario.password,
-        )
-      : await bcrypt.compare(
-          dto.password,
-          this.DUMMY_HASH,
-        );
+          select: {
+            id: true,
+            nombre: true,
+            email: true,
+            password: true,
+            emailVerificado: true,
+            rolGlobal: true,
+            mfaActivado: true,
+            negocios: true,
+          },
+        },
+      );
 
-    if (!usuario || !passwordValida) {
+    const passwordValida =
+      usuario
+        ? await bcrypt.compare(
+            dto.password,
+            usuario.password,
+          )
+        : await bcrypt.compare(
+            dto.password,
+            this.DUMMY_HASH,
+          );
+
+    if (
+      !usuario ||
+      !passwordValida
+    ) {
       throw new UnauthorizedException(
         'Correo o contraseña incorrectos',
       );
     }
 
-    // Re-hashear en el login si la contraseña fue creada
-    // con un factor menor a 12.
+    // ----------------------------------------------------------
+    // RE-HASHEAR CONTRASEÑA
+    // ----------------------------------------------------------
+
     try {
       if (
-        bcrypt.getRounds(usuario.password) <
-        BCRYPT_ROUNDS
+        bcrypt.getRounds(
+          usuario.password,
+        ) < BCRYPT_ROUNDS
       ) {
         const rehashedPassword =
           await bcrypt.hash(
@@ -284,19 +433,27 @@ export class AuthService {
             BCRYPT_ROUNDS,
           );
 
-        await this.prisma.usuario.update({
-          where: {
-            id: usuario.id,
+        await this.prisma.usuario.update(
+          {
+            where: {
+              id: usuario.id,
+            },
+
+            data: {
+              password:
+                rehashedPassword,
+            },
           },
-          data: {
-            password: rehashedPassword,
-          },
-        });
+        );
       }
     } catch {
       // Si getRounds falla por formato no estándar,
       // no interrumpir el flujo de login.
     }
+
+    // ----------------------------------------------------------
+    // VERIFICAR EMAIL
+    // ----------------------------------------------------------
 
     if (!usuario.emailVerificado) {
       throw new UnauthorizedException(
@@ -307,11 +464,58 @@ export class AuthService {
     const usuarioNegocio =
       usuario.negocios[0];
 
+    // ==========================================================
+    // MASTER
+    // ==========================================================
+    //
+    // Nunca recibe el JWT definitivo directamente.
+    //
+    // MASTER sin MFA:
+    //
+    // contraseña
+    //      ↓
+    // token MFA temporal
+    //      ↓
+    // configurar MFA
+    //      ↓
+    // código TOTP
+    //      ↓
+    // JWT definitivo
+    //
+    // MASTER con MFA:
+    //
+    // contraseña
+    //      ↓
+    // token MFA temporal
+    //      ↓
+    // código TOTP
+    //      ↓
+    // JWT definitivo
+    // ==========================================================
+
+    if (
+      usuario.rolGlobal ===
+      'MASTER'
+    ) {
+      return this.buildMasterMfaResponse(
+        usuario,
+      );
+    }
+
+    // ==========================================================
+    // CLIENTE
+    // ==========================================================
+    //
+    // El comportamiento existente se conserva.
+    // ==========================================================
+
     return this.buildAuthResponse(
       usuario.id,
       usuario.nombre,
-      usuarioNegocio?.negocioId ?? null,
-      usuarioNegocio?.role ?? null,
+      usuarioNegocio?.negocioId ??
+        null,
+      usuarioNegocio?.role ??
+        null,
       usuario.rolGlobal,
     );
   }
@@ -323,8 +527,8 @@ export class AuthService {
   /**
    * Google entrega un ID Token.
    *
-   * Nunca confiamos directamente en nombre/email enviados
-   * por el frontend.
+   * Nunca confiamos directamente en nombre/email
+   * enviados por el frontend.
    */
   private async validarGoogleCredential(
     credential: string,
@@ -348,10 +552,13 @@ export class AuthService {
 
     try {
       ticket =
-        await this.googleClient.verifyIdToken({
-          idToken: credential,
-          audience: googleClientId,
-        });
+        await this.googleClient.verifyIdToken(
+          {
+            idToken: credential,
+            audience:
+              googleClientId,
+          },
+        );
     } catch {
       throw new UnauthorizedException(
         'La credencial de Google es inválida o expiró',
@@ -367,13 +574,16 @@ export class AuthService {
       );
     }
 
-    const googleId = payload.sub;
+    const googleId =
+      payload.sub;
 
-    const email = payload.email
-      ?.trim()
-      .toLowerCase();
+    const email =
+      payload.email
+        ?.trim()
+        .toLowerCase();
 
-    const nombre = payload.name?.trim();
+    const nombre =
+      payload.name?.trim();
 
     if (!googleId) {
       throw new UnauthorizedException(
@@ -414,8 +624,18 @@ export class AuthService {
    * Login mediante Google.
    *
    * Este método NO registra usuarios nuevos.
+   *
+   * Si el usuario es MASTER:
+   *
+   * Google
+   *   ↓
+   * MFA obligatorio
+   *   ↓
+   * JWT definitivo
    */
-  async googleLogin(dto: GoogleLoginDto) {
+  async googleLogin(
+    dto: GoogleLoginDto,
+  ): Promise<AuthResponse> {
     const google =
       await this.validarGoogleCredential(
         dto.credential,
@@ -426,24 +646,44 @@ export class AuthService {
     // ------------------------------------------------------------
 
     const usuarioPorGoogle =
-      await this.prisma.usuario.findUnique({
-        where: {
-          googleId: google.googleId,
+      await this.prisma.usuario.findUnique(
+        {
+          where: {
+            googleId:
+              google.googleId,
+          },
+
+          select: {
+            id: true,
+            nombre: true,
+            email: true,
+            rolGlobal: true,
+            mfaActivado: true,
+            negocios: true,
+          },
         },
-        include: {
-          negocios: true,
-        },
-      });
+      );
 
     if (usuarioPorGoogle) {
       const usuarioNegocio =
         usuarioPorGoogle.negocios[0];
 
+      if (
+        usuarioPorGoogle.rolGlobal ===
+        'MASTER'
+      ) {
+        return this.buildMasterMfaResponse(
+          usuarioPorGoogle,
+        );
+      }
+
       return this.buildAuthResponse(
         usuarioPorGoogle.id,
         usuarioPorGoogle.nombre,
-        usuarioNegocio?.negocioId ?? null,
-        usuarioNegocio?.role ?? null,
+        usuarioNegocio?.negocioId ??
+          null,
+        usuarioNegocio?.role ??
+          null,
         usuarioPorGoogle.rolGlobal,
       );
     }
@@ -453,14 +693,17 @@ export class AuthService {
     // ------------------------------------------------------------
 
     const usuarioPorEmail =
-      await this.prisma.usuario.findUnique({
-        where: {
-          email: google.email,
+      await this.prisma.usuario.findUnique(
+        {
+          where: {
+            email: google.email,
+          },
+
+          select: {
+            id: true,
+          },
         },
-        include: {
-          negocios: true,
-        },
-      });
+      );
 
     if (usuarioPorEmail) {
       throw new ConflictException(
@@ -507,7 +750,7 @@ export class AuthService {
       );
 
     // ------------------------------------------------------------
-    // Limpiar información
+    // LIMPIAR INFORMACIÓN
     // ------------------------------------------------------------
 
     const telefono =
@@ -521,7 +764,8 @@ export class AuthService {
     const whatsappUsername =
       dto.whatsappUsername
         ?.trim()
-        .replace(/^@+/, '') || null;
+        .replace(/^@+/, '') ||
+      null;
 
     if (!telefono) {
       throw new BadRequestException(
@@ -536,18 +780,22 @@ export class AuthService {
     }
 
     // ------------------------------------------------------------
-    // Verificar cuenta por Google ID
+    // VERIFICAR CUENTA POR GOOGLE ID
     // ------------------------------------------------------------
 
     const cuentaPorGoogle =
-      await this.prisma.usuario.findUnique({
-        where: {
-          googleId: google.googleId,
+      await this.prisma.usuario.findUnique(
+        {
+          where: {
+            googleId:
+              google.googleId,
+          },
+
+          select: {
+            id: true,
+          },
         },
-        select: {
-          id: true,
-        },
-      });
+      );
 
     if (cuentaPorGoogle) {
       throw new ConflictException(
@@ -556,18 +804,21 @@ export class AuthService {
     }
 
     // ------------------------------------------------------------
-    // Verificar cuenta por email
+    // VERIFICAR CUENTA POR EMAIL
     // ------------------------------------------------------------
 
     const cuentaPorEmail =
-      await this.prisma.usuario.findUnique({
-        where: {
-          email: google.email,
+      await this.prisma.usuario.findUnique(
+        {
+          where: {
+            email: google.email,
+          },
+
+          select: {
+            id: true,
+          },
         },
-        select: {
-          id: true,
-        },
-      });
+      );
 
     if (cuentaPorEmail) {
       throw new ConflictException(
@@ -576,7 +827,7 @@ export class AuthService {
     }
 
     // ------------------------------------------------------------
-    // Contraseña interna
+    // CONTRASEÑA INTERNA
     // ------------------------------------------------------------
 
     const randomPassword =
@@ -600,15 +851,23 @@ export class AuthService {
             const usuario =
               await tx.usuario.create({
                 data: {
-                  nombre: google.nombre,
-                  email: google.email,
+                  nombre:
+                    google.nombre,
+
+                  email:
+                    google.email,
+
                   telefono,
-                  password: randomPassword,
+
+                  password:
+                    randomPassword,
 
                   // Google ya verificó el correo.
-                  emailVerificado: true,
+                  emailVerificado:
+                    true,
 
-                  googleId: google.googleId,
+                  googleId:
+                    google.googleId,
                 },
               });
 
@@ -619,29 +878,43 @@ export class AuthService {
             const aceptadoEn =
               new Date();
 
-            await tx.consentimientoLegal.create({
-              data: {
-                usuarioId: usuario.id,
-                documento:
-                  DocumentoLegal.TERMINOS_SERVICIO,
-                version:
-                  LEGAL_DOCUMENT_VERSION,
-                aceptadoEn,
-                ipAddress,
-              },
-            });
+            await tx.consentimientoLegal.create(
+              {
+                data: {
+                  usuarioId:
+                    usuario.id,
 
-            await tx.consentimientoLegal.create({
-              data: {
-                usuarioId: usuario.id,
-                documento:
-                  DocumentoLegal.POLITICA_PRIVACIDAD,
-                version:
-                  LEGAL_DOCUMENT_VERSION,
-                aceptadoEn,
-                ipAddress,
+                  documento:
+                    DocumentoLegal.TERMINOS_SERVICIO,
+
+                  version:
+                    LEGAL_DOCUMENT_VERSION,
+
+                  aceptadoEn,
+
+                  ipAddress,
+                },
               },
-            });
+            );
+
+            await tx.consentimientoLegal.create(
+              {
+                data: {
+                  usuarioId:
+                    usuario.id,
+
+                  documento:
+                    DocumentoLegal.POLITICA_PRIVACIDAD,
+
+                  version:
+                    LEGAL_DOCUMENT_VERSION,
+
+                  aceptadoEn,
+
+                  ipAddress,
+                },
+              },
+            );
 
             // --------------------------------------------------
             // NEGOCIO
@@ -650,7 +923,8 @@ export class AuthService {
             const negocio =
               await tx.negocio.create({
                 data: {
-                  nombre: nombreNegocio,
+                  nombre:
+                    nombreNegocio,
                 },
               });
 
@@ -660,8 +934,11 @@ export class AuthService {
 
             await tx.usuarioNegocio.create({
               data: {
-                usuarioId: usuario.id,
-                negocioId: negocio.id,
+                usuarioId:
+                  usuario.id,
+
+                negocioId:
+                  negocio.id,
               },
             });
 
@@ -672,8 +949,12 @@ export class AuthService {
             const sede =
               await tx.sede.create({
                 data: {
-                  nombre: 'Sede principal',
-                  negocioId: negocio.id,
+                  nombre:
+                    'Sede principal',
+
+                  negocioId:
+                    negocio.id,
+
                   whatsappUsername,
                 },
               });
@@ -684,8 +965,11 @@ export class AuthService {
 
             await tx.usuarioSede.create({
               data: {
-                usuarioId: usuario.id,
-                sedeId: sede.id,
+                usuarioId:
+                  usuario.id,
+
+                sedeId:
+                  sede.id,
               },
             });
 
@@ -715,13 +999,20 @@ export class AuthService {
         error.code === 'P2002'
       ) {
         const target =
-          Array.isArray(error.meta?.target)
-            ? (error.meta.target as string[])
+          Array.isArray(
+            error.meta?.target,
+          )
+            ? (error.meta
+                .target as string[])
             : [];
 
         if (
-          target.includes('email') ||
-          target.includes('googleId')
+          target.includes(
+            'email',
+          ) ||
+          target.includes(
+            'googleId',
+          )
         ) {
           throw new ConflictException(
             'Ya existe una cuenta de Luka con este correo de Google.',
@@ -755,12 +1046,20 @@ export class AuthService {
       raw.replace(/\D/g, '');
 
     // 3001234567
-    if (/^3\d{9}$/.test(digits)) {
+    if (
+      /^3\d{9}$/.test(
+        digits,
+      )
+    ) {
       return `+57${digits}`;
     }
 
     // 573001234567
-    if (/^57(3\d{9})$/.test(digits)) {
+    if (
+      /^57(3\d{9})$/.test(
+        digits,
+      )
+    ) {
       return `+${digits}`;
     }
 
@@ -777,11 +1076,13 @@ export class AuthService {
     dto: AsociarNegocioDto,
   ) {
     const negocio =
-      await this.prisma.negocio.findUnique({
-        where: {
-          id: dto.negocioId,
+      await this.prisma.negocio.findUnique(
+        {
+          where: {
+            id: dto.negocioId,
+          },
         },
-      });
+      );
 
     if (!negocio) {
       throw new NotFoundException(
@@ -796,11 +1097,13 @@ export class AuthService {
     );
 
     const usuario =
-      await this.prisma.usuario.findUnique({
-        where: {
-          id: dto.usuarioId,
+      await this.prisma.usuario.findUnique(
+        {
+          where: {
+            id: dto.usuarioId,
+          },
         },
-      });
+      );
 
     if (!usuario) {
       throw new NotFoundException(
@@ -809,12 +1112,17 @@ export class AuthService {
     }
 
     try {
-      return await this.prisma.usuarioNegocio.create({
-        data: {
-          usuarioId: dto.usuarioId,
-          negocioId: dto.negocioId,
+      return await this.prisma.usuarioNegocio.create(
+        {
+          data: {
+            usuarioId:
+              dto.usuarioId,
+
+            negocioId:
+              dto.negocioId,
+          },
         },
-      });
+      );
     } catch (error) {
       if (
         error instanceof
@@ -838,18 +1146,22 @@ export class AuthService {
     id: string,
     rolGlobal: string,
   ) {
-    if (rolGlobal !== 'MASTER') {
+    if (
+      rolGlobal !== 'MASTER'
+    ) {
       throw new ForbiddenException(
         'Solo un usuario MASTER puede eliminar cuentas',
       );
     }
 
     const usuario =
-      await this.prisma.usuario.findUnique({
-        where: {
-          id,
+      await this.prisma.usuario.findUnique(
+        {
+          where: {
+            id,
+          },
         },
-      });
+      );
 
     if (!usuario) {
       throw new NotFoundException(
@@ -857,11 +1169,794 @@ export class AuthService {
       );
     }
 
-    return this.prisma.usuario.delete({
-      where: {
-        id,
+    return this.prisma.usuario.delete(
+      {
+        where: {
+          id,
+        },
       },
-    });
+    );
+  }
+
+  // ============================================================
+  // MFA — RESPUESTA INICIAL PARA MASTER
+  // ============================================================
+
+  /**
+   * Determina qué paso de MFA necesita completar un MASTER.
+   *
+   * Nunca genera un access_token definitivo.
+   */
+  private buildMasterMfaResponse(
+    usuario: {
+      id: string;
+      nombre: string;
+      email: string;
+      rolGlobal: string;
+      mfaActivado: boolean;
+    },
+  ):
+    | MfaSetupResponse
+    | MfaLoginResponse {
+    // ----------------------------------------------------------
+    // MFA NO ACTIVADO
+    // ----------------------------------------------------------
+
+    if (!usuario.mfaActivado) {
+      const mfaToken =
+        this.createMfaPendingToken(
+          usuario.id,
+          'setup',
+        );
+
+      return {
+        requiresMfa: true,
+
+        mfaRequiredAction:
+          'setup',
+
+        mfaToken,
+
+        user: {
+          id: usuario.id,
+          nombre: usuario.nombre,
+          email: usuario.email,
+          rolGlobal:
+            usuario.rolGlobal,
+        },
+      };
+    }
+
+    // ----------------------------------------------------------
+    // MFA YA ACTIVADO
+    // ----------------------------------------------------------
+
+    const mfaToken =
+      this.createMfaPendingToken(
+        usuario.id,
+        'login',
+      );
+
+    return {
+      requiresMfa: true,
+
+      mfaRequiredAction:
+        'verify',
+
+      mfaToken,
+
+      user: {
+        id: usuario.id,
+        nombre: usuario.nombre,
+        email: usuario.email,
+        rolGlobal:
+          usuario.rolGlobal,
+      },
+    };
+  }
+
+  // ============================================================
+  // MFA — GENERAR TOKEN TEMPORAL
+  // ============================================================
+
+  /**
+   * Token temporal de MFA.
+   *
+   * IMPORTANTE:
+   *
+   * Este token NO es un access_token de sesión.
+   *
+   * JwtStrategy debe aceptar únicamente:
+   *
+   *   type === 'session'
+   *
+   * para proteger el resto de la API.
+   */
+  private createMfaPendingToken(
+    usuarioId: string,
+    purpose: MfaPendingPurpose,
+  ): string {
+    return this.jwtService.sign(
+      {
+        sub: usuarioId,
+        type: 'mfa-pending',
+        purpose,
+      },
+      {
+        expiresIn:
+          MFA_TOKEN_EXPIRES_IN,
+      },
+    );
+  }
+
+  // ============================================================
+  // MFA — VALIDAR TOKEN TEMPORAL
+  // ============================================================
+
+  private verifyMfaPendingToken(
+    token: string,
+    expectedPurpose: MfaPendingPurpose,
+  ): MfaPendingPayload {
+    if (!token?.trim()) {
+      throw new BadRequestException(
+        'El token temporal de MFA es obligatorio',
+      );
+    }
+
+    let payload: MfaPendingPayload;
+
+    try {
+      payload =
+        this.jwtService.verify<MfaPendingPayload>(
+          token,
+        );
+    } catch {
+      throw new UnauthorizedException(
+        'El proceso de MFA expiró o es inválido. Inicia sesión nuevamente.',
+      );
+    }
+
+    if (
+      payload.type !==
+        'mfa-pending' ||
+      payload.purpose !==
+        expectedPurpose ||
+      !payload.sub
+    ) {
+      throw new UnauthorizedException(
+        'Token de MFA inválido para esta operación',
+      );
+    }
+
+    return payload;
+  }
+
+  // ============================================================
+  // MFA — OBTENER CLAVE DE CIFRADO
+  // ============================================================
+
+  private getMfaEncryptionKey(): Buffer {
+    const rawKey =
+      process.env.MFA_ENCRYPTION_KEY?.trim();
+
+    if (!rawKey) {
+      throw new UnauthorizedException(
+        'La configuración de seguridad MFA no está disponible en el servidor',
+      );
+    }
+
+    if (
+      !/^[0-9a-fA-F]{64}$/.test(
+        rawKey,
+      )
+    ) {
+      throw new UnauthorizedException(
+        'La configuración de seguridad MFA es inválida',
+      );
+    }
+
+    const key =
+      Buffer.from(
+        rawKey,
+        'hex',
+      );
+
+    if (
+      key.length !==
+      MFA_KEY_LENGTH
+    ) {
+      throw new UnauthorizedException(
+        'La configuración de seguridad MFA es inválida',
+      );
+    }
+
+    return key;
+  }
+
+  // ============================================================
+  // MFA — CIFRAR SECRETO
+  // ============================================================
+
+  private encryptMfaSecret(
+    secret: string,
+  ): string {
+    const key =
+      this.getMfaEncryptionKey();
+
+    const iv =
+      crypto.randomBytes(
+        MFA_IV_LENGTH,
+      );
+
+    const cipher =
+      crypto.createCipheriv(
+        MFA_ENCRYPTION_ALGORITHM,
+        key,
+        iv,
+        {
+          authTagLength:
+            MFA_AUTH_TAG_LENGTH,
+        },
+      );
+
+    const encrypted =
+      Buffer.concat([
+        cipher.update(
+          secret,
+          'utf8',
+        ),
+        cipher.final(),
+      ]);
+
+    const authTag =
+      cipher.getAuthTag();
+
+    /**
+     * Formato:
+     *
+     * iv:authTag:ciphertext
+     *
+     * Todo hexadecimal.
+     */
+    return [
+      iv.toString('hex'),
+      authTag.toString('hex'),
+      encrypted.toString('hex'),
+    ].join(':');
+  }
+
+  // ============================================================
+  // MFA — DESCIFRAR SECRETO
+  // ============================================================
+
+  private decryptMfaSecret(
+    encryptedSecret: string,
+  ): string {
+    const key =
+      this.getMfaEncryptionKey();
+
+    const parts =
+      encryptedSecret.split(':');
+
+    if (
+      parts.length !== 3
+    ) {
+      throw new UnauthorizedException(
+        'No fue posible recuperar la configuración MFA',
+      );
+    }
+
+    const [
+      ivHex,
+      authTagHex,
+      encryptedHex,
+    ] = parts;
+
+    try {
+      const iv =
+        Buffer.from(
+          ivHex,
+          'hex',
+        );
+
+      const authTag =
+        Buffer.from(
+          authTagHex,
+          'hex',
+        );
+
+      const encrypted =
+        Buffer.from(
+          encryptedHex,
+          'hex',
+        );
+
+      if (
+        iv.length !==
+          MFA_IV_LENGTH ||
+        authTag.length !==
+          MFA_AUTH_TAG_LENGTH
+      ) {
+        throw new Error(
+          'Invalid MFA encryption metadata',
+        );
+      }
+
+      const decipher =
+        crypto.createDecipheriv(
+          MFA_ENCRYPTION_ALGORITHM,
+          key,
+          iv,
+          {
+            authTagLength:
+              MFA_AUTH_TAG_LENGTH,
+          },
+        );
+
+      decipher.setAuthTag(
+        authTag,
+      );
+
+      const decrypted =
+        Buffer.concat([
+          decipher.update(
+            encrypted,
+          ),
+          decipher.final(),
+        ]);
+
+      return decrypted.toString(
+        'utf8',
+      );
+    } catch {
+      throw new UnauthorizedException(
+        'No fue posible recuperar la configuración MFA',
+      );
+    }
+  }
+
+  // ============================================================
+  // MFA — ACTIVAR / PREPARAR MFA
+  // ============================================================
+
+  /**
+   * Genera una nueva configuración TOTP para un MASTER.
+   *
+   * El usuario todavía NO queda marcado como:
+   *
+   *   mfaActivado = true
+   *
+   * Flujo:
+   *
+   * 1. Generar secreto.
+   * 2. Cifrar secreto.
+   * 3. Guardar secreto cifrado.
+   * 4. Generar URI otpauth.
+   * 5. Frontend genera QR.
+   * 6. Usuario introduce código.
+   * 7. verificarActivacionMfa() valida el código.
+   */
+  async activarMfa(
+    token: string,
+  ) {
+    const payload =
+      this.verifyMfaPendingToken(
+        token,
+        'setup',
+      );
+
+    const usuario =
+      await this.prisma.usuario.findUnique(
+        {
+          where: {
+            id: payload.sub,
+          },
+
+          select: {
+            id: true,
+            nombre: true,
+            email: true,
+            rolGlobal: true,
+            mfaActivado: true,
+          },
+        },
+      );
+
+    if (!usuario) {
+      throw new NotFoundException(
+        'Usuario no encontrado',
+      );
+    }
+
+    if (
+      usuario.rolGlobal !==
+      'MASTER'
+    ) {
+      throw new ForbiddenException(
+        'Solo los usuarios MASTER pueden configurar MFA',
+      );
+    }
+
+    if (usuario.mfaActivado) {
+      throw new ConflictException(
+        'El MFA de esta cuenta ya está activado. Inicia sesión nuevamente.',
+      );
+    }
+
+    // ----------------------------------------------------------
+    // GENERAR NUEVO SECRETO
+    // ----------------------------------------------------------
+
+    const secret =
+      generateSecret();
+
+    // ----------------------------------------------------------
+    // CIFRAR SECRETO
+    // ----------------------------------------------------------
+
+    const encryptedSecret =
+      this.encryptMfaSecret(
+        secret,
+      );
+
+    // ----------------------------------------------------------
+    // GUARDAR SECRETO
+    // ----------------------------------------------------------
+
+    await this.prisma.usuario.update(
+      {
+        where: {
+          id: usuario.id,
+        },
+
+        data: {
+          mfaSecret:
+            encryptedSecret,
+
+          mfaActivado:
+            false,
+
+          mfaActivadoEn:
+            null,
+        },
+      },
+    );
+
+    // ----------------------------------------------------------
+    // GENERAR URI TOTP
+    // ----------------------------------------------------------
+
+    const otpauthUrl =
+      generateURI({
+        issuer:
+          MFA_ISSUER,
+
+        label:
+          usuario.email,
+
+        secret,
+      });
+
+    // ----------------------------------------------------------
+    // RESPUESTA
+    // ----------------------------------------------------------
+
+    return {
+      requiresMfa: true,
+
+      mfaRequiredAction:
+        'verify-activation' as const,
+
+      /**
+       * Se devuelve el secreto en texto plano
+       * únicamente durante la configuración.
+       *
+       * Esto permite introducirlo manualmente si
+       * el QR no puede escanearse.
+       */
+      secret,
+
+      /**
+       * URI utilizada para generar el QR.
+       */
+      otpauthUrl,
+
+      user: {
+        id: usuario.id,
+        nombre: usuario.nombre,
+        email: usuario.email,
+        rolGlobal:
+          usuario.rolGlobal,
+      },
+    };
+  }
+
+  // ============================================================
+  // MFA — VERIFICAR ACTIVACIÓN
+  // ============================================================
+
+  /**
+   * Verifica el primer código generado por la aplicación
+   * autenticadora.
+   *
+   * Si es correcto:
+   *
+   * - MFA queda activado.
+   * - Se registra mfaActivadoEn.
+   * - Se devuelve el JWT definitivo.
+   */
+  async verificarActivacionMfa(
+    token: string,
+    codigo: string,
+  ): Promise<AuthenticatedUserResponse> {
+    const payload =
+      this.verifyMfaPendingToken(
+        token,
+        'setup',
+      );
+
+    const usuario =
+      await this.prisma.usuario.findUnique(
+        {
+          where: {
+            id: payload.sub,
+          },
+
+          select: {
+            id: true,
+            nombre: true,
+            email: true,
+            rolGlobal: true,
+            mfaActivado: true,
+            mfaSecret: true,
+            negocios: true,
+          },
+        },
+      );
+
+    if (!usuario) {
+      throw new NotFoundException(
+        'Usuario no encontrado',
+      );
+    }
+
+    if (
+      usuario.rolGlobal !==
+      'MASTER'
+    ) {
+      throw new ForbiddenException(
+        'Solo los usuarios MASTER pueden activar MFA',
+      );
+    }
+
+    if (usuario.mfaActivado) {
+      throw new ConflictException(
+        'El MFA de esta cuenta ya está activado',
+      );
+    }
+
+    if (!usuario.mfaSecret) {
+      throw new BadRequestException(
+        'Primero debes iniciar la configuración de MFA',
+      );
+    }
+
+    const normalizedCode =
+      this.normalizeMfaCode(
+        codigo,
+      );
+
+    const secret =
+      this.decryptMfaSecret(
+        usuario.mfaSecret,
+      );
+
+    let verification;
+
+    try {
+      verification =
+        await verifyTotp({
+          secret,
+          token:
+            normalizedCode,
+
+          epochTolerance:
+            MFA_EPOCH_TOLERANCE_SECONDS,
+        });
+    } catch {
+      throw new UnauthorizedException(
+        'No fue posible verificar el código MFA',
+      );
+    }
+
+    if (!verification.valid) {
+      throw new UnauthorizedException(
+        'El código MFA es incorrecto o expiró. Revisa la aplicación autenticadora e inténtalo nuevamente.',
+      );
+    }
+
+    // ----------------------------------------------------------
+    // ACTIVAR MFA
+    // ----------------------------------------------------------
+
+    await this.prisma.usuario.update(
+      {
+        where: {
+          id: usuario.id,
+        },
+
+        data: {
+          mfaActivado:
+            true,
+
+          mfaActivadoEn:
+            new Date(),
+        },
+      },
+    );
+
+    const usuarioNegocio =
+      usuario.negocios[0];
+
+    // ----------------------------------------------------------
+    // JWT DEFINITIVO
+    // ----------------------------------------------------------
+
+    return this.buildAuthResponse(
+      usuario.id,
+      usuario.nombre,
+      usuarioNegocio?.negocioId ??
+        null,
+      usuarioNegocio?.role ??
+        null,
+      usuario.rolGlobal,
+    );
+  }
+
+  // ============================================================
+  // MFA — VERIFICAR LOGIN
+  // ============================================================
+
+  /**
+   * Completa el segundo factor de un login MASTER.
+   *
+   * El token recibido aquí es exclusivamente el token temporal
+   * generado después de comprobar la primera credencial.
+   *
+   * Solo después de verificar correctamente el TOTP se genera
+   * el JWT de sesión.
+   */
+  async verificarMfa(
+    token: string,
+    codigo: string,
+  ): Promise<AuthenticatedUserResponse> {
+    const payload =
+      this.verifyMfaPendingToken(
+        token,
+        'login',
+      );
+
+    const usuario =
+      await this.prisma.usuario.findUnique(
+        {
+          where: {
+            id: payload.sub,
+          },
+
+          select: {
+            id: true,
+            nombre: true,
+            email: true,
+            rolGlobal: true,
+            mfaActivado: true,
+            mfaSecret: true,
+            negocios: true,
+          },
+        },
+      );
+
+    if (!usuario) {
+      throw new NotFoundException(
+        'Usuario no encontrado',
+      );
+    }
+
+    if (
+      usuario.rolGlobal !==
+      'MASTER'
+    ) {
+      throw new ForbiddenException(
+        'Este flujo de MFA solo está disponible para usuarios MASTER',
+      );
+    }
+
+    if (!usuario.mfaActivado) {
+      throw new UnauthorizedException(
+        'El MFA de esta cuenta todavía no está activado. Debes completar la configuración.',
+      );
+    }
+
+    if (!usuario.mfaSecret) {
+      throw new UnauthorizedException(
+        'La configuración MFA de esta cuenta no está disponible',
+      );
+    }
+
+    const normalizedCode =
+      this.normalizeMfaCode(
+        codigo,
+      );
+
+    const secret =
+      this.decryptMfaSecret(
+        usuario.mfaSecret,
+      );
+
+    let verification;
+
+    try {
+      verification =
+        await verifyTotp({
+          secret,
+          token:
+            normalizedCode,
+
+          epochTolerance:
+            MFA_EPOCH_TOLERANCE_SECONDS,
+        });
+    } catch {
+      throw new UnauthorizedException(
+        'No fue posible verificar el código MFA',
+      );
+    }
+
+    if (!verification.valid) {
+      throw new UnauthorizedException(
+        'El código MFA es incorrecto o expiró. Revisa la aplicación autenticadora e inténtalo nuevamente.',
+      );
+    }
+
+    const usuarioNegocio =
+      usuario.negocios[0];
+
+    /**
+     * ESTE es el primer punto del flujo MASTER en el que
+     * se genera el token definitivo de sesión.
+     */
+    return this.buildAuthResponse(
+      usuario.id,
+      usuario.nombre,
+      usuarioNegocio?.negocioId ??
+        null,
+      usuarioNegocio?.role ??
+        null,
+      usuario.rolGlobal,
+    );
+  }
+
+  // ============================================================
+  // MFA — NORMALIZAR CÓDIGO
+  // ============================================================
+
+  private normalizeMfaCode(
+    codigo: string,
+  ): string {
+    const normalized =
+      (codigo ?? '')
+        .trim()
+        .replace(/\s+/g, '');
+
+    if (
+      !/^\d{6}$/.test(
+        normalized,
+      )
+    ) {
+      throw new BadRequestException(
+        'El código MFA debe tener exactamente 6 dígitos',
+      );
+    }
+
+    return normalized;
   }
 
   // ============================================================
@@ -874,33 +1969,45 @@ export class AuthService {
     negocioId: string | null,
     role: string | null,
     rolGlobal: string,
-  ) {
+  ): AuthenticatedUserResponse {
     /**
      * `type` distingue este token de los tokens de:
      *
      * - verificación de email
      * - recuperación de contraseña
      * - cambio de email
+     * - MFA pendiente
      *
-     * JwtStrategy solo acepta tokens de tipo `session`.
+     * JwtStrategy solo debe aceptar tokens de tipo `session`.
      */
+
     const payload = {
       sub: usuarioId,
+
       type: 'session',
+
       negocioId,
+
       role,
+
       rolGlobal,
     };
 
     return {
       access_token:
-        this.jwtService.sign(payload),
+        this.jwtService.sign(
+          payload,
+        ),
 
       user: {
         id: usuarioId,
+
         nombre,
+
         negocioId,
+
         role,
+
         rolGlobal,
       },
     };
@@ -914,12 +2021,16 @@ export class AuthService {
     dto: ReenviarVerificacionDto,
   ) {
     const usuario =
-      await this.prisma.usuario.findUnique({
-        where: {
-          email:
-            dto.email.trim().toLowerCase(),
+      await this.prisma.usuario.findUnique(
+        {
+          where: {
+            email:
+              dto.email
+                .trim()
+                .toLowerCase(),
+          },
         },
-      });
+      );
 
     if (!usuario) {
       throw new NotFoundException(
@@ -954,44 +2065,51 @@ export class AuthService {
   // PERFIL
   // ============================================================
 
-  async getPerfil(usuarioId: string) {
+  async getPerfil(
+    usuarioId: string,
+  ) {
     const usuario =
-      await this.prisma.usuario.findUnique({
-        where: {
-          id: usuarioId,
-        },
-        select: {
-          id: true,
-          nombre: true,
-          email: true,
-          telefono: true,
-          emailVerificado: true,
-          rolGlobal: true,
-          plan: true,
-          createdAt: true,
-          negocios: {
-            select: {
-              negocio: {
-                select: {
-                  id: true,
-                  nombre: true,
+      await this.prisma.usuario.findUnique(
+        {
+          where: {
+            id: usuarioId,
+          },
+
+          select: {
+            id: true,
+            nombre: true,
+            email: true,
+            telefono: true,
+            emailVerificado: true,
+            rolGlobal: true,
+            plan: true,
+            createdAt: true,
+
+            negocios: {
+              select: {
+                negocio: {
+                  select: {
+                    id: true,
+                    nombre: true,
+                  },
+                },
+              },
+            },
+
+            sedes: {
+              select: {
+                sede: {
+                  select: {
+                    id: true,
+                    nombre: true,
+                    negocioId: true,
+                  },
                 },
               },
             },
           },
-          sedes: {
-            select: {
-              sede: {
-                select: {
-                  id: true,
-                  nombre: true,
-                  negocioId: true,
-                },
-              },
-            },
-          },
         },
-      });
+      );
 
     if (!usuario) {
       throw new NotFoundException(
@@ -1006,7 +2124,9 @@ export class AuthService {
   // BUSCAR USUARIO POR EMAIL
   // ============================================================
 
-  async buscarPorEmail(email?: string) {
+  async buscarPorEmail(
+    email?: string,
+  ) {
     if (!email) {
       throw new BadRequestException(
         'Debes indicar el email que quieres buscar',
@@ -1014,16 +2134,21 @@ export class AuthService {
     }
 
     const usuario =
-      await this.prisma.usuario.findUnique({
-        where: {
-          email:
-            email.trim().toLowerCase(),
+      await this.prisma.usuario.findUnique(
+        {
+          where: {
+            email:
+              email
+                .trim()
+                .toLowerCase(),
+          },
+
+          select: {
+            id: true,
+            nombre: true,
+          },
         },
-        select: {
-          id: true,
-          nombre: true,
-        },
-      });
+      );
 
     if (!usuario) {
       throw new NotFoundException(
@@ -1042,21 +2167,26 @@ export class AuthService {
     usuarioId: string,
     dto: UpdateUsuarioDto,
   ) {
-    return this.prisma.usuario.update({
-      where: {
-        id: usuarioId,
+    return this.prisma.usuario.update(
+      {
+        where: {
+          id: usuarioId,
+        },
+
+        data: {
+          nombre: dto.nombre,
+          telefono:
+            dto.telefono,
+        },
+
+        select: {
+          id: true,
+          nombre: true,
+          email: true,
+          telefono: true,
+        },
       },
-      data: {
-        nombre: dto.nombre,
-        telefono: dto.telefono,
-      },
-      select: {
-        id: true,
-        nombre: true,
-        email: true,
-        telefono: true,
-      },
-    });
+    );
   }
 
   // ============================================================
@@ -1067,15 +2197,22 @@ export class AuthService {
     dto: ForgotPasswordDto,
   ) {
     const usuario =
-      await this.prisma.usuario.findUnique({
-        where: {
-          email:
-            dto.email.trim().toLowerCase(),
+      await this.prisma.usuario.findUnique(
+        {
+          where: {
+            email:
+              dto.email
+                .trim()
+                .toLowerCase(),
+          },
         },
-      });
+      );
 
-    // Se firma y se envía solo si existe, pero la respuesta hacia
-    // afuera es idéntica en ambos casos (evita enumeración de cuentas).
+    /**
+     * Se firma y se envía solo si existe,
+     * pero la respuesta hacia afuera es idéntica
+     * en ambos casos para evitar enumeración de cuentas.
+     */
     if (usuario) {
       const resetToken =
         this.jwtService.sign(
@@ -1124,18 +2261,23 @@ export class AuthService {
       );
     }
 
-    if (payload.type !== 'password-reset') {
+    if (
+      payload.type !==
+      'password-reset'
+    ) {
       throw new UnauthorizedException(
         'Token inválido para esta operación',
       );
     }
 
     const usuario =
-      await this.prisma.usuario.findUnique({
-        where: {
-          id: payload.sub,
+      await this.prisma.usuario.findUnique(
+        {
+          where: {
+            id: payload.sub,
+          },
         },
-      });
+      );
 
     if (!usuario) {
       throw new NotFoundException(
@@ -1149,14 +2291,18 @@ export class AuthService {
         BCRYPT_ROUNDS,
       );
 
-    await this.prisma.usuario.update({
-      where: {
-        id: usuario.id,
+    await this.prisma.usuario.update(
+      {
+        where: {
+          id: usuario.id,
+        },
+
+        data: {
+          password:
+            hashedPassword,
+        },
       },
-      data: {
-        password: hashedPassword,
-      },
-    });
+    );
 
     return {
       mensaje:
@@ -1173,11 +2319,13 @@ export class AuthService {
     dto: CambiarEmailDto,
   ) {
     const usuario =
-      await this.prisma.usuario.findUnique({
-        where: {
-          id: usuarioId,
+      await this.prisma.usuario.findUnique(
+        {
+          where: {
+            id: usuarioId,
+          },
         },
-      });
+      );
 
     if (!usuario) {
       throw new NotFoundException(
@@ -1203,11 +2351,14 @@ export class AuthService {
         .toLowerCase();
 
     const emailExistente =
-      await this.prisma.usuario.findUnique({
-        where: {
-          email: nuevoEmail,
+      await this.prisma.usuario.findUnique(
+        {
+          where: {
+            email:
+              nuevoEmail,
+          },
         },
-      });
+      );
 
     if (emailExistente) {
       throw new ConflictException(
@@ -1263,7 +2414,10 @@ export class AuthService {
       );
     }
 
-    if (payload.type !== 'email-change') {
+    if (
+      payload.type !==
+      'email-change'
+    ) {
       throw new UnauthorizedException(
         'Token inválido para esta operación',
       );
@@ -1275,11 +2429,14 @@ export class AuthService {
         .toLowerCase();
 
     const emailExistente =
-      await this.prisma.usuario.findUnique({
-        where: {
-          email: nuevoEmail,
+      await this.prisma.usuario.findUnique(
+        {
+          where: {
+            email:
+              nuevoEmail,
+          },
         },
-      });
+      );
 
     if (emailExistente) {
       throw new ConflictException(
@@ -1287,14 +2444,18 @@ export class AuthService {
       );
     }
 
-    await this.prisma.usuario.update({
-      where: {
-        id: payload.sub,
+    await this.prisma.usuario.update(
+      {
+        where: {
+          id: payload.sub,
+        },
+
+        data: {
+          email:
+            nuevoEmail,
+        },
       },
-      data: {
-        email: nuevoEmail,
-      },
-    });
+    );
 
     return {
       mensaje:

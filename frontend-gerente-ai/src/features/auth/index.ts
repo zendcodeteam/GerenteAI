@@ -6,6 +6,7 @@ export { RegisterPage } from './routes/RegisterPage';
 export { VerificarEmailPage } from './routes/VerificarEmailPage';
 export { ForgotPasswordPage } from './routes/ForgotPasswordPage';
 export { ResetPasswordPage } from './routes/ResetPasswordPage';
+export { MfaPage } from './routes/MfaPage';
 export { LoginForm } from './components/LoginForm';
 export { RegisterForm } from './components/RegisterForm';
 export { VerifyEmailCard } from './components/VerifyEmailCard';

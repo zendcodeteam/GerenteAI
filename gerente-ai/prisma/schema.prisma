@@ -16,6 +16,9 @@ model Usuario {
   googleId               String?               @unique
   emailVerificado        Boolean               @default(false)
   rolGlobal              RolGlobal             @default(CLIENTE)
+  mfaSecret              String?
+  mfaActivado            Boolean               @default(false)
+  mfaActivadoEn          DateTime?
   plan                   Int                   @default(1)
   createdAt              DateTime              @default(now())
   consentimientosLegales ConsentimientoLegal[]
