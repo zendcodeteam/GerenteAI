@@ -2,7 +2,11 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpException,
+  HttpStatus,
   Injectable,
+  InternalServerErrorException,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -63,6 +67,17 @@ const MFA_ISSUER = 'Luka AI';
 const MFA_TOKEN_EXPIRES_IN = '10m';
 
 const MFA_EPOCH_TOLERANCE_SECONDS = 30;
+
+/**
+ * Códigos incorrectos permitidos antes de bloquear el segundo factor.
+ *
+ * Con la tolerancia de ±30 s hay unos 3 códigos válidos entre un millón:
+ * sin este límite, un atacante que ya tiene la contraseña adivina el código
+ * en minutos pidiendo un mfaToken nuevo con cada login.
+ */
+const MFA_MAX_INTENTOS = 5;
+
+const MFA_BLOQUEO_MINUTOS = 15;
 
 /**
  * ============================================================
@@ -145,6 +160,8 @@ export class AuthService {
     '$2b$10$CwTycUXWue0Thq9StjUM0uJ8gcCX5eNiUV5NcH3H0aP5Z2v5X6dS2';
 
   private readonly googleClient: OAuth2Client;
+
+  private readonly logger = new Logger(AuthService.name);
 
   constructor(
     private readonly prisma: PrismaService,
@@ -1340,7 +1357,7 @@ export class AuthService {
       process.env.MFA_ENCRYPTION_KEY?.trim();
 
     if (!rawKey) {
-      throw new UnauthorizedException(
+      throw this.errorDeConfiguracionMfa(
         'La configuración de seguridad MFA no está disponible en el servidor',
       );
     }
@@ -1350,7 +1367,7 @@ export class AuthService {
         rawKey,
       )
     ) {
-      throw new UnauthorizedException(
+      throw this.errorDeConfiguracionMfa(
         'La configuración de seguridad MFA es inválida',
       );
     }
@@ -1365,7 +1382,7 @@ export class AuthService {
       key.length !==
       MFA_KEY_LENGTH
     ) {
-      throw new UnauthorizedException(
+      throw this.errorDeConfiguracionMfa(
         'La configuración de seguridad MFA es inválida',
       );
     }
@@ -1441,7 +1458,7 @@ export class AuthService {
     if (
       parts.length !== 3
     ) {
-      throw new UnauthorizedException(
+      throw this.errorDeConfiguracionMfa(
         'No fue posible recuperar la configuración MFA',
       );
     }
@@ -1509,7 +1526,7 @@ export class AuthService {
         'utf8',
       );
     } catch {
-      throw new UnauthorizedException(
+      throw this.errorDeConfiguracionMfa(
         'No fue posible recuperar la configuración MFA',
       );
     }
@@ -1617,6 +1634,10 @@ export class AuthService {
             false,
 
           mfaActivadoEn:
+            null,
+
+          // El paso guardado pertenece al secreto anterior.
+          mfaUltimoPaso:
             null,
         },
       },
@@ -1741,58 +1762,12 @@ export class AuthService {
       );
     }
 
-    const normalizedCode =
-      this.normalizeMfaCode(
-        codigo,
-      );
-
-    const secret =
-      this.decryptMfaSecret(
-        usuario.mfaSecret,
-      );
-
-    let verification;
-
-    try {
-      verification =
-        await verifyTotp({
-          secret,
-          token:
-            normalizedCode,
-
-          epochTolerance:
-            MFA_EPOCH_TOLERANCE_SECONDS,
-        });
-    } catch {
-      throw new UnauthorizedException(
-        'No fue posible verificar el código MFA',
-      );
-    }
-
-    if (!verification.valid) {
-      throw new UnauthorizedException(
-        'El código MFA es incorrecto o expiró. Revisa la aplicación autenticadora e inténtalo nuevamente.',
-      );
-    }
-
-    // ----------------------------------------------------------
-    // ACTIVAR MFA
-    // ----------------------------------------------------------
-
-    await this.prisma.usuario.update(
-      {
-        where: {
-          id: usuario.id,
-        },
-
-        data: {
-          mfaActivado:
-            true,
-
-          mfaActivadoEn:
-            new Date(),
-        },
-      },
+    // Valida el código y, en la misma escritura, activa el MFA.
+    await this.comprobarCodigoMfa(
+      usuario.id,
+      usuario.mfaSecret,
+      codigo,
+      { activar: true },
     );
 
     const usuarioNegocio =
@@ -1882,39 +1857,11 @@ export class AuthService {
       );
     }
 
-    const normalizedCode =
-      this.normalizeMfaCode(
-        codigo,
-      );
-
-    const secret =
-      this.decryptMfaSecret(
-        usuario.mfaSecret,
-      );
-
-    let verification;
-
-    try {
-      verification =
-        await verifyTotp({
-          secret,
-          token:
-            normalizedCode,
-
-          epochTolerance:
-            MFA_EPOCH_TOLERANCE_SECONDS,
-        });
-    } catch {
-      throw new UnauthorizedException(
-        'No fue posible verificar el código MFA',
-      );
-    }
-
-    if (!verification.valid) {
-      throw new UnauthorizedException(
-        'El código MFA es incorrecto o expiró. Revisa la aplicación autenticadora e inténtalo nuevamente.',
-      );
-    }
+    await this.comprobarCodigoMfa(
+      usuario.id,
+      usuario.mfaSecret,
+      codigo,
+    );
 
     const usuarioNegocio =
       usuario.negocios[0];
@@ -1931,6 +1878,212 @@ export class AuthService {
       usuarioNegocio?.role ??
         null,
       usuario.rolGlobal,
+    );
+  }
+
+  // ============================================================
+  // MFA — COMPROBAR CÓDIGO
+  // ============================================================
+
+  /**
+   * Verifica un código TOTP y, si es correcto, lo consume.
+   *
+   * - Cada intento reserva su turno con un incremento atómico ANTES de
+   *   verificar. Aunque lleguen cien peticiones en paralelo, solo
+   *   MFA_MAX_INTENTOS alcanzan a probar un código.
+   * - Al agotar los intentos, el segundo factor queda bloqueado
+   *   MFA_BLOQUEO_MINUTOS. Un login nuevo no lo desbloquea: el contador
+   *   vive en el usuario, no en el mfaToken.
+   * - El código aceptado se guarda por su paso de tiempo, y ese paso y los
+   *   anteriores se rechazan: un código ya usado (o visto por encima del
+   *   hombro) no sirve dos veces.
+   *
+   * Con `activar`, el mismo UPDATE que consume el código marca el MFA como
+   * activado, así que dos confirmaciones simultáneas no pueden pisarse.
+   */
+  private async comprobarCodigoMfa(
+    usuarioId: string,
+    mfaSecret: string,
+    codigo: string,
+    opciones: { activar?: boolean } = {},
+  ): Promise<void> {
+    // Formato y configuración primero: un error aquí no es un intento
+    // del usuario y no debe gastarle cupo.
+    const normalizedCode =
+      this.normalizeMfaCode(codigo);
+
+    const secret =
+      this.decryptMfaSecret(mfaSecret);
+
+    const ahora = new Date();
+
+    // Un bloqueo vencido se levanta y el contador vuelve a cero.
+    await this.prisma.usuario.updateMany({
+      where: {
+        id: usuarioId,
+        mfaBloqueadoHasta: { lte: ahora },
+      },
+      data: {
+        mfaBloqueadoHasta: null,
+        mfaIntentosFallidos: 0,
+      },
+    });
+
+    let reserva: {
+      mfaIntentosFallidos: number;
+      mfaUltimoPaso: number | null;
+    };
+
+    try {
+      reserva = await this.prisma.usuario.update({
+        where: {
+          id: usuarioId,
+          mfaBloqueadoHasta: null,
+        },
+        data: {
+          mfaIntentosFallidos: { increment: 1 },
+        },
+        select: {
+          mfaIntentosFallidos: true,
+          mfaUltimoPaso: true,
+        },
+      });
+    } catch (error) {
+      // P2025: el usuario existe (se acaba de leer), así que lo que no
+      // coincidió es `mfaBloqueadoHasta: null`. Está bloqueado.
+      if (
+        error instanceof
+          Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2025'
+      ) {
+        throw this.errorMfaBloqueado();
+      }
+
+      throw error;
+    }
+
+    // Solo pasa si un bloqueo anterior no llegó a escribirse.
+    if (
+      reserva.mfaIntentosFallidos >
+      MFA_MAX_INTENTOS
+    ) {
+      await this.bloquearMfa(usuarioId);
+      throw this.errorMfaBloqueado();
+    }
+
+    let verification:
+      | { valid: false }
+      | { valid: true; timeStep?: number };
+
+    try {
+      verification = await verifyTotp({
+        secret,
+        token: normalizedCode,
+        epochTolerance:
+          MFA_EPOCH_TOLERANCE_SECONDS,
+        afterTimeStep:
+          reserva.mfaUltimoPaso ?? undefined,
+      });
+    } catch {
+      verification = { valid: false };
+    }
+
+    if (
+      verification.valid &&
+      verification.timeStep !== undefined
+    ) {
+      const timeStep = verification.timeStep;
+
+      // Condicional: si otra petición consumió este mismo código un
+      // instante antes, esta no escribe nada y cuenta como fallida.
+      const consumido =
+        await this.prisma.usuario.updateMany({
+          where: {
+            id: usuarioId,
+            OR: [
+              { mfaUltimoPaso: null },
+              { mfaUltimoPaso: { lt: timeStep } },
+            ],
+            ...(opciones.activar
+              ? { mfaActivado: false }
+              : {}),
+          },
+          data: {
+            mfaIntentosFallidos: 0,
+            mfaUltimoPaso: timeStep,
+            ...(opciones.activar
+              ? {
+                  mfaActivado: true,
+                  mfaActivadoEn: new Date(),
+                }
+              : {}),
+          },
+        });
+
+      if (consumido.count === 1) {
+        return;
+      }
+    }
+
+    const restantes =
+      MFA_MAX_INTENTOS -
+      reserva.mfaIntentosFallidos;
+
+    if (restantes <= 0) {
+      await this.bloquearMfa(usuarioId);
+      throw this.errorMfaBloqueado();
+    }
+
+    throw new UnauthorizedException(
+      `El código MFA es incorrecto, expiró o ya fue usado. Te ${
+        restantes === 1
+          ? 'queda 1 intento'
+          : `quedan ${restantes} intentos`
+      }.`,
+    );
+  }
+
+  private async bloquearMfa(
+    usuarioId: string,
+  ): Promise<void> {
+    await this.prisma.usuario.updateMany({
+      where: { id: usuarioId },
+      data: {
+        mfaBloqueadoHasta: new Date(
+          Date.now() +
+            MFA_BLOQUEO_MINUTOS * 60_000,
+        ),
+        mfaIntentosFallidos: 0,
+      },
+    });
+
+    this.logger.warn(
+      `MFA bloqueado ${MFA_BLOQUEO_MINUTOS} min para el usuario ${usuarioId} por códigos incorrectos`,
+    );
+  }
+
+  private errorMfaBloqueado(): HttpException {
+    return new HttpException(
+      `Demasiados códigos incorrectos. Por seguridad, la verificación quedó bloqueada ${MFA_BLOQUEO_MINUTOS} minutos. Inténtalo más tarde.`,
+      HttpStatus.TOO_MANY_REQUESTS,
+    );
+  }
+
+  /**
+   * Un fallo de configuración del servidor (falta MFA_ENCRYPTION_KEY, o no
+   * es la clave con la que se cifró el secreto) no es culpa de quien inicia
+   * sesión: se responde 500 y se deja en el log, en vez de un 401 que le
+   * haría creer que se equivocó de código.
+   */
+  private errorDeConfiguracionMfa(
+    detalle: string,
+  ): InternalServerErrorException {
+    this.logger.error(
+      `Configuración MFA: ${detalle}`,
+    );
+
+    return new InternalServerErrorException(
+      'No fue posible completar la verificación MFA. Contacta al equipo de soporte.',
     );
   }
 

@@ -7,6 +7,11 @@
   "testTimeout": 30000,
   "maxWorkers": 1,
   "transform": {
-    "^.+\\.(t|j)s$": "ts-jest"
-  }
+    "^.+\\.ts$": "ts-jest",
+    "^.+\\.js$": [
+      "ts-jest",
+      { "tsconfig": { "allowJs": true, "module": "commonjs", "target": "es2021" } }
+    ]
+  },
+  "transformIgnorePatterns": ["node_modules/(?!.*(@scure|@noble)/)"]
 }

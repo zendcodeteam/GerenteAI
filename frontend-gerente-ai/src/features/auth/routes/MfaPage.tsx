@@ -20,6 +20,8 @@ import {
   useNavigate,
 } from 'react-router';
 
+import { QRCodeSVG } from 'qrcode.react';
+
 import {
   useAuth,
 } from '../context/AuthContext';
@@ -355,24 +357,39 @@ export function MfaPage() {
 
             {secret && (
               <>
-                {/* URL OTPAuth */}
+                {/* QR del autenticador */}
                 <div className="mb-5 rounded-xl border bg-muted/30 p-4">
                   <div className="mb-2 flex items-center gap-2">
                     <KeyRound className="h-4 w-4 text-primary" />
 
                     <p className="text-sm font-medium">
-                      Configuración del autenticador
+                      Escanea el código con tu aplicación autenticadora
                     </p>
                   </div>
 
                   <p className="mb-3 text-xs leading-5 text-muted-foreground">
-                    Si tu aplicación permite importar
-                    una configuración mediante URI,
-                    puedes utilizar la siguiente.
+                    Google Authenticator, Microsoft Authenticator,
+                    Authy u otra compatible. Si no puedes escanearlo,
+                    usa la clave de configuración de abajo.
                   </p>
 
-                  <div className="break-all rounded-lg bg-background p-3 font-mono text-[11px] leading-5 text-muted-foreground">
-                    {otpauthUrl}
+                  {/*
+                    El QR se dibuja aquí mismo. Nunca con un servicio
+                    externo de QR: la URI lleva el secreto TOTP, y
+                    mandarla a un tercero lo expondría.
+
+                    Fondo blanco fijo: con el tema oscuro, un QR claro
+                    sobre fondo oscuro no lo leen todas las cámaras.
+                  */}
+                  <div className="flex justify-center">
+                    <div className="rounded-lg bg-white p-3">
+                      <QRCodeSVG
+                        value={otpauthUrl}
+                        size={184}
+                        level="M"
+                        title="Código QR para configurar la verificación en dos pasos"
+                      />
+                    </div>
                   </div>
                 </div>
 

@@ -26,6 +26,7 @@ import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ConfirmarCambioEmailDto } from './dto/confirmar-cambio-email.dto';
 import { CambiarEmailDto } from './dto/cambiar-email.dto';
+import { ActivarMfaDto, VerificarMfaDto } from './dto/mfa.dto';
 
 type AuthUser = {
   userId: string;
@@ -38,22 +39,6 @@ type RequestWithIp = {
     'x-forwarded-for'?: string;
     'x-real-ip'?: string;
   };
-};
-
-/**
- * Datos utilizados durante los flujos previos a la creación
- * de la sesión definitiva de un usuario MASTER.
- *
- * IMPORTANTE:
- *
- * `mfaToken` NO es el access token de sesión.
- *
- * Es un token temporal emitido por AuthService para completar
- * la activación o verificación del segundo factor.
- */
-type MfaTokenBody = {
-  mfaToken: string;
-  codigo: string;
 };
 
 @Controller('auth')
@@ -207,7 +192,7 @@ export class AuthController {
    */
   @Post('mfa/activar')
   activarMfa(
-    @Body() body: { mfaToken: string },
+    @Body() body: ActivarMfaDto,
   ) {
     return this.authService.activarMfa(
       body.mfaToken,
@@ -236,7 +221,7 @@ export class AuthController {
    */
   @Post('mfa/verificar-activacion')
   verificarActivacionMfa(
-    @Body() body: MfaTokenBody,
+    @Body() body: VerificarMfaDto,
   ) {
     return this.authService.verificarActivacionMfa(
       body.mfaToken,
@@ -266,7 +251,7 @@ export class AuthController {
    */
   @Post('mfa/verificar')
   verificarMfa(
-    @Body() body: MfaTokenBody,
+    @Body() body: VerificarMfaDto,
   ) {
     return this.authService.verificarMfa(
       body.mfaToken,
