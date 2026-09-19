@@ -155,6 +155,7 @@ model Mensaje {
 
   @@index([sedeId, fecha])
   @@index([wamid])
+  @@index([fecha])
 }
 
 model Reporte {

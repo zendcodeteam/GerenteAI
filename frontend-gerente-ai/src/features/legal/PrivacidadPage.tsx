@@ -664,6 +664,16 @@ export default function PrivacidadPage() {
               </p>
 
               <p>
+                <strong>Plazo específico para conversaciones y mensajes:</strong> Los
+                mensajes, transcripciones de audio y registros conversacionales
+                intercambiados con Luka a través de WhatsApp o canales
+                integrados se conservan por un plazo máximo de doce (12) meses
+                desde su emisión. Cumplido este plazo, son eliminados
+                automáticamente de las bases de datos operativas para proteger la
+                privacidad de datos financieros y de terceros.
+              </p>
+
+              <p>
                 Cuando los datos ya no sean necesarios y no exista una
                 obligación legal o causa legítima para conservarlos, podrán
                 ser eliminados, anonimizados o tratados conforme a los
