@@ -16,6 +16,11 @@ import {
 
 import { ApiError } from '@/lib/apiClient';
 
+interface LegalConsent {
+  termsAccepted: boolean;
+  privacyAccepted: boolean;
+}
+
 interface AuthContextType {
   user: AuthUser | null;
   token: string | null;
@@ -30,6 +35,7 @@ interface AuthContextType {
     telefono: string,
     nombreNegocio: string,
     whatsappUsername?: string,
+    legalConsent?: LegalConsent,
   ) => Promise<AuthUser>;
   register: (credentials: RegisterCredentials) => Promise<AuthUser>;
 
@@ -264,10 +270,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     window.addEventListener('storage', handleStorageChange);
 
     return () => {
-      window.removeEventListener(
-        'storage',
-        handleStorageChange,
-      );
+      window.removeEventListener('storage', handleStorageChange);
     };
   }, []);
 
@@ -354,15 +357,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
    * - Teléfono celular colombiano.
    * - Nombre del negocio.
    * - Usuario de WhatsApp opcional.
+   * - Aceptación de Términos de servicio.
+   * - Aceptación de Política de privacidad.
    *
    * El backend valida nuevamente el credential de Google,
-   * crea la cuenta y devuelve el JWT de sesión.
+   * crea la cuenta y registra los consentimientos legales
+   * asociados a la cuenta.
    */
   const googleRegister = async (
     credential: string,
     telefono: string,
     nombreNegocio: string,
     whatsappUsername?: string,
+    legalConsent?: LegalConsent,
   ): Promise<AuthUser> => {
     setIsLoading(true);
     setError(null);
@@ -375,6 +382,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         telefono,
         nombreNegocio,
         whatsappUsername,
+        legalConsent ?? {
+          termsAccepted: false,
+          privacyAccepted: false,
+        },
       );
 
       persistSession(
