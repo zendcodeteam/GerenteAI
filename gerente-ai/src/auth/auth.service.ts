@@ -29,6 +29,8 @@ import { CambiarEmailDto } from './dto/cambiar-email.dto';
 import { ConfirmarCambioEmailDto } from './dto/confirmar-cambio-email.dto';
 
 const BCRYPT_ROUNDS = 12;
+const MAX_INTENTOS_FALLIDOS = 5;
+const MINUTOS_BLOQUEO = 15;
 
 const LEGAL_DOCUMENT_VERSION = '1.0';
 
@@ -255,6 +257,18 @@ export class AuthService {
         },
       });
 
+    // 1. Revisar bloqueo temporal ANTES de comparar la contraseña
+    if (usuario && usuario.bloqueadoHasta) {
+      if (usuario.bloqueadoHasta > new Date()) {
+        const minutosRestantes = Math.ceil(
+          (usuario.bloqueadoHasta.getTime() - Date.now()) / (1000 * 60),
+        );
+        throw new UnauthorizedException(
+          `Cuenta bloqueada temporalmente por demasiados intentos fallidos. Intenta nuevamente en ${minutosRestantes} minuto(s).`,
+        );
+      }
+    }
+
     const passwordValida = usuario
       ? await bcrypt.compare(
           dto.password,
@@ -266,9 +280,42 @@ export class AuthService {
         );
 
     if (!usuario || !passwordValida) {
+      if (usuario) {
+        const nuevosIntentos = usuario.intentosFallidos + 1;
+        const seBloquea = nuevosIntentos >= MAX_INTENTOS_FALLIDOS;
+        const bloqueadoHasta = seBloquea
+          ? new Date(Date.now() + MINUTOS_BLOQUEO * 60 * 1000)
+          : null;
+
+        await this.prisma.usuario.update({
+          where: { id: usuario.id },
+          data: {
+            intentosFallidos: nuevosIntentos,
+            ...(seBloquea ? { bloqueadoHasta } : {}),
+          },
+        });
+
+        if (seBloquea) {
+          throw new UnauthorizedException(
+            `Has superado el límite de intentos fallidos. Tu cuenta ha sido bloqueada temporalmente por ${MINUTOS_BLOQUEO} minutos.`,
+          );
+        }
+      }
+
       throw new UnauthorizedException(
         'Correo o contraseña incorrectos',
       );
+    }
+
+    // Login exitoso: resetear intentos fallidos y bloqueo
+    if (usuario.intentosFallidos > 0 || usuario.bloqueadoHasta) {
+      await this.prisma.usuario.update({
+        where: { id: usuario.id },
+        data: {
+          intentosFallidos: 0,
+          bloqueadoHasta: null,
+        },
+      });
     }
 
     // Re-hashear en el login si la contraseña fue creada
