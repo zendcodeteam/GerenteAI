@@ -289,12 +289,45 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
     businessId: string,
     transactionId: string,
     parts: Transaction[],
+    actor?: string,
   ): Promise<Transaction[]> {
+    const [originalVenta, originalGasto] = await Promise.all([
+      this.prisma.venta.findFirst({
+        where: { id: transactionId, sedeId: businessId },
+        include: { detalles: true },
+      }),
+      this.prisma.gasto.findFirst({
+        where: { id: transactionId, sedeId: businessId },
+      }),
+    ]);
+
+    const original = originalVenta || originalGasto;
+    const entidad = originalVenta ? 'Venta' : 'Gasto';
+    const valorAnterior = original
+      ? JSON.parse(JSON.stringify(original))
+      : null;
+
     const clientes = await this.resolveCustomers(parts);
 
     // El movimiento original puede ser una venta o un gasto: se intenta borrar
     // en ambas tablas y solo una encuentra la fila.
     const operations: Prisma.PrismaPromise<unknown>[] = [
+      ...(original
+        ? [
+            this.prisma.bitacoraAuditoria.create({
+              data: {
+                sedeId: businessId,
+                usuarioId: actor ?? null,
+                operacion: 'SUSTITUCION',
+                entidad,
+                entidadId: transactionId,
+                valorAnterior: valorAnterior ?? {},
+                valorNuevo: JSON.parse(JSON.stringify(parts)),
+                motivo: 'replaceTransaction',
+              },
+            }),
+          ]
+        : []),
       this.prisma.venta.deleteMany({
         where: { id: transactionId, sedeId: businessId },
       }),
@@ -307,7 +340,7 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
     await this.prisma.$transaction(operations);
 
     this.logger.log(
-      `Movimiento ${transactionId} reemplazado por ${parts.length} partes en sede ${businessId}.`,
+      `Movimiento ${transactionId} reemplazado por ${parts.length} partes en sede ${businessId} (auditado).`,
     );
 
     return parts;
@@ -554,15 +587,29 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
     businessId: string,
     transactionId: string,
     changes: TransactionChanges,
+    actor?: string,
   ): Promise<Transaction | null> {
     const monto =
       changes.amount !== undefined
         ? new Prisma.Decimal(changes.amount)
         : undefined;
 
-    const original = await this.prisma.venta.findFirst({
-      where: { id: transactionId, sedeId: businessId },
-    });
+    const [originalVenta, originalGasto] = await Promise.all([
+      this.prisma.venta.findFirst({
+        where: { id: transactionId, sedeId: businessId },
+      }),
+      this.prisma.gasto.findFirst({
+        where: { id: transactionId, sedeId: businessId },
+      }),
+    ]);
+
+    const original = originalVenta || originalGasto;
+    if (!original) {
+      return null;
+    }
+
+    const entidad = originalVenta ? 'Venta' : 'Gasto';
+    const valorAnterior = JSON.parse(JSON.stringify(original));
 
     const venta = await this.prisma.venta.updateMany({
       where: { id: transactionId, sedeId: businessId },
@@ -573,8 +620,8 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
         // el reporte de cuentas por cobrar seguiria mostrando el monto viejo.
         // Se descuenta lo ya abonado: corregir "eran 60.000, no 50.000" no
         // puede resucitar los 20.000 que el cliente ya pago.
-        ...(monto !== undefined && original
-          ? { saldoPendiente: nuevoSaldo(original, changes.amount!) }
+        ...(monto !== undefined && originalVenta
+          ? { saldoPendiente: nuevoSaldo(originalVenta, changes.amount!) }
           : {}),
       },
     });
@@ -584,17 +631,17 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
     if (
       venta.count > 0 &&
       monto !== undefined &&
-      original?.clienteId &&
-      original.tipo === 'FIADO'
+      originalVenta?.clienteId &&
+      originalVenta.tipo === 'FIADO'
     ) {
       const diferencia = redondear(
-        toNumber(nuevoSaldo(original, changes.amount!)) -
-          toNumber(original.saldoPendiente),
+        toNumber(nuevoSaldo(originalVenta, changes.amount!)) -
+          toNumber(originalVenta.saldoPendiente),
       );
 
       if (diferencia !== 0) {
         await this.prisma.cliente.update({
-          where: { id: original.clienteId },
+          where: { id: originalVenta.clienteId },
           data: {
             saldoPendiente: { increment: new Prisma.Decimal(diferencia) },
           },
@@ -610,8 +657,22 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
       if (gasto.count === 0) return null;
     }
 
+    // Registrar en bitácora de auditoría la modificación efectuada
+    await this.prisma.bitacoraAuditoria.create({
+      data: {
+        sedeId: businessId,
+        usuarioId: actor ?? null,
+        operacion: 'ACTUALIZACION',
+        entidad,
+        entidadId: transactionId,
+        valorAnterior,
+        valorNuevo: JSON.parse(JSON.stringify(changes)),
+        motivo: 'updateTransaction',
+      },
+    });
+
     this.logger.log(
-      `Movimiento ${transactionId} corregido en sede ${businessId}: ${JSON.stringify(changes)}.`,
+      `Movimiento ${transactionId} corregido en sede ${businessId}: ${JSON.stringify(changes)} (auditado).`,
     );
 
     return this.findTransaction(businessId, transactionId);
@@ -620,40 +681,76 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
   async deleteTransaction(
     businessId: string,
     transactionId: string,
+    actor?: string,
   ): Promise<boolean> {
+    // 1. Obtener el movimiento antes de borrarlo para registrar su estado previo en la bitácora
+    const [originalVenta, originalGasto] = await Promise.all([
+      this.prisma.venta.findFirst({
+        where: { id: transactionId, sedeId: businessId },
+        include: { detalles: true },
+      }),
+      this.prisma.gasto.findFirst({
+        where: { id: transactionId, sedeId: businessId },
+      }),
+    ]);
+
+    const original = originalVenta || originalGasto;
+    if (!original) {
+      return false;
+    }
+
+    const entidad = originalVenta ? 'Venta' : 'Gasto';
+    const valorAnterior = JSON.parse(JSON.stringify(original));
+
     // Borrar un fiado tiene que devolverle al cliente lo que ya no debe. Se
     // resta el SALDO, no el total: lo que ya abono es plata que si entro y
     // sigue siendo un ingreso.
-    const original = await this.prisma.venta.findFirst({
-      where: { id: transactionId, sedeId: businessId, tipo: 'FIADO' },
-    });
-
-    // Va en la misma transaccion que el borrado: si se ajustara el saldo por
-    // separado y el borrado fallara, el cliente quedaria debiendo de menos.
-    const [venta, gasto] = await this.prisma.$transaction([
+    // Va en la misma transaccion que el borrado: la bitácora queda registrada de forma atómica.
+    const [, venta, gasto] = await this.prisma.$transaction([
+      this.prisma.bitacoraAuditoria.create({
+        data: {
+          sedeId: businessId,
+          usuarioId: actor ?? null,
+          operacion: 'ELIMINACION',
+          entidad,
+          entidadId: transactionId,
+          valorAnterior,
+          valorNuevo: Prisma.JsonNull,
+          motivo: 'deleteTransaction',
+        },
+      }),
       this.prisma.venta.deleteMany({
         where: { id: transactionId, sedeId: businessId },
       }),
       this.prisma.gasto.deleteMany({
         where: { id: transactionId, sedeId: businessId },
       }),
-      ...(original?.clienteId
+      ...(originalVenta?.clienteId && originalVenta.tipo === 'FIADO'
         ? [
             this.prisma.cliente.update({
-              where: { id: original.clienteId },
-              data: { saldoPendiente: { decrement: original.saldoPendiente } },
+              where: { id: originalVenta.clienteId },
+              data: { saldoPendiente: { decrement: originalVenta.saldoPendiente } },
             }),
           ]
         : []),
     ]);
 
-    const borrado = venta.count + gasto.count > 0;
+    const borrado = (venta?.count ?? 0) + (gasto?.count ?? 0) > 0;
     if (borrado) {
       this.logger.log(
-        `Movimiento ${transactionId} eliminado de la sede ${businessId}.`,
+        `Movimiento ${transactionId} (${entidad}) eliminado y registrado en bitácora de auditoría para sede ${businessId}.`,
       );
     }
     return borrado;
+  }
+
+  /** Consulta la bitácora de auditoría para una sede. */
+  async listAuditLogs(businessId: string, limit = 50) {
+    return this.prisma.bitacoraAuditoria.findMany({
+      where: { sedeId: businessId },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
   }
 
   /** Relee un movimiento por su id, venga de la tabla que venga. */
