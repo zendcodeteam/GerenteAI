@@ -1,11 +1,12 @@
 import {
   ArrowLeft,
+  ArrowRight,
   CheckCircle2,
   ShieldCheck,
 } from 'lucide-react';
 import { Link } from 'react-router';
 
-import { ThemeToggle } from '@/shared/components/layout/ThemeToggle';
+import { CoworkingNavbar } from '@/features/landing-page/components/CoworkingNavbar';
 
 const EFFECTIVE_DATE = '16 de septiembre de 2026';
 const VERSION = '1.0';
@@ -20,37 +21,10 @@ export default function TerminosPage() {
         <div className="absolute bottom-[-250px] right-[-150px] h-[500px] w-[500px] rounded-full bg-emerald-400/[0.04] blur-[130px]" />
       </div>
 
-      {/* Header */}
-      <header className="sticky top-0 z-50 border-b border-border/60 bg-background/80 backdrop-blur-xl">
-        <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-5 sm:px-8">
-          <Link
-            to="/home"
-            className="group flex items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
-          >
-            <ArrowLeft
-              size={17}
-              className="transition-transform group-hover:-translate-x-0.5"
-            />
-
-            Volver a Luka
-          </Link>
-
-          <div className="flex items-center gap-4">
-            <ThemeToggle />
-
-            <div className="flex items-center">
-              <img
-                src="/Luka.png"
-                alt="Luka"
-                className="h-9 w-auto object-contain"
-              />
-            </div>
-          </div>
-        </div>
-      </header>
+      <CoworkingNavbar />
 
       {/* Main */}
-      <main className="relative mx-auto max-w-5xl px-5 pb-20 pt-12 sm:px-8 sm:pt-16">
+      <main className="relative mx-auto max-w-5xl px-5 pb-20 pt-36 sm:px-8 sm:pt-40">
         {/* Hero */}
         <section className="mb-12">
           <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-emerald-400/15 bg-emerald-400/[0.07] px-3.5 py-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-300">
@@ -626,16 +600,18 @@ export default function TerminosPage() {
         <div className="mt-8 flex flex-col items-center justify-between gap-4 text-sm sm:flex-row">
           <Link
             to="/home"
-            className="text-muted-foreground transition-colors hover:text-foreground"
+            className="inline-flex items-center gap-2 rounded-full border border-border/70 px-4 py-2.5 font-semibold text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
           >
-            ← Volver a Luka
+            <ArrowLeft size={16} />
+            Volver a Luka
           </Link>
 
           <Link
             to="/privacidad"
-            className="text-emerald-600 transition-colors hover:text-emerald-500 dark:text-emerald-400 dark:hover:text-emerald-300"
+            className="inline-flex items-center gap-2 rounded-full bg-emerald-500 px-4 py-2.5 font-semibold text-white shadow-sm transition-colors hover:bg-emerald-600"
           >
-            Ver Política de privacidad →
+            Ver Política de privacidad
+            <ArrowRight size={16} />
           </Link>
         </div>
 
