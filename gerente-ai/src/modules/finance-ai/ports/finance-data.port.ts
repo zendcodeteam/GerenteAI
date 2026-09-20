@@ -116,6 +116,7 @@ export interface FinanceDataPort {
     businessId: string,
     transactionId: string,
     parts: Transaction[],
+    actor?: string,
   ): Promise<Transaction[]>;
 
   /** Guarda un reparto de utilidades. */
@@ -137,13 +138,21 @@ export interface FinanceDataPort {
     businessId: string,
     transactionId: string,
     changes: TransactionChanges,
+    actor?: string,
   ): Promise<Transaction | null>;
 
   /** Elimina un movimiento. Devuelve false si no existia. */
   deleteTransaction(
     businessId: string,
     transactionId: string,
+    actor?: string,
   ): Promise<boolean>;
+
+  /** Consulta la bitácora de auditoría de operaciones destructivas. */
+  listAuditLogs?(
+    businessId: string,
+    limit?: number,
+  ): Promise<unknown[]>;
 }
 
 export const FINANCE_DATA_PORT = Symbol('FINANCE_DATA_PORT');
