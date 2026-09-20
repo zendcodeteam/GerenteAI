@@ -106,10 +106,12 @@ export class DestinatariosService {
         // Si ya lo pagaron, `saldoPendiente` quedo en 0 y no hay nada que cobrar.
         saldoPendiente: { gt: 0 },
         fecha: { lte: limite },
-        recordatorios: { none: {} },
+
+        // RecordatorioFiado es una relacion opcional singular, no una lista.
+        // Por eso se busca que no exista un recordatorio asociado.
+        recordatorios: { is: null },
       },
       include: {
-        cliente: true,
         sede: { include: { negocio: true } },
       },
       orderBy: { fecha: 'asc' },
@@ -127,6 +129,7 @@ export class DestinatariosService {
 
     for (const venta of ventas) {
       const destino = alcanzables.get(venta.sedeId);
+
       if (!destino) {
         // Sin forma de escribirle al duenno, avisar es imposible. No se marca
         // como enviado para que se recupere cuando registre su linea.
@@ -136,10 +139,21 @@ export class DestinatariosService {
         continue;
       }
 
+      let cliente = 'un cliente';
+
+      if (venta.clienteId) {
+        const clienteEncontrado = await this.prisma.cliente.findUnique({
+          where: { id: venta.clienteId },
+          select: { nombre: true },
+        });
+
+        cliente = clienteEncontrado?.nombre ?? 'un cliente';
+      }
+
       pendientes.push({
         ...destino,
         ventaId: venta.id,
-        cliente: venta.cliente?.nombre ?? 'un cliente',
+        cliente,
         saldo: Number(venta.saldoPendiente),
         diasTranscurridos: Math.floor(
           (ahora.getTime() - venta.fecha.getTime()) / 86_400_000,
@@ -160,6 +174,7 @@ export class DestinatariosService {
         ventaId: fiado.ventaId,
         saldo: fiado.saldo,
       })),
+
       // Si otra ejecucion se adelanto, no es un error: el aviso ya salio.
       skipDuplicates: true,
     });
@@ -200,6 +215,7 @@ export class DestinatariosService {
         ...sede.usuariosSede.map((vinculo) => vinculo.usuario),
         ...sede.negocio.usuariosNegocio.map((vinculo) => vinculo.usuario),
       ];
+
       const contacto = primerNombre(personas[0]?.nombre);
 
       const base = {
@@ -230,6 +246,7 @@ export class DestinatariosService {
       // La sede no tiene linea propia: se le escribe a la primera persona del
       // negocio que tenga telefono. Antes este caso quedaba fuera.
       const conTelefono = personas.find((persona) => persona.telefono?.trim());
+
       if (conTelefono?.telefono) {
         destinos.push({
           ...base,

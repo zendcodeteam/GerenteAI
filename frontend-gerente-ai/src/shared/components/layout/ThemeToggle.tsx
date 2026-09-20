@@ -33,10 +33,6 @@ export function ThemeToggle() {
           <Laptop className="mr-2 h-4 w-4" />
           <span>Sistema</span>
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => setTheme("schedule")}>
-          <Clock className="mr-2 h-4 w-4" />
-          <span>Horario</span>
-        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   )

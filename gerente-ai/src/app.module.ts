@@ -21,6 +21,7 @@ import { ReportesModule } from './modules/reportes.module';
 import { PlanesModule } from './modules/planes.module';
 import { PagosModule } from './modules/pagos.module';
 import { RecordatoriosModule } from './modules/recordatorios.module';
+import { RetencionMensajesModule } from './modules/retencion-mensajes.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { AuthModule } from './auth/auth.module';
 
@@ -52,6 +53,7 @@ import { AuthModule } from './auth/auth.module';
     PlanesModule,
     PagosModule,
     RecordatoriosModule,
+    RetencionMensajesModule,
     ScheduleModule.forRoot(),
     AuthModule,
   ],
