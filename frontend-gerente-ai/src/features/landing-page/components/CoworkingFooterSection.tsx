@@ -275,7 +275,7 @@ export function CoworkingFooterSection() {
 
                   <li>
                     <a
-                      href="/casos-de-uso"
+                      href="/usos"
                       className="transition-colors hover:text-emerald-300"
                     >
                       Casos de uso
