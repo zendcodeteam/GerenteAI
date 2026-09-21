@@ -13,6 +13,7 @@ model Usuario {
   telefono               String?
   email                  String                @unique
   password               String
+  passwordChangedAt      DateTime?
   googleId               String?               @unique
   emailVerificado        Boolean               @default(false)
   intentosFallidos       Int                   @default(0)
