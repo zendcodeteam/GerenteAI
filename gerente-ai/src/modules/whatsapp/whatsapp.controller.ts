@@ -6,6 +6,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 
 import { DestinatariosService } from './services/destinatarios.service';
 import { InterpretMessageDto } from './dto/interpret-message.dto';
@@ -27,6 +28,10 @@ import type { FiadoPorCobrar } from './services/destinatarios.service';
  */
 @Controller('ai')
 @UseGuards(N8nApiKeyGuard)
+// Todo lo de este controlador llega desde n8n, o sea desde una sola IP: el
+// límite global por IP sumaría a todos los negocios como si fueran uno. Ya lo
+// protege la API key, y /interpret se limita por remitente (en el servicio).
+@SkipThrottle()
 export class WhatsappController {
   /** Dias que se le dan al fiado antes de recordarle al duenno que cobre. */
   private static readonly DIAS_PARA_COBRAR_FIADO = 5;
