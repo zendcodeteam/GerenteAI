@@ -125,6 +125,13 @@ export const MENSAJES_IA_POR_PLAN: Record<
   5: 'Mensajes de IA por definir',
 };
 
+export const LIMITE_MENSAJES_IA_POR_PLAN: Record<number, number> = {
+  1: 100,
+  2: 500,
+  3: 1_500,
+  4: 3_000,
+};
+
 export const DESCRIPCIONES_POR_PLAN: Record<
   number,
   string
