@@ -17,37 +17,106 @@ type LegalConsentCredentials = {
   privacyAccepted: boolean;
 };
 
+/**
+ * Normaliza una respuesta de autenticación del backend.
+ *
+ * Puede representar:
+ *
+ * 1. Una sesión autenticada con access_token.
+ * 2. Un flujo MFA pendiente para un usuario MASTER.
+ *
+ * IMPORTANTE:
+ *
+ * Un mfaToken NO se considera access_token.
+ * Mientras MFA esté pendiente, el frontend no debe
+ * persistir ninguna sesión definitiva.
+ */
+function normalizeAuthResponse(
+  raw: BackendAuthResponse,
+): AuthResponse {
+  const user =
+    raw.usuario ||
+    raw.user || {
+      id: '',
+      nombre: '',
+      rolGlobal: 'CLIENTE',
+    };
+
+  /**
+   * MASTER pendiente de MFA.
+   *
+   * En este estado el backend deliberadamente NO entrega
+   * un access_token definitivo.
+   */
+  if (
+    raw.requiresMfa === true &&
+    raw.mfaToken &&
+    raw.mfaRequiredAction
+  ) {
+    return {
+      requiresMfa: true,
+      mfaToken: raw.mfaToken,
+      mfaRequiredAction: raw.mfaRequiredAction,
+      user,
+    };
+  }
+
+  /**
+   * Usuario autenticado normalmente.
+   */
+  const token =
+    raw.accessToken ||
+    raw.access_token ||
+    '';
+
+  if (!token) {
+    throw new Error(
+      'El servidor no devolvió un token de autenticación válido.',
+    );
+  }
+
+  return {
+    requiresMfa: false,
+    access_token: token,
+    user,
+  };
+}
+
 export const authApi = {
   /**
    * Iniciar sesión con email y password.
    *
-   * Normaliza la respuesta del backend y sanitiza email.
+   * CLIENTE:
+   *   Devuelve directamente la sesión.
+   *
+   * MASTER sin MFA:
+   *   Devuelve un flujo temporal para configurar MFA.
+   *
+   * MASTER con MFA:
+   *   Devuelve un flujo temporal para verificar MFA.
+   *
+   * IMPORTANTE:
+   *
+   * Cuando MFA está pendiente NO se devuelve ni se
+   * interpreta un access_token definitivo.
    */
-  async login(credentials: LoginCredentials): Promise<AuthResponse> {
+  async login(
+    credentials: LoginCredentials,
+  ): Promise<AuthResponse> {
     const payload = {
       email: credentials.email.trim().toLowerCase(),
       password: credentials.password,
     };
 
-    const raw = await apiClient<BackendAuthResponse>('/auth/login', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+    const raw = await apiClient<BackendAuthResponse>(
+      '/auth/login',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    );
 
-    const token = raw.accessToken || raw.access_token || '';
-
-    const user =
-      raw.usuario ||
-      raw.user || {
-        id: '',
-        nombre: '',
-        rolGlobal: 'CLIENTE',
-      };
-
-    return {
-      access_token: token,
-      user,
-    };
+    return normalizeAuthResponse(raw);
   },
 
   /**
@@ -59,41 +128,35 @@ export const authApi = {
    * Lo envía directamente al backend, donde Google
    * es validado mediante google-auth-library.
    *
-   * IMPORTANTE:
-   * Este método SOLO inicia sesión.
+   * Si la cuenta pertenece a un MASTER:
    *
-   * Si la cuenta de Google no existe en Luka,
-   * el backend devolverá un error y el frontend
-   * deberá llevar al usuario al flujo de registro.
+   *   Google → MFA → access_token
+   *
+   * El access_token definitivo solamente se entrega
+   * después de completar MFA.
    *
    * POST /auth/google
    */
-  async googleLogin(credential: string): Promise<AuthResponse> {
+  async googleLogin(
+    credential: string,
+  ): Promise<AuthResponse> {
     if (!credential?.trim()) {
-      throw new Error('No se recibió la credencial de Google.');
+      throw new Error(
+        'No se recibió la credencial de Google.',
+      );
     }
 
-    const raw = await apiClient<BackendAuthResponse>('/auth/google', {
-      method: 'POST',
-      body: JSON.stringify({
-        credential: credential.trim(),
-      }),
-    });
+    const raw = await apiClient<BackendAuthResponse>(
+      '/auth/google',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          credential: credential.trim(),
+        }),
+      },
+    );
 
-    const token = raw.accessToken || raw.access_token || '';
-
-    const user =
-      raw.usuario ||
-      raw.user || {
-        id: '',
-        nombre: '',
-        rolGlobal: 'CLIENTE',
-      };
-
-    return {
-      access_token: token,
-      user,
-    };
+    return normalizeAuthResponse(raw);
   },
 
   /**
@@ -129,29 +192,36 @@ export const authApi = {
     telefono: string,
     nombreNegocio: string,
     whatsappUsername: string | undefined,
-    legalConsent: {
-      termsAccepted: boolean;
-      privacyAccepted: boolean;
-    },
+    legalConsent: LegalConsentCredentials,
   ): Promise<AuthResponse> {
     if (!credential?.trim()) {
-      throw new Error('No se recibió la credencial de Google.');
+      throw new Error(
+        'No se recibió la credencial de Google.',
+      );
     }
 
     if (!telefono?.trim()) {
-      throw new Error('El número de teléfono es obligatorio.');
+      throw new Error(
+        'El número de teléfono es obligatorio.',
+      );
     }
 
     if (!nombreNegocio?.trim()) {
-      throw new Error('El nombre del negocio es obligatorio.');
+      throw new Error(
+        'El nombre del negocio es obligatorio.',
+      );
     }
 
     if (!legalConsent.termsAccepted) {
-      throw new Error('Debes aceptar los Términos de servicio.');
+      throw new Error(
+        'Debes aceptar los Términos de servicio.',
+      );
     }
 
     if (!legalConsent.privacyAccepted) {
-      throw new Error('Debes aceptar la Política de privacidad.');
+      throw new Error(
+        'Debes aceptar la Política de privacidad.',
+      );
     }
 
     const cleanUsername = whatsappUsername
@@ -181,45 +251,38 @@ export const authApi = {
       },
     );
 
-    const token = raw.accessToken || raw.access_token || '';
-
-    const user =
-      raw.usuario ||
-      raw.user || {
-        id: '',
-        nombre: '',
-        rolGlobal: 'CLIENTE',
-      };
-
-    return {
-      access_token: token,
-      user,
-    };
+    return normalizeAuthResponse(raw);
   },
 
   /**
    * Registrar un nuevo usuario.
    *
-   * El backend NO devuelve accessToken en el registro porque requiere
-   * activación previa mediante el correo de verificación.
+   * El backend NO devuelve accessToken en el registro
+   * porque requiere activación previa mediante el correo
+   * de verificación.
    *
    * Los consentimientos legales se envían junto con el registro.
    *
    * POST /auth/register
    */
   async register(
-    credentials: RegisterCredentials & LegalConsentCredentials,
+    credentials: RegisterCredentials &
+      LegalConsentCredentials,
   ): Promise<AuthUser> {
     const cleanUsername = credentials.whatsappUsername
       ? credentials.whatsappUsername.trim().replace(/^@+/, '')
       : undefined;
 
     if (!credentials.termsAccepted) {
-      throw new Error('Debes aceptar los Términos de servicio.');
+      throw new Error(
+        'Debes aceptar los Términos de servicio.',
+      );
     }
 
     if (!credentials.privacyAccepted) {
-      throw new Error('Debes aceptar la Política de privacidad.');
+      throw new Error(
+        'Debes aceptar la Política de privacidad.',
+      );
     }
 
     const payload = {
@@ -247,13 +310,12 @@ export const authApi = {
       privacyAccepted: credentials.privacyAccepted,
     };
 
-    const raw = await apiClient<BackendAuthResponse | AuthUser>(
-      '/auth/register',
-      {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      },
-    );
+    const raw = await apiClient<
+      BackendAuthResponse | AuthUser
+    >('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
 
     if ('usuario' in raw && raw.usuario) {
       return raw.usuario;
@@ -267,14 +329,139 @@ export const authApi = {
   },
 
   /**
+   * Iniciar activación de MFA para un MASTER.
+   *
+   * POST /auth/mfa/activar
+   *
+   * Este endpoint todavía NO entrega access_token.
+   */
+  async activarMfa(
+    mfaToken: string,
+  ): Promise<{
+    requiresMfa: true;
+    mfaRequiredAction: 'verify-activation';
+    secret: string;
+    otpauthUrl: string;
+    user: AuthUser;
+  }> {
+    if (!mfaToken?.trim()) {
+      throw new Error(
+        'No se recibió el token temporal de MFA.',
+      );
+    }
+
+    return apiClient<{
+      requiresMfa: true;
+      mfaRequiredAction: 'verify-activation';
+      secret: string;
+      otpauthUrl: string;
+      user: AuthUser;
+    }>('/auth/mfa/activar', {
+      method: 'POST',
+      body: JSON.stringify({
+        mfaToken: mfaToken.trim(),
+      }),
+    });
+  },
+
+  /**
+   * Confirmar la activación inicial de MFA.
+   *
+   * El MASTER introduce el código TOTP generado
+   * por su aplicación autenticadora.
+   *
+   * Si es correcto, el backend entrega el
+   * access_token definitivo.
+   *
+   * POST /auth/mfa/verificar-activacion
+   */
+  async verificarActivacionMfa(
+    mfaToken: string,
+    codigo: string,
+  ): Promise<AuthResponse> {
+    if (!mfaToken?.trim()) {
+      throw new Error(
+        'No se recibió el token temporal de MFA.',
+      );
+    }
+
+    const normalizedCode = codigo
+      ?.trim()
+      .replace(/\s/g, '');
+
+    if (!/^\d{6}$/.test(normalizedCode)) {
+      throw new Error(
+        'El código de autenticación debe tener 6 dígitos.',
+      );
+    }
+
+    const raw = await apiClient<BackendAuthResponse>(
+      '/auth/mfa/verificar-activacion',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          mfaToken: mfaToken.trim(),
+          codigo: normalizedCode,
+        }),
+      },
+    );
+
+    return normalizeAuthResponse(raw);
+  },
+
+  /**
+   * Verificar MFA durante el inicio de sesión.
+   *
+   * El MASTER ya tiene MFA configurado.
+   *
+   * POST /auth/mfa/verificar
+   */
+  async verificarMfa(
+    mfaToken: string,
+    codigo: string,
+  ): Promise<AuthResponse> {
+    if (!mfaToken?.trim()) {
+      throw new Error(
+        'No se recibió el token temporal de MFA.',
+      );
+    }
+
+    const normalizedCode = codigo
+      ?.trim()
+      .replace(/\s/g, '');
+
+    if (!/^\d{6}$/.test(normalizedCode)) {
+      throw new Error(
+        'El código de autenticación debe tener 6 dígitos.',
+      );
+    }
+
+    const raw = await apiClient<BackendAuthResponse>(
+      '/auth/mfa/verificar',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          mfaToken: mfaToken.trim(),
+          codigo: normalizedCode,
+        }),
+      },
+    );
+
+    return normalizeAuthResponse(raw);
+  },
+
+  /**
    * Obtener perfil del usuario autenticado actual.
    *
    * Requiere token JWT.
    */
   async getMe(): Promise<AuthUser> {
-    return apiClient<AuthUser>('/auth/usuarios/me', {
-      method: 'GET',
-    });
+    return apiClient<AuthUser>(
+      '/auth/usuarios/me',
+      {
+        method: 'GET',
+      },
+    );
   },
 
   /**
@@ -283,9 +470,13 @@ export const authApi = {
    *
    * GET /auth/verificar-email?token=...
    */
-  async verificarEmail(token: string): Promise<VerifyEmailResponse> {
+  async verificarEmail(
+    token: string,
+  ): Promise<VerifyEmailResponse> {
     return apiClient<VerifyEmailResponse>(
-      `/auth/verificar-email?token=${encodeURIComponent(token.trim())}`,
+      `/auth/verificar-email?token=${encodeURIComponent(
+        token.trim(),
+      )}`,
       {
         method: 'GET',
       },
@@ -319,12 +510,15 @@ export const authApi = {
   async forgotPassword(
     data: ForgotPasswordCredentials,
   ): Promise<{ mensaje: string }> {
-    return apiClient<{ mensaje: string }>('/auth/forgot-password', {
-      method: 'POST',
-      body: JSON.stringify({
-        email: data.email.trim().toLowerCase(),
-      }),
-    });
+    return apiClient<{ mensaje: string }>(
+      '/auth/forgot-password',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          email: data.email.trim().toLowerCase(),
+        }),
+      },
+    );
   },
 
   /**
@@ -335,12 +529,15 @@ export const authApi = {
   async resetPassword(
     data: ResetPasswordCredentials,
   ): Promise<{ mensaje: string }> {
-    return apiClient<{ mensaje: string }>('/auth/reset-password', {
-      method: 'POST',
-      body: JSON.stringify({
-        token: data.token.trim(),
-        newPassword: data.newPassword,
-      }),
-    });
+    return apiClient<{ mensaje: string }>(
+      '/auth/reset-password',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          token: data.token.trim(),
+          newPassword: data.newPassword,
+        }),
+      },
+    );
   },
 };

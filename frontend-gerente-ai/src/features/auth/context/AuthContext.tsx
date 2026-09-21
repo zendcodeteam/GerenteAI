@@ -9,6 +9,7 @@ import React, {
 import { authApi } from '../api/authApi';
 
 import {
+  AuthResponse,
   AuthUser,
   LoginCredentials,
   RegisterCredentials,
@@ -21,6 +22,34 @@ interface LegalConsent {
   privacyAccepted: boolean;
 }
 
+interface MfaState {
+  mfaToken: string;
+  action: 'setup' | 'verify' | 'verify-activation';
+  user: AuthUser;
+}
+
+/**
+ * Resultado del flujo de autenticación.
+ *
+ * authenticated:
+ *   La sesión definitiva ya fue creada.
+ *
+ * mfa-required:
+ *   El usuario MASTER todavía debe completar
+ *   el flujo MFA antes de recibir el access_token.
+ */
+export type AuthFlowResult =
+  | {
+      status: 'authenticated';
+      user: AuthUser;
+    }
+  | {
+      status: 'mfa-required';
+      user: AuthUser;
+      mfaToken: string;
+      action: 'setup' | 'verify' | 'verify-activation';
+    };
+
 interface AuthContextType {
   user: AuthUser | null;
   token: string | null;
@@ -28,8 +57,22 @@ interface AuthContextType {
   isLoading: boolean;
   error: string | null;
 
-  login: (credentials: LoginCredentials) => Promise<AuthUser>;
-  googleLogin: (credential: string) => Promise<AuthUser>;
+  /**
+   * Estado temporal del flujo MFA de un usuario MASTER.
+   *
+   * Existe únicamente mientras todavía no se ha
+   * generado la sesión definitiva.
+   */
+  mfa: MfaState | null;
+
+  login: (
+    credentials: LoginCredentials,
+  ) => Promise<AuthFlowResult>;
+
+  googleLogin: (
+    credential: string,
+  ) => Promise<AuthFlowResult>;
+
   googleRegister: (
     credential: string,
     telefono: string,
@@ -37,24 +80,59 @@ interface AuthContextType {
     whatsappUsername?: string,
     legalConsent?: LegalConsent,
   ) => Promise<AuthUser>;
-  register: (credentials: RegisterCredentials) => Promise<AuthUser>;
+
+  register: (
+    credentials: RegisterCredentials,
+  ) => Promise<AuthUser>;
+
+  /**
+   * Completar la activación inicial de MFA.
+   *
+   * Después de verificar correctamente el código,
+   * se crea la sesión definitiva.
+   */
+  activateMfa: () => Promise<{
+    secret: string;
+    otpauthUrl: string;
+    user: AuthUser;
+  }>;
+
+  verifyMfaActivation: (
+    codigo: string,
+  ) => Promise<AuthUser>;
+
+  /**
+   * Completar MFA durante el login de un MASTER
+   * que ya tiene MFA configurado.
+   */
+  verifyMfa: (
+    codigo: string,
+  ) => Promise<AuthUser>;
+
+  clearMfa: () => void;
 
   logout: () => void;
   clearError: () => void;
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+const AuthContext = createContext<AuthContextType | undefined>(
+  undefined,
+);
 
 export const TOKEN_KEY = 'access_token';
 export const USER_KEY = 'user_session';
-export const SESSION_EXPIRES_AT_KEY = 'session_expires_at';
-export const SESSION_LOGIN_TIME_KEY = 'session_login_time';
+export const SESSION_EXPIRES_AT_KEY =
+  'session_expires_at';
+export const SESSION_LOGIN_TIME_KEY =
+  'session_login_time';
 
-/** Tiempo máximo de inactividad / duración de sesión: 1 hora exacta */
-export const SESSION_MAX_AGE_MS = 60 * 60 * 1000; // 3.600.000 ms
+/** Tiempo máximo de duración de sesión: 1 hora exacta */
+export const SESSION_MAX_AGE_MS =
+  60 * 60 * 1000;
 
 /**
- * Validador seguro de expiración de JWT en el cliente sin llamadas de red.
+ * Validador seguro de expiración de JWT en el cliente
+ * sin llamadas de red.
  */
 function isTokenExpired(jwtToken: string): boolean {
   try {
@@ -72,7 +150,9 @@ function isTokenExpired(jwtToken: string): boolean {
         .map(
           (c) =>
             '%' +
-            ('00' + c.charCodeAt(0).toString(16)).slice(-2),
+            ('00' +
+              c.charCodeAt(0).toString(16)
+            ).slice(-2),
         )
         .join(''),
     );
@@ -81,15 +161,20 @@ function isTokenExpired(jwtToken: string): boolean {
 
     if (!decoded.exp) return false;
 
-    // Si expira en los próximos 10 segundos, considerarlo expirado.
-    return decoded.exp * 1000 < Date.now() + 10000;
+    // Si expira en los próximos 10 segundos,
+    // considerarlo expirado.
+    return (
+      decoded.exp * 1000 <
+      Date.now() + 10000
+    );
   } catch {
     return true;
   }
 }
 
 /**
- * Verifica si la sesión de 1 hora o el JWT han expirado.
+ * Verifica si la sesión de 1 hora o el JWT
+ * han expirado.
  */
 function isSessionExpired(): boolean {
   const token = localStorage.getItem(TOKEN_KEY);
@@ -98,98 +183,177 @@ function isSessionExpired(): boolean {
 
   if (isTokenExpired(token)) return true;
 
-  const expiresAt = localStorage.getItem(SESSION_EXPIRES_AT_KEY);
+  const expiresAt = localStorage.getItem(
+    SESSION_EXPIRES_AT_KEY,
+  );
 
-  if (expiresAt && Date.now() >= Number(expiresAt)) {
+  if (
+    expiresAt &&
+    Date.now() >= Number(expiresAt)
+  ) {
     return true;
   }
 
   return false;
 }
 
-export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [token, setToken] = useState<string | null>(() => {
-    if (isSessionExpired()) {
-      localStorage.removeItem(TOKEN_KEY);
-      localStorage.removeItem(USER_KEY);
-      localStorage.removeItem(SESSION_EXPIRES_AT_KEY);
-      localStorage.removeItem(SESSION_LOGIN_TIME_KEY);
+export function AuthProvider({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const [token, setToken] = useState<string | null>(
+    () => {
+      if (isSessionExpired()) {
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(USER_KEY);
+        localStorage.removeItem(
+          SESSION_EXPIRES_AT_KEY,
+        );
+        localStorage.removeItem(
+          SESSION_LOGIN_TIME_KEY,
+        );
 
-      return null;
-    }
+        return null;
+      }
 
-    return localStorage.getItem(TOKEN_KEY);
-  });
+      return localStorage.getItem(TOKEN_KEY);
+    },
+  );
 
-  const [user, setUser] = useState<AuthUser | null>(() => {
-    if (isSessionExpired()) {
-      return null;
-    }
+  const [user, setUser] =
+    useState<AuthUser | null>(() => {
+      if (isSessionExpired()) {
+        return null;
+      }
 
-    const savedUser = localStorage.getItem(USER_KEY);
+      const savedUser =
+        localStorage.getItem(USER_KEY);
 
-    if (!savedUser) return null;
+      if (!savedUser) return null;
 
-    try {
-      return JSON.parse(savedUser);
-    } catch {
-      return null;
-    }
-  });
+      try {
+        return JSON.parse(savedUser);
+      } catch {
+        return null;
+      }
+    });
 
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
+  const [mfa, setMfa] =
+    useState<MfaState | null>(null);
+
+  const [isLoading, setIsLoading] =
+    useState<boolean>(false);
+
+  const [error, setError] =
+    useState<string | null>(null);
 
   const clearError = useCallback(() => {
     setError(null);
   }, []);
 
-  const clearBusinessStorage = useCallback(() => {
-    localStorage.removeItem('active_business_id');
-    localStorage.removeItem('active_business_name');
-    localStorage.removeItem('active_sede_id');
-    localStorage.removeItem('active_sede_name');
-    localStorage.removeItem('active_business_plan');
+  const clearBusinessStorage =
+    useCallback(() => {
+      localStorage.removeItem(
+        'active_business_id',
+      );
+      localStorage.removeItem(
+        'active_business_name',
+      );
+      localStorage.removeItem(
+        'active_sede_id',
+      );
+      localStorage.removeItem(
+        'active_sede_name',
+      );
+      localStorage.removeItem(
+        'active_business_plan',
+      );
 
-    try {
-      Object.keys(localStorage).forEach((key) => {
-        if (key.startsWith('business_plan_')) {
-          localStorage.removeItem(key);
-        }
-      });
-    } catch {
-      // Ignorar errores de acceso a storage.
-    }
+      try {
+        Object.keys(localStorage).forEach(
+          (key) => {
+            if (
+              key.startsWith(
+                'business_plan_',
+              )
+            ) {
+              localStorage.removeItem(key);
+            }
+          },
+        );
+      } catch {
+        // Ignorar errores de acceso a storage.
+      }
+    }, []);
+
+  /**
+   * Limpia únicamente el estado temporal de MFA.
+   *
+   * El mfaToken no se persiste en localStorage.
+   */
+  const clearMfa = useCallback(() => {
+    setMfa(null);
   }, []);
 
   const logout = useCallback(() => {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
-    localStorage.removeItem(SESSION_EXPIRES_AT_KEY);
-    localStorage.removeItem(SESSION_LOGIN_TIME_KEY);
+    localStorage.removeItem(
+      SESSION_EXPIRES_AT_KEY,
+    );
+    localStorage.removeItem(
+      SESSION_LOGIN_TIME_KEY,
+    );
 
     clearBusinessStorage();
 
     setToken(null);
     setUser(null);
+    setMfa(null);
     setError(null);
   }, [clearBusinessStorage]);
 
   /**
-   * Guarda una sesión autenticada en localStorage y React state.
+   * Guarda una sesión autenticada en localStorage
+   * y React state.
    *
-   * Se utiliza tanto para login tradicional como para Google.
+   * IMPORTANTE:
+   *
+   * Esta función solamente debe ejecutarse cuando
+   * ya existe un access_token definitivo.
+   *
+   * Nunca debe utilizarse con mfaToken.
    */
   const persistSession = useCallback(
-    (accessToken: string, authenticatedUser: AuthUser) => {
-      const expiresAt = Date.now() + SESSION_MAX_AGE_MS;
+    (
+      accessToken: string,
+      authenticatedUser: AuthUser,
+    ) => {
+      if (!accessToken?.trim()) {
+        throw new Error(
+          'No se puede crear una sesión sin un access_token válido.',
+        );
+      }
 
-      localStorage.setItem(TOKEN_KEY, accessToken);
-      localStorage.setItem(USER_KEY, JSON.stringify(authenticatedUser));
+      const expiresAt =
+        Date.now() + SESSION_MAX_AGE_MS;
+
+      localStorage.setItem(
+        TOKEN_KEY,
+        accessToken,
+      );
+
+      localStorage.setItem(
+        USER_KEY,
+        JSON.stringify(authenticatedUser),
+      );
+
       localStorage.setItem(
         SESSION_EXPIRES_AT_KEY,
         expiresAt.toString(),
       );
+
       localStorage.setItem(
         SESSION_LOGIN_TIME_KEY,
         Date.now().toString(),
@@ -197,8 +361,82 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       setToken(accessToken);
       setUser(authenticatedUser);
+
+      /**
+       * Una vez creada la sesión definitiva,
+       * cualquier estado MFA pendiente deja de ser necesario.
+       */
+      setMfa(null);
     },
     [],
+  );
+
+  /**
+   * Procesa una respuesta de autenticación.
+   *
+   * CLIENTE:
+   *   access_token → sesión inmediata.
+   *
+   * MASTER:
+   *   requiresMfa → solamente se conserva
+   *   el estado temporal del flujo MFA.
+   */
+  const processAuthResponse = useCallback(
+    (response: AuthResponse): AuthFlowResult => {
+      if (response.requiresMfa === true) {
+        /**
+         * MUY IMPORTANTE:
+         *
+         * No llamar persistSession().
+         *
+         * El MASTER todavía NO está autenticado
+         * completamente.
+         */
+
+        setToken(null);
+        setUser(null);
+
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(USER_KEY);
+        localStorage.removeItem(
+          SESSION_EXPIRES_AT_KEY,
+        );
+        localStorage.removeItem(
+          SESSION_LOGIN_TIME_KEY,
+        );
+
+        setMfa({
+          mfaToken: response.mfaToken,
+          action:
+            response.mfaRequiredAction,
+          user: response.user,
+        });
+
+        return {
+          status: 'mfa-required',
+          user: response.user,
+          mfaToken: response.mfaToken,
+          action:
+            response.mfaRequiredAction,
+        };
+      }
+
+      /**
+       * Respuesta autenticada.
+       *
+       * Aquí sí existe el JWT definitivo.
+       */
+      persistSession(
+        response.access_token,
+        response.user,
+      );
+
+      return {
+        status: 'authenticated',
+        user: response.user,
+      };
+    },
+    [persistSession],
   );
 
   // Verificación proactiva de expiración de sesión
@@ -213,7 +451,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     checkExpiration();
 
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
+      if (
+        document.visibilityState ===
+        'visible'
+      ) {
         checkExpiration();
       }
     };
@@ -223,10 +464,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       handleVisibilityChange,
     );
 
-    window.addEventListener('focus', checkExpiration);
+    window.addEventListener(
+      'focus',
+      checkExpiration,
+    );
 
     // Revisión periódica cada 30 segundos.
-    const interval = setInterval(checkExpiration, 30000);
+    const interval = setInterval(
+      checkExpiration,
+      30000,
+    );
 
     return () => {
       window.removeEventListener(
@@ -234,7 +481,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         handleVisibilityChange,
       );
 
-      window.removeEventListener('focus', checkExpiration);
+      window.removeEventListener(
+        'focus',
+        checkExpiration,
+      );
 
       clearInterval(interval);
     };
@@ -244,7 +494,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
    * Sincronización entre pestañas.
    */
   useEffect(() => {
-    const handleStorageChange = (e: StorageEvent) => {
+    const handleStorageChange = (
+      e: StorageEvent,
+    ) => {
       if (e.key === TOKEN_KEY) {
         if (!e.newValue) {
           setToken(null);
@@ -267,36 +519,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     };
 
-    window.addEventListener('storage', handleStorageChange);
+    window.addEventListener(
+      'storage',
+      handleStorageChange,
+    );
 
     return () => {
-      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener(
+        'storage',
+        handleStorageChange,
+      );
     };
   }, []);
 
   /**
    * Login normal.
    *
-   * Almacenamos el JWT y limpiamos datos residuales
-   * de comercios de sesiones previas.
+   * CLIENTE:
+   *   Guarda inmediatamente la sesión.
+   *
+   * MASTER:
+   *   Devuelve explícitamente que MFA
+   *   es obligatorio.
    */
   const login = async (
     credentials: LoginCredentials,
-  ): Promise<AuthUser> => {
+  ): Promise<AuthFlowResult> => {
     setIsLoading(true);
     setError(null);
 
     try {
       clearBusinessStorage();
 
-      const response = await authApi.login(credentials);
+      const response =
+        await authApi.login(credentials);
 
-      persistSession(
-        response.access_token,
-        response.user,
-      );
-
-      return response.user;
+      return processAuthResponse(response);
     } catch (err) {
       const message =
         err instanceof ApiError
@@ -311,29 +569,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   /**
-   * Login mediante Google para usuarios que ya tienen una cuenta.
+   * Login mediante Google.
    *
-   * Google entrega un ID Token (credential).
-   * El backend lo valida y devuelve el mismo JWT
-   * utilizado por el login tradicional.
+   * CLIENTE:
+   *   Google → sesión.
+   *
+   * MASTER:
+   *   Google → MFA → sesión.
    */
   const googleLogin = async (
     credential: string,
-  ): Promise<AuthUser> => {
+  ): Promise<AuthFlowResult> => {
     setIsLoading(true);
     setError(null);
 
     try {
       clearBusinessStorage();
 
-      const response = await authApi.googleLogin(credential);
+      const response =
+        await authApi.googleLogin(
+          credential,
+        );
 
-      persistSession(
-        response.access_token,
-        response.user,
-      );
-
-      return response.user;
+      return processAuthResponse(response);
     } catch (err) {
       const message =
         err instanceof ApiError
@@ -350,19 +608,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   /**
    * Registro mediante Google.
    *
-   * Google ya proporciona un correo electrónico verificado.
-   * Por eso el usuario solamente debe completar los datos
-   * adicionales requeridos por Luka:
-   *
-   * - Teléfono celular colombiano.
-   * - Nombre del negocio.
-   * - Usuario de WhatsApp opcional.
-   * - Aceptación de Términos de servicio.
-   * - Aceptación de Política de privacidad.
-   *
-   * El backend valida nuevamente el credential de Google,
-   * crea la cuenta y registra los consentimientos legales
-   * asociados a la cuenta.
+   * Google ya proporciona un correo electrónico
+   * verificado.
    */
   const googleRegister = async (
     credential: string,
@@ -377,28 +624,222 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       clearBusinessStorage();
 
-      const response = await authApi.googleRegister(
-        credential,
-        telefono,
-        nombreNegocio,
-        whatsappUsername,
-        legalConsent ?? {
-          termsAccepted: false,
-          privacyAccepted: false,
-        },
-      );
+      const response =
+        await authApi.googleRegister(
+          credential,
+          telefono,
+          nombreNegocio,
+          whatsappUsername,
+          legalConsent ?? {
+            termsAccepted: false,
+            privacyAccepted: false,
+          },
+        );
 
-      persistSession(
-        response.access_token,
-        response.user,
-      );
+      const result =
+        processAuthResponse(response);
 
-      return response.user;
+      /**
+       * El registro actual está pensado para CLIENTE.
+       * Si en el futuro el backend permite registrar
+       * MASTER mediante Google, este punto evita
+       * devolver silenciosamente un usuario sin
+       * completar MFA.
+       */
+      if (result.status === 'mfa-required') {
+        throw new Error(
+          'Este registro requiere completar la autenticación multifactor.',
+        );
+      }
+
+      return result.user;
     } catch (err) {
       const message =
         err instanceof ApiError
           ? err.message
-          : 'Error al crear la cuenta con Google';
+          : err instanceof Error
+            ? err.message
+            : 'Error al crear la cuenta con Google';
+
+      setError(message);
+      throw err;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  /**
+   * Inicia la activación de MFA.
+   *
+   * Solamente se puede ejecutar cuando el backend
+   * indicó que el MASTER debe configurar MFA.
+   */
+  const activateMfa = async (): Promise<{
+    secret: string;
+    otpauthUrl: string;
+    user: AuthUser;
+  }> => {
+    if (!mfa) {
+      throw new Error(
+        'No existe un flujo MFA pendiente.',
+      );
+    }
+
+    if (mfa.action !== 'setup') {
+      throw new Error(
+        'El flujo actual no corresponde a una activación de MFA.',
+      );
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const response =
+        await authApi.activarMfa(
+          mfa.mfaToken,
+        );
+
+      /**
+       * Conservamos el mismo mfaToken temporal,
+       * pero actualizamos la acción para que la
+       * interfaz pase a la verificación inicial.
+       */
+      setMfa((current) => {
+        if (!current) return null;
+
+        return {
+          ...current,
+          action:
+            response.mfaRequiredAction,
+          user: response.user,
+        };
+      });
+
+      return {
+        secret: response.secret,
+        otpauthUrl:
+          response.otpauthUrl,
+        user: response.user,
+      };
+    } catch (err) {
+      const message =
+        err instanceof ApiError
+          ? err.message
+          : 'Error al activar la autenticación de dos factores';
+
+      setError(message);
+      throw err;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  /**
+   * Confirma la activación inicial de MFA.
+   *
+   * Si el código es correcto, AuthService devuelve
+   * el access_token definitivo.
+   */
+  const verifyMfaActivation = async (
+    codigo: string,
+  ): Promise<AuthUser> => {
+    if (!mfa) {
+      throw new Error(
+        'No existe un flujo MFA pendiente.',
+      );
+    }
+
+    if (
+      mfa.action !==
+      'verify-activation'
+    ) {
+      throw new Error(
+        'El flujo actual no corresponde a la verificación de activación de MFA.',
+      );
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const response =
+        await authApi.verificarActivacionMfa(
+          mfa.mfaToken,
+          codigo,
+        );
+
+      const result =
+        processAuthResponse(response);
+
+      if (result.status !== 'authenticated') {
+        throw new Error(
+          'La activación de MFA no pudo completar la sesión.',
+        );
+      }
+
+      return result.user;
+    } catch (err) {
+      const message =
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Código de autenticación incorrecto';
+
+      setError(message);
+      throw err;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  /**
+   * Verifica MFA durante el login de un MASTER
+   * que ya tiene MFA configurado.
+   */
+  const verifyMfa = async (
+    codigo: string,
+  ): Promise<AuthUser> => {
+    if (!mfa) {
+      throw new Error(
+        'No existe un flujo MFA pendiente.',
+      );
+    }
+
+    if (mfa.action !== 'verify') {
+      throw new Error(
+        'El flujo actual no corresponde a la verificación de MFA.',
+      );
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const response =
+        await authApi.verificarMfa(
+          mfa.mfaToken,
+          codigo,
+        );
+
+      const result =
+        processAuthResponse(response);
+
+      if (result.status !== 'authenticated') {
+        throw new Error(
+          'La verificación MFA no pudo completar la sesión.',
+        );
+      }
+
+      return result.user;
+    } catch (err) {
+      const message =
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Código de autenticación incorrecto';
 
       setError(message);
       throw err;
@@ -420,7 +861,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setError(null);
 
     try {
-      const newUser = await authApi.register(credentials);
+      const newUser =
+        await authApi.register(
+          credentials,
+        );
 
       return newUser;
     } catch (err) {
@@ -439,13 +883,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const value: AuthContextType = {
     user,
     token,
-    isAuthenticated: !!token && !!user,
+    isAuthenticated:
+      !!token && !!user,
     isLoading,
     error,
+    mfa,
     login,
     googleLogin,
     googleRegister,
     register,
+    activateMfa,
+    verifyMfaActivation,
+    verifyMfa,
+    clearMfa,
     logout,
     clearError,
   };
@@ -458,7 +908,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 }
 
 export function useAuth() {
-  const context = useContext(AuthContext);
+  const context =
+    useContext(AuthContext);
 
   if (!context) {
     throw new Error(

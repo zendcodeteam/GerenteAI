@@ -104,7 +104,7 @@ export function LoginForm() {
 
   /**
    * Determina hacia dónde enviar al usuario después
-   * de una autenticación exitosa.
+   * de una autenticación completamente exitosa.
    */
   const navigateAfterLogin = (loggedUser: {
     rolGlobal?: string;
@@ -139,6 +139,35 @@ export function LoginForm() {
   };
 
   /**
+   * Cuando el backend solicita MFA:
+   *
+   * - AuthContext conserva el flujo MFA en memoria.
+   * - Todavía NO existe access_token definitivo.
+   * - Navegamos a /mfa.
+   *
+   * El estado `from` se conserva para no perder la ruta
+   * original que el usuario intentaba visitar.
+   */
+  const navigateToMfa = () => {
+    const from = (
+      location.state as {
+        from?: {
+          pathname?: string;
+          search?: string;
+          hash?: string;
+        };
+      }
+    )?.from;
+
+    navigate("/mfa", {
+      replace: true,
+      state: {
+        from,
+      },
+    });
+  };
+
+  /**
    * Login tradicional.
    */
   const handleSubmit = async (
@@ -163,12 +192,27 @@ export function LoginForm() {
     clearError();
 
     try {
-      const loggedUser = await login({
+      const result = await login({
         email: cleanEmail,
         password,
       });
 
-      navigateAfterLogin(loggedUser);
+      /**
+       * MASTER:
+       * todavía no tiene sesión definitiva.
+       * Debe completar MFA antes de entrar.
+       */
+      if (result.status === "mfa-required") {
+        navigateToMfa();
+
+        return;
+      }
+
+      /**
+       * CLIENTE o MASTER después de una autenticación
+       * completamente exitosa.
+       */
+      navigateAfterLogin(result.user);
     } catch (err) {
       console.error(
         "❌ [LoginForm] Error en handleSubmit:",
@@ -203,10 +247,20 @@ export function LoginForm() {
     setIsGoogleLoading(true);
 
     try {
-      const loggedUser =
+      const result =
         await googleLogin(credential);
 
-      navigateAfterLogin(loggedUser);
+      /**
+       * Si el usuario es MASTER y requiere MFA,
+       * todavía no existe una sesión definitiva.
+       */
+      if (result.status === "mfa-required") {
+        navigateToMfa();
+
+        return;
+      }
+
+      navigateAfterLogin(result.user);
     } catch (err) {
       console.error(
         "❌ [LoginForm] Error en Google Login:",
@@ -894,18 +948,6 @@ export function LoginForm() {
 
               {/* ======================================================
                   GOOGLE BUTTON
-                  
-                  El botón visible sigue siendo completamente
-                  nuestro.
-
-                  El GoogleLogin real se coloca transparente
-                  encima. De esta forma el clic del usuario llega
-                  directamente a Google sin depender de:
-                  
-                  querySelector()
-                  .click()
-                  DOM interno
-                  iframe
               ====================================================== */}
 
               <div
@@ -1033,14 +1075,6 @@ export function LoginForm() {
 
                 {/* ==================================================
                     GOOGLE REAL / TRANSPARENTE
-
-                    IMPORTANTE:
-                    - NO pointer-events-none
-                    - NO h-0
-                    - NO w-0
-                    - NO z-index negativo
-
-                    El botón real recibe el clic.
                 ================================================== */}
 
                 {googleButtonWidth > 0 && (
@@ -1151,14 +1185,12 @@ export function LoginForm() {
                   {isLoading ? (
                     <>
                       <Loader2 className="h-4 w-4 animate-spin" />
-
                       Verificando
                       credenciales...
                     </>
                   ) : isGoogleLoading ? (
                     <>
                       <Loader2 className="h-4 w-4 animate-spin" />
-
                       Conectando con Google...
                     </>
                   ) : (

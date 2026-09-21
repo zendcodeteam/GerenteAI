@@ -8,6 +8,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { PagosService } from '../services/pagos.service';
 import { CrearCheckoutDto } from '../dto/pagos/crear-checkout.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -42,6 +43,9 @@ export class PagosController {
    */
   @Post('webhook')
   @HttpCode(200)
+  // Wompi reintenta lo que no confirmamos; un 429 solo generaría más
+  // reintentos. Lo autentica la firma, no hace falta limitarlo por IP.
+  @SkipThrottle()
   webhook(@Body() cuerpo: unknown) {
     return this.pagosService.procesarEvento(cuerpo);
   }

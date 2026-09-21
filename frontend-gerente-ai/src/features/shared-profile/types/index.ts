@@ -71,6 +71,7 @@ export interface Sede {
   negocioId: string;
   telefono?: string | null;
   whatsappUsername?: string | null;
+  whatsappUserId?: string | null;
   direccion?: string | null;
   contexto?: string | null;
   createdAt?: string;

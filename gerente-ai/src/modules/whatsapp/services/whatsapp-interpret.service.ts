@@ -16,6 +16,7 @@ import {
 } from '../../finance-ai/services/whatsapp-message.service';
 import type { InterpretMessageDto } from '../dto/interpret-message.dto';
 import { MessageDedupeService } from './message-dedupe.service';
+import { LimitePorRemitenteService } from './limite-por-remitente.service';
 import {
   maskPhone,
   normalizePhone,
@@ -180,6 +181,9 @@ const HISTORY_TURNS = 12;
 const GENERIC_FALLBACK =
   'No pude procesar tu mensaje en este momento 😔 Intenta de nuevo en unos minutos.';
 
+const MENSAJE_LIMITE_REMITENTE =
+  'Estás enviando muchos mensajes seguidos 🙏 Espera unos minutos y vuelve a escribirme; no registré este último.';
+
 @Injectable()
 export class WhatsappInterpretService {
   private readonly logger = new Logger(WhatsappInterpretService.name);
@@ -190,7 +194,21 @@ export class WhatsappInterpretService {
     private readonly dedupe: MessageDedupeService,
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly limite: LimitePorRemitenteService = new LimitePorRemitenteService(),
   ) {}
+
+  /**
+   * Depuracion puntual: solo con DEBUG_MESSAGE_CONTENT activo se escribe el
+   * contenido del mensaje en los logs. Fuera de eso basta con su longitud.
+   */
+  private get logMessageContent(): boolean {
+    const raw = this.config
+      .get<string>('DEBUG_MESSAGE_CONTENT')
+      ?.trim()
+      .toLowerCase();
+
+    return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'si';
+  }
 
   async interpret(dto: InterpretMessageDto): Promise<InterpretResponse> {
     const startedAt = Date.now();
@@ -204,9 +222,19 @@ export class WhatsappInterpretService {
       );
     }
 
+    // El texto trae nombres y deudas de los clientes, asi que por defecto solo
+    // se registra su tamano; el tipo de intencion se loguea al cerrar el turno,
+    // cuando ya se conoce. El contenido queda detras de DEBUG_MESSAGE_CONTENT,
+    // para depuracion puntual (mismo criterio que AI_LOG_PROMPTS).
+    const marcas = `${dto.quotedMessageId ? ' [responde a un mensaje citado]' : ''}${dto.media ? ` [${dto.media.kind}]` : ''}`;
+
     this.logger.log(
-      `Mensaje de ${dto.name ?? 'sin nombre'} (${describeSender(sender)}): "${dto.message.slice(0, 120)}"${dto.quotedMessageId ? ' [responde a un mensaje citado]' : ''}${dto.media ? ` [${dto.media.kind}]` : ''}`,
+      `Mensaje de ${dto.name ?? 'sin nombre'} (${describeSender(sender)}): ${dto.message.length} caracteres${marcas}`,
     );
+
+    if (this.logMessageContent) {
+      this.logger.debug(`Contenido: "${dto.message.slice(0, 120)}"`);
+    }
 
     // ---- 1. Duplicados ----------------------------------------------------
     if (!this.dedupe.isFirstTime(dto.messageId)) {
@@ -229,6 +257,24 @@ export class WhatsappInterpretService {
         durationMs: Date.now() - startedAt,
         duplicate: true,
       });
+    }
+
+    // ---- 2. Límite por remitente -------------------------------------------
+    // Después de los duplicados, para que un reintento de n8n no gaste cupo.
+    // Se contesta 200 con un aviso y no un 429: un error lo trataría n8n como
+    // fallo y el comerciante no recibiría nada.
+    if (!this.limite.permitir(sender.phone ?? `id:${sender.userId}`)) {
+      this.logger.warn(
+        `${describeSender(sender)} superó ${this.limite.limite} mensajes en ${this.limite.ventanaMs / 60_000} min: mensaje sin procesar.`,
+      );
+      const aviso = this.emptyResponse({
+        type: 'no_claro',
+        reply: MENSAJE_LIMITE_REMITENTE,
+        durationMs: Date.now() - startedAt,
+        duplicate: false,
+      });
+      this.dedupe.remember(dto.messageId, aviso);
+      return aviso;
     }
 
     try {

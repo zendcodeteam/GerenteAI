@@ -206,6 +206,9 @@ export async function apiClient<T>(
           !endpoint.includes('/auth/register') &&
           !endpoint.includes('/auth/google') &&
           !endpoint.includes('/auth/google/register') &&
+          // Un código MFA incorrecto responde 401: debe mostrarse en la
+          // pantalla de MFA (con los intentos restantes), no sacar al login.
+          !endpoint.includes('/auth/mfa/') &&
           !endpoint.includes('/auth/verificar-email') &&
           !endpoint.includes('/auth/forgot-password') &&
           !endpoint.includes('/auth/reset-password')
