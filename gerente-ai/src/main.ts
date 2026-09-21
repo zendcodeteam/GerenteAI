@@ -2,10 +2,10 @@ import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
+import { aplicarCabecerasDeSeguridad } from './seguridad';
 
 async function bootstrap() {
-  const app =
-    await NestFactory.create<NestExpressApplication>(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   // Las notas de voz y las fotos de WhatsApp llegan en base64
   // dentro del JSON. Express tiene un límite por defecto de 100 kB,
@@ -24,6 +24,15 @@ async function bootstrap() {
    * mayor permitiría que el cliente falsificara su IP en el header.
    */
   app.set('trust proxy', 1);
+
+  /**
+   * Cabeceras de seguridad HTTP. Va lo primero para que las lleven TODAS las
+   * respuestas, incluidas las de error: si se pusiera despues, un fallo en un
+   * middleware anterior devolveria una respuesta sin proteger.
+   *
+   * El detalle de que se permite y por que esta en `seguridad.ts`.
+   */
+  aplicarCabecerasDeSeguridad(app);
 
   app.useBodyParser('json', {
     limit: '12mb',
@@ -49,18 +58,14 @@ async function bootstrap() {
    *
    * También permitimos localhost para desarrollo.
    */
-  const configuredOrigins = process.env.CORS_ORIGINS
-    ?.split(',')
+  const configuredOrigins = process.env.CORS_ORIGINS?.split(',')
     .map((value) => value.trim())
     .filter(Boolean);
 
   const allowedOrigins =
     configuredOrigins && configuredOrigins.length > 0
       ? configuredOrigins
-      : [
-          'http://localhost:5173',
-          'http://localhost:3000',
-        ];
+      : ['http://localhost:5173', 'http://localhost:3000'];
 
   app.enableCors({
     origin: (origin, callback) => {
@@ -79,28 +84,12 @@ async function bootstrap() {
         return;
       }
 
-      callback(
-        new Error(
-          `Origen no permitido por CORS: ${origin}`,
-        ),
-        false,
-      );
+      callback(new Error(`Origen no permitido por CORS: ${origin}`), false);
     },
 
-    methods: [
-      'GET',
-      'HEAD',
-      'PUT',
-      'PATCH',
-      'POST',
-      'DELETE',
-      'OPTIONS',
-    ],
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
 
-    allowedHeaders: [
-      'Content-Type',
-      'Authorization',
-    ],
+    allowedHeaders: ['Content-Type', 'Authorization'],
 
     credentials: true,
   });
