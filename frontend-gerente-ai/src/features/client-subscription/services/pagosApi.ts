@@ -32,6 +32,10 @@ export interface Pago {
   wompiTransaccionId: string | null;
   procesadoEl: string | null;
   createdAt: string;
+  metodoPago: {
+    tipo: string;
+    ultimos4: string | null;
+  } | null;
 }
 
 export function crearCheckout(

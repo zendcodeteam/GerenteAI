@@ -205,8 +205,13 @@ export class AiUsageService {
     });
   }
 
-  async summarizeCurrentMonth(tenantId: string): Promise<AiUsageSummary> {
-    const { start, end } = currentMonthRange();
+  async summarizeCurrentMonth(
+    tenantId: string,
+    periodo?: { inicio: Date; fin: Date },
+  ): Promise<AiUsageSummary> {
+    const { start, end } = periodo
+      ? { start: periodo.inicio, end: periodo.fin }
+      : currentMonthRange();
     return this.repository.summarize(tenantId, start, end);
   }
 }

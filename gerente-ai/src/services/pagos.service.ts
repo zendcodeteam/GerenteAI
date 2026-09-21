@@ -267,20 +267,41 @@ export class PagosService {
         negocioId,
         rolGlobal,
       );
-      return this.prisma.pago.findMany({
+      const pagos = await this.prisma.pago.findMany({
         where: { negocioId },
         orderBy: { createdAt: 'desc' },
       });
+      return pagos.map((pago) => this.publicPayment(pago));
     }
 
     if (rolGlobal === 'MASTER') {
-      return this.prisma.pago.findMany({ orderBy: { createdAt: 'desc' } });
+      const pagos = await this.prisma.pago.findMany({ orderBy: { createdAt: 'desc' } });
+      return pagos.map((pago) => this.publicPayment(pago));
     }
 
-    return this.prisma.pago.findMany({
+    const pagos = await this.prisma.pago.findMany({
       where: { negocio: { usuariosNegocio: { some: { usuarioId: userId } } } },
       orderBy: { createdAt: 'desc' },
     });
+    return pagos.map((pago) => this.publicPayment(pago));
+  }
+
+  private publicPayment(pago: Prisma.PagoGetPayload<{}>) {
+    return {
+      id: pago.id,
+      referencia: pago.referencia,
+      estado: pago.estado,
+      plan: pago.plan,
+      ciclo: pago.ciclo,
+      montoEnCentavos: pago.montoEnCentavos,
+      moneda: pago.moneda,
+      wompiTransaccionId: pago.wompiTransaccionId,
+      procesadoEl: pago.procesadoEl,
+      createdAt: pago.createdAt,
+      metodoPago: pago.estado === EstadoPago.APROBADO
+        ? paymentMethodFromWompi(pago.datosWompi)
+        : null,
+    };
   }
 
   /**
@@ -324,7 +345,7 @@ export class PagosService {
       }
     }
 
-    return pago;
+    return this.publicPayment(pago);
   }
 
   /**
@@ -383,4 +404,41 @@ export class PagosService {
       },
     };
   }
+}
+
+function paymentMethodFromWompi(data: Prisma.JsonValue | null) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+
+  const root = data as Prisma.JsonObject;
+  const eventData = root.data;
+  if (!eventData || typeof eventData !== 'object' || Array.isArray(eventData)) {
+    return null;
+  }
+
+  const transaction = (eventData as Prisma.JsonObject).transaction;
+  if (!transaction || typeof transaction !== 'object' || Array.isArray(transaction)) {
+    return null;
+  }
+
+  const transactionData = transaction as Prisma.JsonObject;
+  const method = transactionData.payment_method;
+  const methodData = method && typeof method === 'object' && !Array.isArray(method)
+    ? method as Prisma.JsonObject
+    : null;
+  const extra = methodData?.extra;
+  const extraData = extra && typeof extra === 'object' && !Array.isArray(extra)
+    ? extra as Prisma.JsonObject
+    : null;
+  const type = transactionData.payment_method_type ?? methodData?.type;
+  const lastFour = extraData?.last_four
+    ?? extraData?.lastFour
+    ?? extraData?.account_last_four
+    ?? extraData?.bank_account_last_four;
+
+  return {
+    tipo: typeof type === 'string' ? type : 'DESCONOCIDO',
+    ultimos4: typeof lastFour === 'string' && /^\d{4}$/.test(lastFour)
+      ? lastFour
+      : null,
+  };
 }

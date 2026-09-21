@@ -35,6 +35,19 @@ export interface AssistantApiResponse {
   data: AssistantResult;
 }
 
+export interface AiUsageQuota {
+  used: number;
+  limit: number;
+  remaining: number;
+  periodStart: string;
+  periodEnd: string;
+}
+
+export interface AiUsageResponse {
+  quota: AiUsageQuota;
+  summary: { messages: number };
+}
+
 export const assistantApi = {
   /**
    * Consulta al asistente financiero conversacional
@@ -53,7 +66,7 @@ export const assistantApi = {
    * GET /ai/usage/:tenantId
    */
   getUsage: async (tenantId: string) => {
-    return apiClient<{ success: boolean; data: { quota: unknown; summary: unknown } }>(
+    return apiClient<{ success: boolean; data: AiUsageResponse }>(
       `/ai/usage/${tenantId}`,
     );
   },
