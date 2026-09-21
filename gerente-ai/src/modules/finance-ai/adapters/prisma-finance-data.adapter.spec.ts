@@ -1,9 +1,45 @@
 import { PrismaFinanceDataAdapter } from './prisma-finance-data.adapter';
 import { PrismaService } from '../../../services/prisma.service';
 
+type MockFn = jest.Mock;
+
+interface MockPrisma {
+  venta: {
+    findFirst: MockFn;
+    updateMany: MockFn;
+    deleteMany: MockFn;
+  };
+  gasto: {
+    findFirst: MockFn;
+    updateMany: MockFn;
+    deleteMany: MockFn;
+  };
+  cliente: {
+    update: MockFn;
+  };
+  bitacoraAuditoria: {
+    create: MockFn;
+    findMany: MockFn;
+  };
+  $transaction: MockFn;
+}
+
+interface AuditCreatePayload {
+  data: {
+    sedeId: string;
+    usuarioId: string | null;
+    operacion: string;
+    entidad: string;
+    entidadId: string;
+    valorAnterior: Record<string, unknown>;
+    valorNuevo?: unknown;
+    motivo: string;
+  };
+}
+
 describe('PrismaFinanceDataAdapter - Bitácora de Auditoría', () => {
   let adapter: PrismaFinanceDataAdapter;
-  let prismaMock: any;
+  let prismaMock: MockPrisma;
 
   beforeEach(() => {
     prismaMock = {
@@ -24,10 +60,14 @@ describe('PrismaFinanceDataAdapter - Bitácora de Auditoría', () => {
         create: jest.fn().mockResolvedValue({ id: 'audit-1' }),
         findMany: jest.fn().mockResolvedValue([]),
       },
-      $transaction: jest.fn().mockImplementation((ops) => Promise.all(ops)),
+      $transaction: jest
+        .fn()
+        .mockImplementation((ops: Promise<unknown>[]) => Promise.all(ops)),
     };
 
-    adapter = new PrismaFinanceDataAdapter(prismaMock as unknown as PrismaService);
+    adapter = new PrismaFinanceDataAdapter(
+      prismaMock as unknown as PrismaService,
+    );
   });
 
   describe('deleteTransaction', () => {
@@ -44,22 +84,30 @@ describe('PrismaFinanceDataAdapter - Bitácora de Auditoría', () => {
       prismaMock.venta.findFirst.mockResolvedValue(ventaMock);
       prismaMock.gasto.findFirst.mockResolvedValue(null);
 
-      const res = await adapter.deleteTransaction('sede-1', 'tx-venta-123', 'usuario-admin');
+      const res = await adapter.deleteTransaction(
+        'sede-1',
+        'tx-venta-123',
+        'usuario-admin',
+      );
 
       expect(res).toBe(true);
-      expect(prismaMock.bitacoraAuditoria.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          sedeId: 'sede-1',
-          usuarioId: 'usuario-admin',
-          operacion: 'ELIMINACION',
-          entidad: 'Venta',
-          entidadId: 'tx-venta-123',
-          valorAnterior: expect.objectContaining({
-            id: 'tx-venta-123',
-            total: 50000,
-          }),
-          motivo: 'deleteTransaction',
-        }),
+      expect(prismaMock.bitacoraAuditoria.create).toHaveBeenCalledTimes(1);
+
+      const firstCallArgs = prismaMock.bitacoraAuditoria.create.mock
+        .calls[0] as [AuditCreatePayload];
+      const auditData = firstCallArgs[0].data;
+
+      expect(auditData).toMatchObject({
+        sedeId: 'sede-1',
+        usuarioId: 'usuario-admin',
+        operacion: 'ELIMINACION',
+        entidad: 'Venta',
+        entidadId: 'tx-venta-123',
+        valorAnterior: {
+          id: 'tx-venta-123',
+          total: 50000,
+        },
+        motivo: 'deleteTransaction',
       });
       expect(prismaMock.$transaction).toHaveBeenCalledTimes(1);
     });
@@ -88,11 +136,16 @@ describe('PrismaFinanceDataAdapter - Bitácora de Auditoría', () => {
       prismaMock.gasto.findFirst.mockResolvedValue(gastoMock);
       prismaMock.venta.updateMany.mockResolvedValue({ count: 0 });
       prismaMock.gasto.updateMany.mockResolvedValue({ count: 1 });
-      jest.spyOn(adapter as any, 'findTransaction').mockResolvedValue({
-        id: 'tx-gasto-123',
-        businessId: 'sede-1',
-        amount: 35000,
-      });
+      jest
+        .spyOn(
+          adapter as unknown as { findTransaction: () => Promise<unknown> },
+          'findTransaction',
+        )
+        .mockResolvedValue({
+          id: 'tx-gasto-123',
+          businessId: 'sede-1',
+          amount: 35000,
+        });
 
       await adapter.updateTransaction(
         'sede-1',
@@ -101,20 +154,24 @@ describe('PrismaFinanceDataAdapter - Bitácora de Auditoría', () => {
         'actor-wp-57300',
       );
 
-      expect(prismaMock.bitacoraAuditoria.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          sedeId: 'sede-1',
-          usuarioId: 'actor-wp-57300',
-          operacion: 'ACTUALIZACION',
-          entidad: 'Gasto',
-          entidadId: 'tx-gasto-123',
-          valorAnterior: expect.objectContaining({
-            id: 'tx-gasto-123',
-            monto: 30000,
-          }),
-          valorNuevo: { amount: 35000, description: 'Almuerzo ejecutivo' },
-          motivo: 'updateTransaction',
-        }),
+      expect(prismaMock.bitacoraAuditoria.create).toHaveBeenCalledTimes(1);
+
+      const firstCallArgs = prismaMock.bitacoraAuditoria.create.mock
+        .calls[0] as [AuditCreatePayload];
+      const auditData = firstCallArgs[0].data;
+
+      expect(auditData).toMatchObject({
+        sedeId: 'sede-1',
+        usuarioId: 'actor-wp-57300',
+        operacion: 'ACTUALIZACION',
+        entidad: 'Gasto',
+        entidadId: 'tx-gasto-123',
+        valorAnterior: {
+          id: 'tx-gasto-123',
+          monto: 30000,
+        },
+        valorNuevo: { amount: 35000, description: 'Almuerzo ejecutivo' },
+        motivo: 'updateTransaction',
       });
     });
   });
