@@ -46,6 +46,62 @@ const QUICK_PROMPTS: QuickPrompt[] = [
   },
 ];
 
+const REGISTER_ACTION = {
+  label: "Registrarme en Luka",
+  href: "/register",
+};
+
+const OUT_OF_SCOPE_RESPONSE =
+  "No estoy habilitado para responder preguntas que no estén relacionadas con la gestión de tu negocio. Puedes preguntarme por tus ventas, gastos, inventario, rentabilidad, fiados o reportes.";
+
+type FallbackResponse = Pick<ChatMessage, "text"> &
+  Partial<Pick<ChatMessage, "actionButton">>;
+
+const isWithinLukaScope = (query: string) => {
+  const normalizedQuery = query.toLowerCase();
+
+  return [
+    "luka",
+    "hola",
+    "buenas",
+    "qué puedes hacer",
+    "que puedes hacer",
+    "negocio",
+    "empresa",
+    "tienda",
+    "venta",
+    "vendi",
+    "ingreso",
+    "gasto",
+    "compra",
+    "compre",
+    "egreso",
+    "costo",
+    "rentab",
+    "margen",
+    "balance",
+    "fiad",
+    "cobrar",
+    "abono",
+    "deuda",
+    "cliente",
+    "inventario",
+    "stock",
+    "producto",
+    "existencia",
+    "reporte",
+    "informe",
+    "resumen",
+    "estadística",
+    "estadistica",
+    "registrar",
+    "movimiento",
+    "whatsapp",
+    "plan",
+    "suscrip",
+  ].some((keyword) => normalizedQuery.includes(keyword));
+};
+
 const LukaChatContext = createContext<LukaChatContextType | undefined>(undefined);
 
 export function LukaChatProvider({ children }: { children: ReactNode }) {
@@ -58,19 +114,66 @@ export function LukaChatProvider({ children }: { children: ReactNode }) {
     setHeroDockPulse((prev) => prev + 1);
   };
 
-  const getFallbackResponse = (query: string): string => {
+  const getFallbackResponse = (query: string): FallbackResponse => {
     const q = query.toLowerCase();
 
+    if (q.includes("hola") || q.includes("buenas") || q.includes("qué puedes hacer") || q.includes("que puedes hacer")) {
+      return {
+        text: "Puedo ayudarte a entender y organizar las finanzas de tu negocio. En WhatsApp, Luka responde consultas sobre ventas, gastos, rentabilidad, inventario y cartera, y también puede ayudarte a registrar movimientos. Regístrate para conectar tus datos y comenzar.",
+        actionButton: REGISTER_ACTION,
+      };
+    }
+
+    if (q.includes("inventario") || q.includes("stock") || q.includes("producto") || q.includes("existencia")) {
+      return {
+        text: "Si necesitas controlar tu inventario, Luka puede consultar existencias, detectar productos con poco stock y ayudarte a revisar qué artículos se mueven más. Puedes hacerle estas preguntas por WhatsApp después de registrar tu negocio.",
+        actionButton: REGISTER_ACTION,
+      };
+    }
+
+    if (q.includes("reporte") || q.includes("informe") || q.includes("resumen") || q.includes("estadística") || q.includes("estadistica")) {
+      return {
+        text: "Luka convierte tus movimientos en reportes fáciles de entender: ventas, gastos, flujo de caja, rentabilidad y cartera. Pídele el resumen que necesites por WhatsApp y regístrate para recibir análisis basados en tus propios datos.",
+        actionButton: REGISTER_ACTION,
+      };
+    }
+
+    if (q.includes("registrar") || q.includes("anota") || q.includes("vendí") || q.includes("vendi") || q.includes("compré") || q.includes("compre") || q.includes("pagó") || q.includes("pago")) {
+      return {
+        text: "Puedes contarle a Luka lo que ocurrió en tu negocio con un mensaje sencillo. Por WhatsApp, te ayuda a registrar ventas, compras, gastos y abonos para que luego puedas consultarlos en tus reportes. Regístrate para empezar a guardar tus movimientos.",
+        actionButton: REGISTER_ACTION,
+      };
+    }
+
     if (q.includes("venta") || q.includes("ingreso") || q.includes("ganancia")) {
-      return "Según los registros actuales, tus ingresos de contado y abonos se mantienen estables. Puedes consultar el desglose gráfico en tiempo real desde tu Panel Financiero.";
+      return {
+        text: "Si le escribes a Luka por WhatsApp, puedes pedirle un resumen de tus ventas para cualquier periodo: separa lo vendido de contado y fiado, compara con el mes anterior y señala tus días más fuertes. Registra tu negocio para consultar tus cifras reales y recibir el detalle completo.",
+        actionButton: REGISTER_ACTION,
+      };
     }
+
     if (q.includes("gasto") || q.includes("compra") || q.includes("egreso")) {
-      return "Tus egresos principales corresponden a compras de mercancía y gastos fijos de operación. Te sugiero revisar la sección de proveedores para optimizar costos.";
+      return {
+        text: "¿Quieres entender en qué se va el dinero? Desde WhatsApp, Luka organiza tus compras y gastos por categoría, descubre cuáles pesan más y te alerta sobre aumentos o costos que conviene revisar. Registra tu negocio para analizar tus movimientos reales con mayor detalle.",
+        actionButton: REGISTER_ACTION,
+      };
     }
+
     if (q.includes("balance") || q.includes("rentabilidad")) {
-      return "Tu balance neto está calculado sobre ingresos reales menos gastos y compras. Mantienes un flujo de caja positivo.";
+      return {
+        text: "Con tus datos conectados, puedes preguntarle a Luka en WhatsApp si el negocio está siendo rentable: calculará el balance neto, estimará tu margen y explicará qué movimientos están afectando el resultado. Registra tu negocio para obtener el cálculo basado en tus datos y recomendaciones más precisas.",
+        actionButton: REGISTER_ACTION,
+      };
     }
-    return "Entendido. He analizado la información de tu negocio. Si deseas registrar un nuevo movimiento o consultar reportes específicos, dímelo y te asisto.";
+
+    if (q.includes("fiad") || q.includes("cobrar") || q.includes("pendiente")) {
+      return {
+        text: "Para controlar los fiados, envíale una consulta a Luka por WhatsApp: te mostrará cuánto está pendiente, qué cuentas llevan más tiempo abiertas y cómo avanzan los abonos de cada cliente. Registra tu negocio para llevar el control de tu cartera actualizada.",
+        actionButton: REGISTER_ACTION,
+      };
+    }
+
+    return { text: OUT_OF_SCOPE_RESPONSE };
   };
 
   const sendMessage = async (text: string) => {
@@ -85,6 +188,20 @@ export function LukaChatProvider({ children }: { children: ReactNode }) {
 
     setMessages((prev) => [...prev, userMsg]);
     setIsTyping(true);
+
+    if (!isWithinLukaScope(text)) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: (Date.now() + 1).toString(),
+          sender: "assistant",
+          text: OUT_OF_SCOPE_RESPONSE,
+          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        },
+      ]);
+      setIsTyping(false);
+      return;
+    }
 
     try {
       // /ai/* identifica al negocio por su SEDE, no por el Negocio: es donde
@@ -113,7 +230,7 @@ export function LukaChatProvider({ children }: { children: ReactNode }) {
       const assistantMsg: ChatMessage = {
         id: (Date.now() + 1).toString(),
         sender: "assistant",
-        text: result.answer || getFallbackResponse(text),
+        ...(result.answer ? { text: result.answer } : getFallbackResponse(text)),
         timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       };
 
@@ -123,7 +240,7 @@ export function LukaChatProvider({ children }: { children: ReactNode }) {
       const assistantMsg: ChatMessage = {
         id: (Date.now() + 1).toString(),
         sender: "assistant",
-        text: getFallbackResponse(text),
+        ...getFallbackResponse(text),
         timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       };
       setMessages((prev) => [...prev, assistantMsg]);

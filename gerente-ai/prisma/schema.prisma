@@ -15,10 +15,18 @@ model Usuario {
   password               String
   googleId               String?               @unique
   emailVerificado        Boolean               @default(false)
+  intentosFallidos       Int                   @default(0)
+  bloqueadoHasta         DateTime?
   rolGlobal              RolGlobal             @default(CLIENTE)
   mfaSecret              String?
   mfaActivado            Boolean               @default(false)
   mfaActivadoEn          DateTime?
+  /// Códigos MFA fallidos desde el último acierto o bloqueo.
+  mfaIntentosFallidos    Int                   @default(0)
+  /// Hasta cuándo está bloqueada la verificación MFA por intentos fallidos.
+  mfaBloqueadoHasta      DateTime?
+  /// Paso de tiempo TOTP (bloques de 30 s) del último código aceptado.
+  mfaUltimoPaso          Int?
   plan                   Int                   @default(1)
   createdAt              DateTime              @default(now())
   consentimientosLegales ConsentimientoLegal[]
@@ -70,29 +78,30 @@ model Negocio {
 }
 
 model Sede {
-  id               String            @id @default(uuid())
-  nombre           String
-  telefono         String?           @unique
-  whatsappUserId   String?           @unique
-  whatsappUsername String?
-  direccion        String?
-  contexto         String?
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
-  negocioId        String
-  abonos           Abono[]
-  clientes         Cliente[]
-  compras          Compra[]
-  consumosIa       ConsumoIa[]
-  gastos           Gasto[]
-  mensajes         Mensaje[]
-  productos        Producto[]
-  proveedores      Proveedor[]
-  repartos         RepartoUtilidad[]
-  reportes         Reporte[]
-  negocio          Negocio           @relation(fields: [negocioId], references: [id], onDelete: Cascade)
-  usuariosSede     UsuarioSede[]
-  ventas           Venta[]
+  id                 String              @id @default(uuid())
+  nombre             String
+  telefono           String?             @unique
+  whatsappUserId     String?             @unique
+  whatsappUsername   String?
+  direccion          String?
+  contexto           String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  negocioId          String
+  abonos             Abono[]
+  clientes           Cliente[]
+  compras            Compra[]
+  consumosIa         ConsumoIa[]
+  gastos             Gasto[]
+  mensajes           Mensaje[]
+  productos          Producto[]
+  proveedores        Proveedor[]
+  repartos           RepartoUtilidad[]
+  reportes           Reporte[]
+  bitacorasAuditoria BitacoraAuditoria[]
+  negocio            Negocio             @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  usuariosSede       UsuarioSede[]
+  ventas             Venta[]
 
   @@index([negocioId, createdAt])
 }
@@ -156,6 +165,7 @@ model Mensaje {
 
   @@index([sedeId, fecha])
   @@index([wamid])
+  @@index([fecha])
 }
 
 model Reporte {
@@ -424,6 +434,33 @@ model ConsumoIa {
   @@index([providerId, createdAt])
   @@index([feature, createdAt])
   @@index([exitosa, createdAt])
+}
+
+/// Bitácora de auditoría para operaciones destructivas (eliminación, sustitución, corrección).
+/// Registra quién ejecutó la acción, sobre qué entidad, cuándo ocurrió y el snapshot del valor anterior.
+model BitacoraAuditoria {
+  id            String   @id @default(uuid())
+  sedeId        String
+  /// Quién ejecutó la acción: ID del usuario, teléfono/remitente de WhatsApp o "sistema".
+  usuarioId     String?
+  /// Tipo de operación: "ELIMINACION", "SUSTITUCION", "ACTUALIZACION".
+  operacion     String
+  /// Entidad afectada: "Venta", "Gasto", etc.
+  entidad       String
+  /// ID del registro original afectado.
+  entidadId     String
+  /// Snapshot íntegro de la fila antes de ser borrada o modificada (permite reversibilidad).
+  valorAnterior Json
+  /// Snapshot de los nuevos datos o cambios (null en caso de eliminación física).
+  valorNuevo    Json?
+  /// Motivo o contexto que originó la operación destructiva.
+  motivo        String?
+  createdAt     DateTime @default(now())
+
+  sede Sede @relation(fields: [sedeId], references: [id], onDelete: Cascade)
+
+  @@index([sedeId, createdAt])
+  @@index([entidad, entidadId])
 }
 
 enum Role {

@@ -7,8 +7,12 @@ import { GuestRoute } from "./GuestRoute";
 import { ProtectedRoute } from "./ProtectedRoute";
 import { MasterRoute } from "./MasterRoute";
 import {
+  AboutPage,
+  ContactPage,
   FeaturesPage,
+  HelpCenterPage,
   LandingPageView,
+  UseCasesPage,
 } from "@/features/landing-page";
 
 // ============================================================
@@ -260,6 +264,30 @@ export function AppRoutes() {
       <Route
         path="/caracteristicas"
         element={<FeaturesPage />}
+      />
+
+      {/* Casos de uso */}
+      <Route
+        path="/usos"
+        element={<UseCasesPage />}
+      />
+
+      {/* Centro de ayuda */}
+      <Route
+        path="/ayuda"
+        element={<HelpCenterPage />}
+      />
+
+      {/* Contacto */}
+      <Route
+        path="/contacto"
+        element={<ContactPage />}
+      />
+
+      {/* Sobre nosotros */}
+      <Route
+        path="/nosotros"
+        element={<AboutPage />}
       />
 
       {/* ======================================================

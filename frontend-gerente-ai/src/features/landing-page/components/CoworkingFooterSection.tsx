@@ -275,7 +275,16 @@ export function CoworkingFooterSection() {
 
                   <li>
                     <a
-                      href="/casos-de-uso"
+                      href="/ayuda"
+                      className="transition-colors hover:text-emerald-300"
+                    >
+                      Centro de ayuda
+                    </a>
+                  </li>
+
+                  <li>
+                    <a
+                      href="/usos"
                       className="transition-colors hover:text-emerald-300"
                     >
                       Casos de uso
@@ -293,10 +302,10 @@ export function CoworkingFooterSection() {
                 <ul className="space-y-3 text-sm font-medium text-white/50">
                   <li>
                     <a
-                      href="/faq"
+                      href="/nosotros"
                       className="transition-colors hover:text-emerald-300"
                     >
-                      Preguntas frecuentes
+                      Sobre nosotros
                     </a>
                   </li>
 

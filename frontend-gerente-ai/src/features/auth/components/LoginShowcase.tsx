@@ -130,11 +130,11 @@ export function LoginShowcase() {
         }}
         className="
           absolute
-          right-6
-          top-7
+          right-8
+          top-8
           z-30
-          sm:right-10
-          lg:right-14
+          sm:right-12
+          sm:top-12
         "
       >
         <Link
