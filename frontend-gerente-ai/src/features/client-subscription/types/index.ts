@@ -13,13 +13,19 @@ export interface DatosFacturacion {
   numeroDocumento: string;
 }
 
-export interface DatosTarjeta {
-  numero: string;
-  nombreTitular: string;
-  expiracion: string; // MM/AA
-  cvv: string;
-  cuotas: number;
-}
+/**
+ * ============================================================
+ * SEGURIDAD Y CUMPLIMIENTO PCI DSS:
+ * ============================================================
+ * NUNCA declarar ni recopilar tipos o campos para datos sensibles de tarjeta
+ * (número de tarjeta/PAN, CVV/CVC, fecha de expiración) en esta aplicación.
+ * 
+ * Luka AI delega el 100% del procesamiento de tarjetas a pasarelas certificadas
+ * (Wompi Widget / Hosted Checkout / Tokenización directa en cliente de Wompi).
+ * Capturar o manipular estos datos directamente en nuestro frontend o backend
+ * colocaría inmediatamente a toda la infraestructura bajo el alcance estricto
+ * de auditoría y responsabilidad de PCI DSS (SAQ D / SAQ A-EP).
+ */
 
 export interface DatosPse {
   bancoCodigo: string;
@@ -36,7 +42,6 @@ export interface CheckoutPayload {
   ciclo: CicloFacturacion;
   metodo: MetodoPagoWompi;
   facturacion: DatosFacturacion;
-  tarjeta?: DatosTarjeta;
   pse?: DatosPse;
   nequi?: DatosNequi;
 }
