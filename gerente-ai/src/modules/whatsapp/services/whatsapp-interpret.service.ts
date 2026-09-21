@@ -192,6 +192,19 @@ export class WhatsappInterpretService {
     private readonly config: ConfigService,
   ) {}
 
+  /**
+   * Depuracion puntual: solo con DEBUG_MESSAGE_CONTENT activo se escribe el
+   * contenido del mensaje en los logs. Fuera de eso basta con su longitud.
+   */
+  private get logMessageContent(): boolean {
+    const raw = this.config
+      .get<string>('DEBUG_MESSAGE_CONTENT')
+      ?.trim()
+      .toLowerCase();
+
+    return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'si';
+  }
+
   async interpret(dto: InterpretMessageDto): Promise<InterpretResponse> {
     const startedAt = Date.now();
     const sender = readSender(dto);
@@ -204,9 +217,19 @@ export class WhatsappInterpretService {
       );
     }
 
+    // El texto trae nombres y deudas de los clientes, asi que por defecto solo
+    // se registra su tamano; el tipo de intencion se loguea al cerrar el turno,
+    // cuando ya se conoce. El contenido queda detras de DEBUG_MESSAGE_CONTENT,
+    // para depuracion puntual (mismo criterio que AI_LOG_PROMPTS).
+    const marcas = `${dto.quotedMessageId ? ' [responde a un mensaje citado]' : ''}${dto.media ? ` [${dto.media.kind}]` : ''}`;
+
     this.logger.log(
-      `Mensaje de ${dto.name ?? 'sin nombre'} (${describeSender(sender)}): "${dto.message.slice(0, 120)}"${dto.quotedMessageId ? ' [responde a un mensaje citado]' : ''}${dto.media ? ` [${dto.media.kind}]` : ''}`,
+      `Mensaje de ${dto.name ?? 'sin nombre'} (${describeSender(sender)}): ${dto.message.length} caracteres${marcas}`,
     );
+
+    if (this.logMessageContent) {
+      this.logger.debug(`Contenido: "${dto.message.slice(0, 120)}"`);
+    }
 
     // ---- 1. Duplicados ----------------------------------------------------
     if (!this.dedupe.isFirstTime(dto.messageId)) {
