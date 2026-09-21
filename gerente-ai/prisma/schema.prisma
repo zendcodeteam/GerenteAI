@@ -18,6 +18,15 @@ model Usuario {
   intentosFallidos       Int                   @default(0)
   bloqueadoHasta         DateTime?
   rolGlobal              RolGlobal             @default(CLIENTE)
+  mfaSecret              String?
+  mfaActivado            Boolean               @default(false)
+  mfaActivadoEn          DateTime?
+  /// Códigos MFA fallidos desde el último acierto o bloqueo.
+  mfaIntentosFallidos    Int                   @default(0)
+  /// Hasta cuándo está bloqueada la verificación MFA por intentos fallidos.
+  mfaBloqueadoHasta      DateTime?
+  /// Paso de tiempo TOTP (bloques de 30 s) del último código aceptado.
+  mfaUltimoPaso          Int?
   plan                   Int                   @default(1)
   createdAt              DateTime              @default(now())
   consentimientosLegales ConsentimientoLegal[]

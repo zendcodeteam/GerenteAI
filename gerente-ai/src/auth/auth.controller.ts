@@ -26,6 +26,7 @@ import { ResetPasswordDto } from './dto/reset-password.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { ConfirmarCambioEmailDto } from './dto/confirmar-cambio-email.dto';
 import { CambiarEmailDto } from './dto/cambiar-email.dto';
+import { ActivarMfaDto, VerificarMfaDto } from './dto/mfa.dto';
 
 type AuthUser = {
   userId: string;
@@ -42,7 +43,9 @@ type RequestWithIp = {
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+  ) {}
 
   // ============================================================
   // REGISTRO TRADICIONAL
@@ -64,7 +67,9 @@ export class AuthController {
   // ============================================================
 
   @Get('verificar-email')
-  verificarEmail(@Query('token') token: string) {
+  verificarEmail(
+    @Query('token') token: string,
+  ) {
     return this.authService.verificarEmail(token);
   }
 
@@ -72,8 +77,28 @@ export class AuthController {
   // LOGIN TRADICIONAL
   // ============================================================
 
+  /**
+   * Inicio de sesión mediante correo y contraseña.
+   *
+   * CLIENTE:
+   *   Devuelve directamente la sesión.
+   *
+   * MASTER sin MFA:
+   *   Devuelve las instrucciones/token temporal para activar MFA.
+   *
+   * MASTER con MFA:
+   *   Devuelve un token temporal para completar la verificación
+   *   del segundo factor.
+   *
+   * IMPORTANTE:
+   *
+   * Nunca debe persistirse un access_token definitivo en el
+   * frontend mientras un MASTER tenga MFA pendiente.
+   */
   @Post('login')
-  login(@Body() dto: LoginDto) {
+  login(
+    @Body() dto: LoginDto,
+  ) {
     return this.authService.login(dto);
   }
 
@@ -87,14 +112,16 @@ export class AuthController {
    * Este endpoint es público.
    *
    * IMPORTANTE:
-   * Este endpoint SOLO inicia sesión.
    *
-   * Si el correo de Google no pertenece a una cuenta existente
-   * de Luka, AuthService devuelve un error indicando que debe
-   * utilizar el flujo de registro.
+   * Google únicamente valida la identidad inicial.
+   *
+   * Si la cuenta pertenece a un MASTER, el flujo continúa
+   * obligatoriamente por MFA antes de emitir la sesión definitiva.
    */
   @Post('google')
-  googleLogin(@Body() dto: GoogleLoginDto) {
+  googleLogin(
+    @Body() dto: GoogleLoginDto,
+  ) {
     return this.authService.googleLogin(dto);
   }
 
@@ -127,8 +154,6 @@ export class AuthController {
    *   Sede principal
    *   UsuarioSede
    *   Consentimientos legales
-   *
-   * y finalmente devuelve el JWT de sesión.
    */
   @Post('google/register')
   googleRegister(
@@ -138,6 +163,99 @@ export class AuthController {
     return this.authService.googleRegister(
       dto,
       this.getClientIp(req),
+    );
+  }
+
+  // ============================================================
+  // MFA - ACTIVAR SEGUNDO FACTOR
+  // ============================================================
+
+  /**
+   * Inicia la activación de MFA para un usuario MASTER.
+   *
+   * Este endpoint NO utiliza JwtAuthGuard porque el MASTER todavía
+   * no tiene una sesión definitiva cuando MFA es obligatorio.
+   *
+   * Recibe el token temporal entregado por el login.
+   *
+   * El backend:
+   *
+   *   1. Valida el token temporal.
+   *   2. Comprueba que pertenece a un MASTER.
+   *   3. Genera/configura el secreto TOTP.
+   *   4. Devuelve la información necesaria para configurar
+   *      Google Authenticator, Microsoft Authenticator, Authy, etc.
+   *
+   * IMPORTANTE:
+   *
+   * Este endpoint NO crea todavía una sesión definitiva.
+   */
+  @Post('mfa/activar')
+  activarMfa(
+    @Body() body: ActivarMfaDto,
+  ) {
+    return this.authService.activarMfa(
+      body.mfaToken,
+    );
+  }
+
+  // ============================================================
+  // MFA - CONFIRMAR ACTIVACIÓN
+  // ============================================================
+
+  /**
+   * Confirma que el MASTER configuró correctamente su
+   * aplicación autenticadora.
+   *
+   * El usuario introduce el código TOTP de seis dígitos.
+   *
+   * Si el código es correcto:
+   *
+   *   - MFA queda activado.
+   *   - Se invalida el flujo temporal de activación.
+   *   - Se genera la sesión definitiva.
+   *
+   * Si el código es incorrecto:
+   *   - No se activa MFA.
+   *   - No se entrega access_token.
+   */
+  @Post('mfa/verificar-activacion')
+  verificarActivacionMfa(
+    @Body() body: VerificarMfaDto,
+  ) {
+    return this.authService.verificarActivacionMfa(
+      body.mfaToken,
+      body.codigo,
+    );
+  }
+
+  // ============================================================
+  // MFA - VERIFICAR LOGIN
+  // ============================================================
+
+  /**
+   * Completa el inicio de sesión de un usuario MASTER que
+   * ya tiene MFA activado.
+   *
+   * El usuario proporciona:
+   *
+   *   - Token temporal del login.
+   *   - Código TOTP de su aplicación autenticadora.
+   *
+   * Solamente después de verificar correctamente el código,
+   * AuthService genera el access_token definitivo.
+   *
+   * Este endpoint NO utiliza JwtAuthGuard porque precisamente
+   * su objetivo es convertir una autenticación pendiente en
+   * una sesión autenticada.
+   */
+  @Post('mfa/verificar')
+  verificarMfa(
+    @Body() body: VerificarMfaDto,
+  ) {
+    return this.authService.verificarMfa(
+      body.mfaToken,
+      body.codigo,
     );
   }
 
@@ -154,8 +272,11 @@ export class AuthController {
    *
    * Se toma únicamente la primera IP de la cadena.
    */
-  private getClientIp(req: RequestWithIp): string {
-    const forwardedFor = req.headers['x-forwarded-for'];
+  private getClientIp(
+    req: RequestWithIp,
+  ): string {
+    const forwardedFor =
+      req.headers['x-forwarded-for'];
 
     if (forwardedFor) {
       const firstIp = forwardedFor
@@ -168,7 +289,8 @@ export class AuthController {
       }
     }
 
-    const realIp = req.headers['x-real-ip']?.trim();
+    const realIp =
+      req.headers['x-real-ip']?.trim();
 
     if (realIp) {
       return realIp;
@@ -200,8 +322,12 @@ export class AuthController {
 
   @Get('usuarios/me')
   @UseGuards(JwtAuthGuard)
-  getPerfil(@CurrentUser() user: AuthUser) {
-    return this.authService.getPerfil(user.userId);
+  getPerfil(
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.authService.getPerfil(
+      user.userId,
+    );
   }
 
   // ============================================================
@@ -214,8 +340,12 @@ export class AuthController {
    */
   @Get('usuarios')
   @UseGuards(JwtAuthGuard)
-  buscarPorEmail(@Query('email') email?: string) {
-    return this.authService.buscarPorEmail(email);
+  buscarPorEmail(
+    @Query('email') email?: string,
+  ) {
+    return this.authService.buscarPorEmail(
+      email,
+    );
   }
 
   // ============================================================
@@ -242,7 +372,9 @@ export class AuthController {
   reenviarVerificacion(
     @Body() dto: ReenviarVerificacionDto,
   ) {
-    return this.authService.reenviarVerificacion(dto);
+    return this.authService.reenviarVerificacion(
+      dto,
+    );
   }
 
   // ============================================================
@@ -252,7 +384,9 @@ export class AuthController {
   @Patch('usuarios/me')
   @UseGuards(JwtAuthGuard)
   updateUsuario(
-    @CurrentUser() user: { userId: string },
+    @CurrentUser() user: {
+      userId: string;
+    },
     @Body() dto: UpdateUsuarioDto,
   ) {
     return this.authService.updateUsuario(
@@ -266,8 +400,12 @@ export class AuthController {
   // ============================================================
 
   @Post('forgot-password')
-  forgotPassword(@Body() dto: ForgotPasswordDto) {
-    return this.authService.forgotPassword(dto);
+  forgotPassword(
+    @Body() dto: ForgotPasswordDto,
+  ) {
+    return this.authService.forgotPassword(
+      dto,
+    );
   }
 
   // ============================================================
@@ -275,8 +413,12 @@ export class AuthController {
   // ============================================================
 
   @Post('reset-password')
-  resetPassword(@Body() dto: ResetPasswordDto) {
-    return this.authService.resetPassword(dto);
+  resetPassword(
+    @Body() dto: ResetPasswordDto,
+  ) {
+    return this.authService.resetPassword(
+      dto,
+    );
   }
 
   // ============================================================
@@ -286,7 +428,9 @@ export class AuthController {
   @Post('cambiar-email')
   @UseGuards(JwtAuthGuard)
   cambiarEmail(
-    @CurrentUser() user: { userId: string },
+    @CurrentUser() user: {
+      userId: string;
+    },
     @Body() dto: CambiarEmailDto,
   ) {
     return this.authService.cambiarEmail(
@@ -303,6 +447,8 @@ export class AuthController {
   confirmarCambioEmail(
     @Body() dto: ConfirmarCambioEmailDto,
   ) {
-    return this.authService.confirmarCambioEmail(dto);
+    return this.authService.confirmarCambioEmail(
+      dto,
+    );
   }
 }
