@@ -3648,3 +3648,258 @@ describe('WhatsAppMessageService · escoger varios de una lista', () => {
     expect(visto.system).toContain('solo el 2 y el 3');
   });
 });
+
+// ===========================================================================
+// SCRUM-22 · Identificar el movimiento concreto que se pide borrar
+//
+// Tres casos que fallaban en producción con el prompt v17 ya desplegado:
+//
+//   1. "borra todos los registros de hoy" tiene que listar los de esa fecha.
+//   2. Citar un mensaje de Luka con un movimiento y decir "bórralo".
+//   3. Citar un mensaje con varios y decir "borra el primer registro": el
+//      primero es el primero que Luka nombró, no el más reciente ni otro.
+//
+// El fallo de fondo: `deleteAll` se comprobaba antes que todo lo demás y
+// cortaba el método. Cuando el usuario contestaba "el 1" a una lista, el
+// modelo seguía devolviendo deleteAll —el hilo venía de un borrado masivo— y
+// se volvía a ofrecer borrar el día entero.
+// ===========================================================================
+
+const DEL_DIA: Transaction[] = [
+  {
+    id: 'transporte',
+    businessId: 'b1',
+    date: '2026-09-21',
+    description: 'Transporte',
+    category: 'transporte',
+    amount: 5_000,
+    type: 'expense',
+    currency: 'COP',
+    source: 'whatsapp',
+    createdAt: '2026-09-21T14:00:00.000Z',
+  },
+  {
+    id: 'mercancia',
+    businessId: 'b1',
+    date: '2026-09-21',
+    description: 'Compra de mercancía',
+    category: 'mercancia',
+    amount: 40_000,
+    type: 'expense',
+    currency: 'COP',
+    source: 'whatsapp',
+    createdAt: '2026-09-21T14:00:01.000Z',
+  },
+  {
+    id: 'venta',
+    businessId: 'b1',
+    date: '2026-09-21',
+    description: 'Venta del día',
+    category: 'ventas',
+    amount: 50_000,
+    type: 'income',
+    currency: 'COP',
+    source: 'whatsapp',
+    createdAt: '2026-09-21T14:00:02.000Z',
+  },
+];
+
+/** Como si el usuario citara el mensaje donde Luka reportó esos movimientos. */
+function citandoMensaje(ids: string[]) {
+  return {
+    ...BASE_REQUEST,
+    persist: true,
+    quotedMessage: {
+      fromLuka: true,
+      date: '2026-09-21',
+      content: '✅ Registré 2 movimientos: ...',
+      transactionIds: ids,
+    },
+  };
+}
+
+describe('SCRUM-22 · una posición nombrada nunca significa "todo"', () => {
+  it('tras ofrecer borrar el día, "el 1" acota a ese movimiento', async () => {
+    // Esta es la regresión: el modelo sigue devolviendo deleteAll porque el
+    // hilo viene de un borrado masivo, pero el usuario acaba de escoger uno.
+    const { decir, financeData } = buildConversacion(DEL_DIA);
+
+    const lista = await decir({
+      type: 'correction',
+      queryPeriod: 'day',
+      correction: correccion({ action: 'delete', deleteAll: true }),
+    });
+
+    expect(lista.replyText).toContain('TODOS');
+
+    const acotado = await decir({
+      type: 'correction',
+      queryPeriod: 'day',
+      correction: correccion({
+        action: 'delete',
+        deleteAll: true,
+        referenceIndexes: [1],
+      }),
+    });
+
+    expect(acotado.replyText).toContain('este movimiento');
+    expect(acotado.replyText).not.toContain('TODOS');
+
+    await decir({ type: 'confirmation', confirmed: true });
+
+    expect(financeData.deleted).toHaveLength(1);
+  });
+
+  it('"borra todo lo de hoy" sigue funcionando cuando no se escoge nada', async () => {
+    const { decir, financeData } = buildConversacion(DEL_DIA);
+
+    const lista = await decir({
+      type: 'correction',
+      queryPeriod: 'day',
+      correction: correccion({ action: 'delete', deleteAll: true }),
+    });
+
+    expect(lista.replyText).toContain('TODOS');
+    expect(lista.replyText).toContain('no se puede deshacer');
+    expect(financeData.deleted).toEqual([]);
+
+    await decir({
+      type: 'confirmation',
+      confirmed: true,
+      confirmedCount: 3,
+    });
+
+    expect(financeData.deleted).toHaveLength(3);
+  });
+
+  it('nunca borra sin confirmación previa', async () => {
+    const { decir, financeData } = buildConversacion(DEL_DIA);
+
+    await decir({
+      type: 'correction',
+      queryPeriod: 'day',
+      correction: correccion({ action: 'delete', deleteAll: true }),
+    });
+
+    expect(financeData.deleted).toEqual([]);
+  });
+});
+
+describe('SCRUM-22 · citar un mensaje de Luka', () => {
+  it('con un solo movimiento, "bórralo" identifica ese', async () => {
+    const { service, financeData } = buildService(
+      {
+        type: 'correction',
+        correction: correccion({ action: 'delete' }),
+      },
+      DEL_DIA,
+    );
+
+    const pregunta = await service.handleMessage(citandoMensaje(['mercancia']));
+
+    expect(pregunta.replyText).toContain('Compra de mercancía');
+    expect(pregunta.replyText).not.toContain('Transporte');
+    expect(financeData.deleted).toEqual([]);
+  });
+
+  it('"el primer registro" es el primero que Luka nombró', async () => {
+    // El mensaje citado listó transporte y después mercancía. "El primero" es
+    // transporte, aunque mercancía sea más reciente.
+    const { service } = buildService(
+      {
+        type: 'correction',
+        correction: correccion({ action: 'delete', referenceIndexes: [1] }),
+      },
+      DEL_DIA,
+    );
+
+    const pregunta = await service.handleMessage(
+      citandoMensaje(['transporte', 'mercancia']),
+    );
+
+    expect(pregunta.replyText).toContain('Transporte');
+    expect(pregunta.replyText).not.toContain('Compra de mercancía');
+  });
+
+  it('"el segundo" es el segundo de ese mensaje', async () => {
+    const { service } = buildService(
+      {
+        type: 'correction',
+        correction: correccion({ action: 'delete', referenceIndexes: [2] }),
+      },
+      DEL_DIA,
+    );
+
+    const pregunta = await service.handleMessage(
+      citandoMensaje(['transporte', 'mercancia']),
+    );
+
+    expect(pregunta.replyText).toContain('Compra de mercancía');
+    expect(pregunta.replyText).not.toContain('Transporte');
+  });
+
+  it('un deleteAll sobre un mensaje citado no borra el día entero', async () => {
+    // El modelo puede marcar deleteAll por inercia del hilo. La cita manda:
+    // son los movimientos de ese mensaje y ninguno más.
+    const { service } = buildService(
+      {
+        type: 'correction',
+        queryPeriod: 'day',
+        correction: correccion({ action: 'delete', deleteAll: true }),
+      },
+      DEL_DIA,
+    );
+
+    const pregunta = await service.handleMessage(
+      citandoMensaje(['transporte', 'mercancia']),
+    );
+
+    expect(pregunta.replyText).not.toContain('TODOS');
+    expect(pregunta.replyText).toContain('estos 2 movimientos');
+    expect(pregunta.replyText).not.toContain('Venta del día');
+  });
+});
+
+describe('SCRUM-22 · los registros se numeran', () => {
+  it('con varios movimientos, la lista lleva números', async () => {
+    // Sin números, "borra el primero" obliga al usuario y al modelo a deducir
+    // el orden, y el modelo lo deducía mal.
+    const { service } = buildService({
+      type: 'expense',
+      movements: [
+        movimiento({ amount: 5_000, category: 'transporte', concept: 'Taxi' }),
+        movimiento({
+          amount: 40_000,
+          category: 'mercancia',
+          concept: 'Mercancía',
+        }),
+      ],
+      responseText: 'ok',
+    });
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    expect(result.replyText).toContain('1)');
+    expect(result.replyText).toContain('2)');
+  });
+
+  it('con uno solo no se numera nada', async () => {
+    const { service } = buildService({
+      type: 'expense',
+      movements: [
+        movimiento({ amount: 5_000, category: 'transporte', concept: 'Taxi' }),
+      ],
+      responseText: '✅ Registré un gasto de $5.000.',
+    });
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    expect(result.replyText).not.toContain('1)');
+  });
+});
