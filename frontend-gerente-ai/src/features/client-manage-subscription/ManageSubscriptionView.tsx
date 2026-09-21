@@ -1,28 +1,23 @@
 import { useEffect, useState } from "react";
 import { 
   Zap, 
-  History, 
   ShieldCheck, 
   CreditCard as CardIcon, 
-  Building2, 
-  MessageSquare, 
   Phone, 
   Sparkles, 
-  CheckCircle2, 
-  ArrowRight,
-  RefreshCw,
-  AlertTriangle,
   LayoutDashboard,
   MessageCircle
 } from "lucide-react";
 import { Link } from "react-router";
-import { motion } from "motion/react";
 import { lukaWhatsappUrl } from "@/lib/whatsapp";
+import { assistantApi } from "@/features/assistant/api/assistantApi";
+import { historialDePagos } from "@/features/client-subscription/services/pagosApi";
+import type { Pago } from "@/features/client-subscription/services/pagosApi";
+import { profileApi } from "@/features/shared-profile/api/profileApi";
+import type { Sede } from "@/features/shared-profile/types";
 import { 
   planesApi, 
   PlanBackend, 
-  MENSAJES_IA_POR_PLAN, 
-  DESCRIPCIONES_POR_PLAN, 
   PLANES_FALLBACK 
 } from "@/shared/api/planesApi";
 
@@ -32,20 +27,29 @@ export function ManageSubscriptionView() {
   const [catalogo, setCatalogo] = useState<PlanBackend[]>(PLANES_FALLBACK);
   const [planActualId, setPlanActualId] = useState<number>(1);
   const [planVenceEl, setPlanVenceEl] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [aiUsage, setAiUsage] = useState<{ used: number; limit: number } | null>(null);
+  const [sedes, setSedes] = useState<Sede[]>([]);
+  const [ultimoPago, setUltimoPago] = useState<Pago | null>(null);
 
   const negocioId = localStorage.getItem("active_business_id") || "";
   const negocioNombre = localStorage.getItem("active_business_name") || "Comercio Principal";
 
   const cargarDatos = async () => {
     try {
-      setIsLoading(true);
-      const [planes, negocio] = await Promise.all([
+      const [planes, negocio, usageResponse, sedesResponse, pagosResponse] = await Promise.all([
         planesApi.getPlanesCatalogo(),
         negocioId ? planesApi.getNegocioPlan(negocioId) : Promise.resolve(null),
+        negocioId ? assistantApi.getUsage(negocioId).catch(() => null) : Promise.resolve(null),
+        negocioId ? profileApi.getSedes(negocioId).catch(() => []) : Promise.resolve([]),
+        negocioId ? historialDePagos(negocioId).catch(() => []) : Promise.resolve([]),
       ]);
 
       setCatalogo(planes);
+      setAiUsage(usageResponse?.data?.quota ?? null);
+      setSedes(Array.isArray(sedesResponse) ? sedesResponse : []);
+      setUltimoPago(
+        pagosResponse.find((pago) => pago.estado === "APROBADO") ?? null,
+      );
 
       // Revisamos si hay plan simulado guardado
       const localSimulatedPlan = localStorage.getItem(`business_plan_${negocioId}`);
@@ -55,13 +59,11 @@ export function ManageSubscriptionView() {
         setPlanActualId(Number(localSimulatedPlan));
         setPlanVenceEl(localSimulatedExpires || null);
       } else if (negocio) {
-        setPlanActualId(negocio.plan ?? 1);
+        setPlanActualId(negocio.planVigente ?? negocio.plan ?? 1);
         setPlanVenceEl(negocio.planVenceEl ?? null);
       }
     } catch {
       // Fallback seguro
-    } finally {
-      setIsLoading(false);
     }
   };
 
@@ -86,6 +88,24 @@ export function ManageSubscriptionView() {
 
   const planActual = catalogo.find((p) => p.id === planActualId) || catalogo[0] || PLANES_FALLBACK[0];
   const esGratuito = planActual.precioMensual === 0;
+  const mensajesUsados = aiUsage?.used ?? 0;
+  const limiteMensajes = aiUsage?.limit ?? 0;
+  const consumoIAPorcentaje = Number.isFinite(limiteMensajes) && limiteMensajes > 0
+    ? Math.min(100, (mensajesUsados / limiteMensajes) * 100)
+    : 0;
+  const sedesConLinea = sedes.filter(
+    (sede) => Boolean(sede.telefono || sede.whatsappUserId || sede.whatsappUsername),
+  ).length;
+  const tipoPago = ultimoPago?.metodoPago?.tipo;
+  const nombreMetodoPago = tipoPago === "CARD"
+    ? "Tarjeta"
+    : tipoPago === "PSE"
+      ? "PSE"
+      : tipoPago === "NEQUI"
+        ? "Nequi"
+        : tipoPago === "BANCOLOMBIA_TRANSFER"
+          ? "Transferencia Bancolombia"
+          : tipoPago || "Método no especificado";
 
   const fechaFormateada = planVenceEl 
     ? new Date(planVenceEl).toLocaleDateString("es-CO", { 
@@ -203,27 +223,27 @@ export function ManageSubscriptionView() {
               <h3 className="font-bold text-foreground text-sm">Líneas de WhatsApp</h3>
             </div>
             <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md">
-              {planActual.maxSedes === 1 ? "1 Sede" : `Hasta ${planActual.maxSedes} Sedes`}
+              {planActual.maxSedes <= 0 ? "Sedes por definir" : planActual.maxSedes === 1 ? "1 Sede" : `Hasta ${planActual.maxSedes} Sedes`}
             </span>
           </div>
           
           <div className="flex-1 flex flex-col justify-center">
             <div className="flex justify-between items-end mb-2">
-              <span className="text-2xl font-black text-foreground">1 sede</span>
+              <span className="text-2xl font-black text-foreground">{sedes.length} {sedes.length === 1 ? "sede" : "sedes"}</span>
               <span className="text-xs font-semibold text-muted-foreground mb-0.5">
-                / {planActual.maxSedes} habilitadas
+                / {planActual.maxSedes > 0 ? planActual.maxSedes : "sin límite definido"} habilitadas
               </span>
             </div>
             
             <div className="w-full h-2.5 bg-muted rounded-full overflow-hidden">
               <div 
                 className="h-full bg-gradient-to-r from-emerald-500 to-cyan-500 rounded-full" 
-                style={{ width: `${Math.min(100, (1 / (planActual.maxSedes || 1)) * 100)}%` }}
+                style={{ width: `${planActual.maxSedes > 0 ? Math.min(100, (sedes.length / planActual.maxSedes) * 100) : 0}%` }}
               />
             </div>
             
             <p className="text-[11px] text-muted-foreground mt-3">
-              Cada sede cuenta con su propia línea de WhatsApp y asistente Luka AI independiente.
+              {sedesConLinea} de {sedes.length} {sedes.length === 1 ? "sede tiene" : "sedes tienen"} una línea de WhatsApp configurada.
             </p>
           </div>
         </div>
@@ -238,20 +258,20 @@ export function ManageSubscriptionView() {
               <h3 className="font-bold text-foreground text-sm">Consumo de IA</h3>
             </div>
             <span className="text-xs font-bold text-cyan-600 dark:text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded-md">
-              {MENSAJES_IA_POR_PLAN[planActual.id] || "500 msgs"}
+              {Number.isFinite(limiteMensajes) ? `${PRECIO_FORMATTER.format(limiteMensajes)} mensajes` : "Sin límite"}
             </span>
           </div>
           
           <div className="flex-1 flex flex-col justify-center">
             <div className="flex justify-between items-end mb-2">
-              <span className="text-2xl font-black text-foreground">124</span>
+              <span className="text-2xl font-black text-foreground">{PRECIO_FORMATTER.format(mensajesUsados)}</span>
               <span className="text-xs font-semibold text-muted-foreground mb-0.5">
-                / {planActual.id === 1 ? '100' : planActual.id === 2 ? '600' : planActual.id === 3 ? '1.500' : planActual.id === 4 ? '3.000' : 'Personalizado'} mensajes este ciclo
+                / {Number.isFinite(limiteMensajes) ? PRECIO_FORMATTER.format(limiteMensajes) : "sin límite"} mensajes este ciclo
               </span>
             </div>
             
             <div className="w-full h-2.5 bg-muted rounded-full overflow-hidden">
-              <div className="w-[28%] h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full" />
+              <div className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-blue-500" style={{ width: `${consumoIAPorcentaje}%` }} />
             </div>
             
             <p className="text-[11px] text-muted-foreground mt-3">
@@ -270,17 +290,19 @@ export function ManageSubscriptionView() {
               <h3 className="font-bold text-foreground text-sm">Pasarela de pagos</h3>
             </div>
             <span className="text-[10px] font-black uppercase tracking-wider text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-              Wompi Bancolombia
+              {ultimoPago ? "Último pago aprobado" : "Sin pagos aprobados"}
             </span>
           </div>
 
           <div className="flex items-center gap-3 p-3.5 rounded-2xl border border-border bg-muted/20">
             <div className="w-10 h-7 bg-slate-950 dark:bg-white rounded flex items-center justify-center shrink-0 shadow-sm">
-              <span className="text-white dark:text-slate-950 font-black italic text-[10px]">VISA</span>
+              <span className="text-white dark:text-slate-950 font-black italic text-[9px]">{ultimoPago?.metodoPago?.ultimos4 ? "••••" : "PAGO"}</span>
             </div>
             <div className="overflow-hidden flex-1">
-              <p className="font-bold text-foreground text-xs truncate">Wompi Auto-Debit</p>
-              <p className="text-[10px] text-muted-foreground">PSE / Tarjetas / Nequi</p>
+              <p className="font-bold text-foreground text-xs truncate">
+                {ultimoPago ? `${nombreMetodoPago}${ultimoPago.metodoPago?.ultimos4 ? ` terminada en ${ultimoPago.metodoPago.ultimos4}` : ""}` : "Aún no hay un método registrado"}
+              </p>
+              <p className="text-[10px] text-muted-foreground">{ultimoPago ? `Pago del ${new Date(ultimoPago.createdAt).toLocaleDateString("es-CO")}` : "Completa un pago para verlo aquí"}</p>
             </div>
             <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0" />
           </div>
