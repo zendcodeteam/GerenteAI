@@ -8,6 +8,7 @@ import { ProtectedRoute } from "./ProtectedRoute";
 import {
   FeaturesPage,
   LandingPageView,
+  UseCasesPage,
 } from "@/features/landing-page";
 
 // ============================================================
@@ -229,6 +230,12 @@ export function AppRoutes() {
       <Route
         path="/caracteristicas"
         element={<FeaturesPage />}
+      />
+
+      {/* Casos de uso */}
+      <Route
+        path="/usos"
+        element={<UseCasesPage />}
       />
 
       {/* ======================================================
