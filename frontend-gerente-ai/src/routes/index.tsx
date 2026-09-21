@@ -6,7 +6,10 @@ import { useAuth } from "@/features/auth";
 import { GuestRoute } from "./GuestRoute";
 import { ProtectedRoute } from "./ProtectedRoute";
 import {
+  AboutPage,
+  ContactPage,
   FeaturesPage,
+  HelpCenterPage,
   LandingPageView,
   UseCasesPage,
 } from "@/features/landing-page";
@@ -236,6 +239,24 @@ export function AppRoutes() {
       <Route
         path="/usos"
         element={<UseCasesPage />}
+      />
+
+      {/* Centro de ayuda */}
+      <Route
+        path="/ayuda"
+        element={<HelpCenterPage />}
+      />
+
+      {/* Contacto */}
+      <Route
+        path="/contacto"
+        element={<ContactPage />}
+      />
+
+      {/* Sobre nosotros */}
+      <Route
+        path="/nosotros"
+        element={<AboutPage />}
       />
 
       {/* ======================================================
