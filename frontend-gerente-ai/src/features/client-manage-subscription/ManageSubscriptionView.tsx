@@ -18,6 +18,7 @@ import type { Sede } from "@/features/shared-profile/types";
 import { 
   planesApi, 
   PlanBackend, 
+  LIMITE_MENSAJES_IA_POR_PLAN,
   PLANES_FALLBACK 
 } from "@/shared/api/planesApi";
 
@@ -89,7 +90,9 @@ export function ManageSubscriptionView() {
   const planActual = catalogo.find((p) => p.id === planActualId) || catalogo[0] || PLANES_FALLBACK[0];
   const esGratuito = planActual.precioMensual === 0;
   const mensajesUsados = aiUsage?.used ?? 0;
-  const limiteMensajes = aiUsage?.limit ?? 0;
+  const limiteMensajes = LIMITE_MENSAJES_IA_POR_PLAN[planActualId]
+    ?? aiUsage?.limit
+    ?? 0;
   const consumoIAPorcentaje = Number.isFinite(limiteMensajes) && limiteMensajes > 0
     ? Math.min(100, (mensajesUsados / limiteMensajes) * 100)
     : 0;

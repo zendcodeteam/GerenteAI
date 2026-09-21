@@ -43,7 +43,7 @@ export const PLAN_LIMITS: Record<PlanId, PlanLimits> = {
   gerente: {
     id: 'gerente',
     label: 'Gerente',
-    monthlyAiMessages: 600,
+    monthlyAiMessages: 500,
     whatsappNumbers: 1,
     businesses: 1,
   },
