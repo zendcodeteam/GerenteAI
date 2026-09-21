@@ -385,6 +385,60 @@ export class AuthService {
   }
 
   // ============================================================
+  // LOGIN — INTENTOS FALLIDOS
+  // ============================================================
+
+  /**
+   * Suma un intento fallido y bloquea la cuenta al llegar al límite.
+   *
+   * El incremento es atómico (`increment`) y no leído-y-escrito: varias
+   * peticiones en paralelo con contraseñas distintas contaban todas sobre el
+   * mismo valor viejo, así que cinco intentos simultáneos dejaban el contador
+   * en 1 y el bloqueo no llegaba nunca.
+   *
+   * Al bloquear, el contador vuelve a cero: cuando el bloqueo venza, la
+   * persona tiene otra vez sus cinco intentos.
+   */
+  private async registrarIntentoFallido(
+    usuarioId: string,
+  ): Promise<void> {
+    const { intentosFallidos } =
+      await this.prisma.usuario.update({
+        where: { id: usuarioId },
+        data: {
+          intentosFallidos: {
+            increment: 1,
+          },
+        },
+        select: {
+          intentosFallidos: true,
+        },
+      });
+
+    if (
+      intentosFallidos <
+      MAX_INTENTOS_FALLIDOS
+    ) {
+      return;
+    }
+
+    await this.prisma.usuario.update({
+      where: { id: usuarioId },
+      data: {
+        bloqueadoHasta: new Date(
+          Date.now() +
+            MINUTOS_BLOQUEO * 60_000,
+        ),
+        intentosFallidos: 0,
+      },
+    });
+
+    this.logger.warn(
+      `Login bloqueado ${MINUTOS_BLOQUEO} min para el usuario ${usuarioId} por contraseñas incorrectas`,
+    );
+  }
+
+  // ============================================================
   // LOGIN TRADICIONAL
   // ============================================================
 
@@ -418,18 +472,9 @@ export class AuthService {
         },
       );
 
-    // 1. Revisar bloqueo temporal ANTES de comparar la contraseña
-    if (usuario && usuario.bloqueadoHasta) {
-      if (usuario.bloqueadoHasta > new Date()) {
-        const minutosRestantes = Math.ceil(
-          (usuario.bloqueadoHasta.getTime() - Date.now()) / (1000 * 60),
-        );
-        throw new UnauthorizedException(
-          `Cuenta bloqueada temporalmente por demasiados intentos fallidos. Intenta nuevamente en ${minutosRestantes} minuto(s).`,
-        );
-      }
-    }
-
+    // La contraseña se compara SIEMPRE, exista o no la cuenta y esté o no
+    // bloqueada: es lo que impide averiguar qué correos están registrados
+    // midiendo cuánto tarda la respuesta.
     const passwordValida = usuario
       ? await bcrypt.compare(
           dto.password,
@@ -440,27 +485,42 @@ export class AuthService {
           this.DUMMY_HASH,
         );
 
+    const bloqueadoHasta =
+      usuario?.bloqueadoHasta ?? null;
+
+    const sigueBloqueada =
+      bloqueadoHasta !== null &&
+      bloqueadoHasta > new Date();
+
+    if (sigueBloqueada) {
+      // Solo se le explica el bloqueo a quien acertó la contraseña. Si se le
+      // contara a cualquiera, bastaría con probar cinco contraseñas al azar
+      // para saber qué correos existen, que es justo lo que se unificó en el
+      // commit anterior de mensajes de login.
+      if (passwordValida) {
+        const minutosRestantes = Math.ceil(
+          (bloqueadoHasta.getTime() -
+            Date.now()) /
+            60_000,
+        );
+
+        throw new UnauthorizedException(
+          `Cuenta bloqueada temporalmente por demasiados intentos fallidos. Intenta nuevamente en ${minutosRestantes} minuto(s).`,
+        );
+      }
+
+      // Insistir durante el bloqueo no lo alarga ni suma intentos: si lo
+      // hiciera, un atacante podría dejar a alguien afuera indefinidamente.
+      throw new UnauthorizedException(
+        'Correo o contraseña incorrectos',
+      );
+    }
+
     if (!usuario || !passwordValida) {
       if (usuario) {
-        const nuevosIntentos = usuario.intentosFallidos + 1;
-        const seBloquea = nuevosIntentos >= MAX_INTENTOS_FALLIDOS;
-        const bloqueadoHasta = seBloquea
-          ? new Date(Date.now() + MINUTOS_BLOQUEO * 60 * 1000)
-          : null;
-
-        await this.prisma.usuario.update({
-          where: { id: usuario.id },
-          data: {
-            intentosFallidos: nuevosIntentos,
-            ...(seBloquea ? { bloqueadoHasta } : {}),
-          },
-        });
-
-        if (seBloquea) {
-          throw new UnauthorizedException(
-            `Has superado el límite de intentos fallidos. Tu cuenta ha sido bloqueada temporalmente por ${MINUTOS_BLOQUEO} minutos.`,
-          );
-        }
+        await this.registrarIntentoFallido(
+          usuario.id,
+        );
       }
 
       throw new UnauthorizedException(
@@ -2499,6 +2559,11 @@ export class AuthService {
         data: {
           password:
             hashedPassword,
+
+          // Quien cambia su contraseña recupera el acceso de una vez: dejar
+          // el bloqueo puesto castigaría a la víctima de los intentos ajenos.
+          intentosFallidos: 0,
+          bloqueadoHasta: null,
         },
       },
     );

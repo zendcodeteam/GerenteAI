@@ -11,6 +11,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 
+import { Throttle } from '@nestjs/throttler';
+
 import { AuthService } from './auth.service';
 
 import { RegisterDto } from './dto/register.dto';
@@ -41,6 +43,38 @@ type RequestWithIp = {
   };
 };
 
+/**
+ * Límites por IP de los endpoints públicos de auth.
+ *
+ * CREDENCIALES (login, Google, códigos MFA): 30 cada 15 minutos. No son 5
+ * porque en Colombia muchos usuarios comparten IP pública (redes móviles con
+ * CGNAT, el wifi de un negocio con varios empleados) y se bloquearían entre
+ * sí sin haber hecho nada. La fuerza bruta contra UNA cuenta la corta el
+ * bloqueo por cuenta del login (5 contraseñas incorrectas) y el de MFA
+ * (5 códigos), que no dependen de la IP.
+ *
+ * CORREOS (registro, recuperar contraseña, reenviar verificación, cambio de
+ * correo): 5 cada 15 minutos. Cada petición manda un correo a una dirección
+ * que elige quien llama, así que el límite protege la reputación del
+ * remitente y la cuota de Brevo. Son operaciones que nadie repite seguido.
+ *
+ * ENLACES (verificar correo, reset, confirmar cambio): 10 cada 15 minutos.
+ * Se abren desde el correo y a veces se reintentan.
+ */
+const VENTANA = 15 * 60_000;
+
+const LIMITE_CREDENCIALES = {
+  default: { limit: 30, ttl: VENTANA },
+};
+
+const LIMITE_CORREOS = {
+  default: { limit: 5, ttl: VENTANA },
+};
+
+const LIMITE_ENLACES = {
+  default: { limit: 10, ttl: VENTANA },
+};
+
 @Controller('auth')
 export class AuthController {
   constructor(
@@ -51,6 +85,7 @@ export class AuthController {
   // REGISTRO TRADICIONAL
   // ============================================================
 
+  @Throttle(LIMITE_CORREOS)
   @Post('register')
   register(
     @Body() dto: RegisterDto,
@@ -66,6 +101,7 @@ export class AuthController {
   // VERIFICACIÓN DE EMAIL
   // ============================================================
 
+  @Throttle(LIMITE_ENLACES)
   @Get('verificar-email')
   verificarEmail(
     @Query('token') token: string,
@@ -95,6 +131,7 @@ export class AuthController {
    * Nunca debe persistirse un access_token definitivo en el
    * frontend mientras un MASTER tenga MFA pendiente.
    */
+  @Throttle(LIMITE_CREDENCIALES)
   @Post('login')
   login(
     @Body() dto: LoginDto,
@@ -118,6 +155,7 @@ export class AuthController {
    * Si la cuenta pertenece a un MASTER, el flujo continúa
    * obligatoriamente por MFA antes de emitir la sesión definitiva.
    */
+  @Throttle(LIMITE_CREDENCIALES)
   @Post('google')
   googleLogin(
     @Body() dto: GoogleLoginDto,
@@ -155,6 +193,7 @@ export class AuthController {
    *   UsuarioSede
    *   Consentimientos legales
    */
+  @Throttle(LIMITE_CREDENCIALES)
   @Post('google/register')
   googleRegister(
     @Body() dto: GoogleRegisterDto,
@@ -190,6 +229,7 @@ export class AuthController {
    *
    * Este endpoint NO crea todavía una sesión definitiva.
    */
+  @Throttle(LIMITE_CREDENCIALES)
   @Post('mfa/activar')
   activarMfa(
     @Body() body: ActivarMfaDto,
@@ -219,6 +259,7 @@ export class AuthController {
    *   - No se activa MFA.
    *   - No se entrega access_token.
    */
+  @Throttle(LIMITE_CREDENCIALES)
   @Post('mfa/verificar-activacion')
   verificarActivacionMfa(
     @Body() body: VerificarMfaDto,
@@ -249,6 +290,7 @@ export class AuthController {
    * su objetivo es convertir una autenticación pendiente en
    * una sesión autenticada.
    */
+  @Throttle(LIMITE_CREDENCIALES)
   @Post('mfa/verificar')
   verificarMfa(
     @Body() body: VerificarMfaDto,
@@ -368,6 +410,7 @@ export class AuthController {
   // REENVIAR VERIFICACIÓN
   // ============================================================
 
+  @Throttle(LIMITE_CORREOS)
   @Post('reenviar-verificacion')
   reenviarVerificacion(
     @Body() dto: ReenviarVerificacionDto,
@@ -399,6 +442,7 @@ export class AuthController {
   // RECUPERAR CONTRASEÑA
   // ============================================================
 
+  @Throttle(LIMITE_CORREOS)
   @Post('forgot-password')
   forgotPassword(
     @Body() dto: ForgotPasswordDto,
@@ -412,6 +456,7 @@ export class AuthController {
   // RESTABLECER CONTRASEÑA
   // ============================================================
 
+  @Throttle(LIMITE_ENLACES)
   @Post('reset-password')
   resetPassword(
     @Body() dto: ResetPasswordDto,
@@ -425,6 +470,7 @@ export class AuthController {
   // CAMBIAR EMAIL
   // ============================================================
 
+  @Throttle(LIMITE_CORREOS)
   @Post('cambiar-email')
   @UseGuards(JwtAuthGuard)
   cambiarEmail(
@@ -443,6 +489,7 @@ export class AuthController {
   // CONFIRMAR CAMBIO DE EMAIL
   // ============================================================
 
+  @Throttle(LIMITE_ENLACES)
   @Post('confirmar-cambio-email')
   confirmarCambioEmail(
     @Body() dto: ConfirmarCambioEmailDto,

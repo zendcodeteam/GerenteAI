@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { FinanceAiModule } from '../finance-ai/finance-ai.module';
 import { PlanesModule } from '../planes.module';
 import { DestinatariosService } from './services/destinatarios.service';
+import { LimitePorRemitenteService } from './services/limite-por-remitente.service';
 import { MessageDedupeService } from './services/message-dedupe.service';
 import { WhatsappInterpretService } from './services/whatsapp-interpret.service';
 import { WhatsappRoutingService } from './services/whatsapp-routing.service';
@@ -28,6 +29,7 @@ import { WhatsappController } from './whatsapp.controller';
     WhatsappInterpretService,
     WhatsappRoutingService,
     MessageDedupeService,
+    LimitePorRemitenteService,
     DestinatariosService,
   ],
   exports: [

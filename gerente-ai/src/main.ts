@@ -14,6 +14,17 @@ async function bootstrap() {
   //
   // Una foto de Meta puede pesar hasta aproximadamente 5 MB,
   // que en base64 puede superar los 6 MB.
+  /**
+   * Railway recibe la petición y la reenvía al contenedor con la IP real del
+   * visitante en X-Forwarded-For. Sin esto, `req.ip` sería la IP interna del
+   * proxy para todo el mundo y el rate limiting trataría a todos los usuarios
+   * como uno solo: al quinto login de cualquiera, nadie más podría entrar.
+   *
+   * `1` = confiar solo en el último salto (el proxy de Railway). Un valor
+   * mayor permitiría que el cliente falsificara su IP en el header.
+   */
+  app.set('trust proxy', 1);
+
   app.useBodyParser('json', {
     limit: '12mb',
   });
