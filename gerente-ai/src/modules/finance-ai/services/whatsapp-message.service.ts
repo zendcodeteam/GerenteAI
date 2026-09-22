@@ -257,6 +257,20 @@ export class WhatsAppMessageService {
 
     const intent = this.normalizeIntent(data);
 
+    if (request.planIsFree && isAdvancedAnalysisRequest(request.message)) {
+      return this.plainResult(
+        { ...intent, type: 'premium' },
+        'Esta consulta avanzada está disponible desde el Plan Gerente. Mejora tu plan para acceder a recomendaciones y análisis de margen.',
+        {
+          promptVersion: WHATSAPP_ASSISTANT_PROMPT_VERSION,
+          provider: response.providerId,
+          model: response.model,
+          latencyMs: response.latencyMs,
+          costUsd: response.costUsd,
+        },
+      );
+    }
+
     if (intent.confidence < LOW_CONFIDENCE_THRESHOLD) {
       // Traza para depurar el prompt: que mensajes reales confunden al modelo.
       this.logger.warn(
@@ -2278,10 +2292,10 @@ export function renderSummary(summary: PeriodSummary): string {
   }
 
   const paymentLines = PAYMENT_METHODS
-    .filter((method) => (summary.byPaymentMethod[method] ?? 0) > 0)
+    .filter((method) => (summary.byPaymentMethod?.[method] ?? 0) > 0)
     .map(
       (method) =>
-        `${PAYMENT_METHOD_LABELS[method]}: ${money(summary.byPaymentMethod[method] ?? 0)}`,
+        `${PAYMENT_METHOD_LABELS[method]}: ${money(summary.byPaymentMethod?.[method] ?? 0)}`,
     );
 
   if (paymentLines.length > 0) {
@@ -2313,6 +2327,26 @@ export function renderSummary(summary: PeriodSummary): string {
 function formatMoney(value: number, currency: string): string {
   // Formato colombiano (punto para miles). Ajustar si se opera en otro pais.
   return `$${Math.round(value).toLocaleString('es-CO')} ${currency}`;
+}
+
+function isAdvancedAnalysisRequest(message: string): boolean {
+  const normalized = message
+    .toLocaleLowerCase('es-CO')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+
+  return [
+    'recomend',
+    'margen',
+    'rentabilidad',
+    'rentable',
+    'ranking',
+    'rankings',
+    'producto que mas',
+    'en que estoy gastando de mas',
+    'analiza',
+    'analisis',
+  ].some((keyword) => normalized.includes(keyword));
 }
 
 /** Ventana de busqueda hacia atras. Cuatro meses cubre lo que la gente recuerda. */
