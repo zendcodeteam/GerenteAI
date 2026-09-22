@@ -12,6 +12,7 @@ import {
   Sparkles,
   Lock,
   Check,
+  MessageCircle,
 } from "lucide-react";
 
 import { fmt } from "@/shared/components/ui/ChartTooltip";
@@ -106,6 +107,12 @@ const formatShortDate = (
       year: "numeric",
     },
   );
+};
+
+const getWhatsappUrl = (telefono: string, cliente: string, monto: number) => {
+  const numero = telefono.replace(/\D/g, "");
+  const mensaje = `Hola ${cliente}, te escribo para recordarte que tienes un saldo pendiente de ${fmt(monto)}. ¿Cuándo podrías realizar el abono?`;
+  return `https://wa.me/${numero}?text=${encodeURIComponent(mensaje)}`;
 };
 
 /**
@@ -497,6 +504,11 @@ export function PendingCashflow({
   const totalVencido =
     Number(fiados?.totales?.vencido) || 0;
 
+  const clientePrioritario = rows[0];
+  const deudasVencidas = rows.filter(
+    (row) => row.estado === "critico" || row.estado === "vencido",
+  ).length;
+
   return (
     <div className="flex flex-col gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
       {/* =========================================================
@@ -538,6 +550,41 @@ export function PendingCashflow({
               strokeWidth={2.5}
             />
           </div>
+        </div>
+      </div>
+
+      <div className="max-w-5xl rounded-2xl border border-amber-500/25 bg-amber-500/5 px-5 py-4 shadow-sm sm:px-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-[11px] font-bold uppercase tracking-widest text-amber-700 dark:text-amber-400">
+              Próxima acción recomendada
+            </p>
+            {clientePrioritario ? (
+              <p className="mt-1 text-sm font-bold text-foreground">
+                Prioriza el cobro a {clientePrioritario.cliente} por {fmt(clientePrioritario.monto)}.
+              </p>
+            ) : (
+              <p className="mt-1 text-sm font-bold text-foreground">
+                No hay clientes pendientes de cobro.
+              </p>
+            )}
+            <p className="mt-1 text-xs text-muted-foreground">
+              {deudasVencidas > 0
+                ? `${deudasVencidas} ${deudasVencidas === 1 ? "deuda vencida requiere" : "deudas vencidas requieren"} seguimiento.`
+                : "La cartera no tiene deudas vencidas en este momento."}
+            </p>
+          </div>
+          {clientePrioritario?.telefono && (
+            <a
+              href={getWhatsappUrl(clientePrioritario.telefono, clientePrioritario.cliente, clientePrioritario.monto)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-[#25D366] px-4 py-2.5 text-xs font-black text-slate-950 transition hover:bg-[#20bd5a]"
+            >
+              <MessageCircle className="h-4 w-4" />
+              Contactar por WhatsApp
+            </a>
+          )}
         </div>
       </div>
 
@@ -731,53 +778,65 @@ export function PendingCashflow({
 
                         {/* Acción */}
                         <td className="px-6 py-4 text-right">
-                          <select
-                            defaultValue=""
-                            disabled={
-                              isPaying
-                            }
-                            onChange={(
-                              event,
-                            ) => {
-                              const method =
-                                event
-                                  .target
-                                  .value;
+                          <div className="flex items-center justify-end gap-2">
+                            {row.telefono && (
+                              <a
+                                href={getWhatsappUrl(row.telefono, row.cliente, row.monto)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title={`Escribir a ${row.cliente} por WhatsApp`}
+                                aria-label={`Escribir a ${row.cliente} por WhatsApp`}
+                                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#25D366]/15 text-[#128C7E] transition hover:bg-[#25D366]/30 dark:text-[#25D366]"
+                              >
+                                <MessageCircle className="h-4 w-4" />
+                              </a>
+                            )}
 
-                              /*
-                               * Reset visual.
-                               */
-                              event.target.value =
-                                "";
+                            <select
+                              defaultValue=""
+                              disabled={
+                                isPaying
+                              }
+                              onChange={(
+                                event,
+                              ) => {
+                                const method =
+                                  event
+                                    .target
+                                    .value;
 
-                              void handlePayment(
-                                row,
-                                method,
-                              );
-                            }}
-                            className="w-full bg-card border border-border text-foreground text-xs font-bold rounded-lg px-2 py-1.5 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all cursor-pointer shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
-                          >
-                            <option
-                              value=""
-                              disabled
+                                event.target.value =
+                                  "";
+
+                                void handlePayment(
+                                  row,
+                                  method,
+                                );
+                              }}
+                              className="w-full bg-card border border-border text-foreground text-xs font-bold rounded-lg px-2 py-1.5 outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all cursor-pointer shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
                             >
-                              {isPaying
-                                ? "Registrando..."
-                                : "Marcar pago..."}
-                            </option>
+                              <option
+                                value=""
+                                disabled
+                              >
+                                {isPaying
+                                  ? "Registrando..."
+                                  : "Marcar pago..."}
+                              </option>
 
-                            <option value="Transferencia">
-                              Transferencia
-                            </option>
+                              <option value="Transferencia">
+                                Transferencia
+                              </option>
 
-                            <option value="Efectivo">
-                              Efectivo
-                            </option>
+                              <option value="Efectivo">
+                                Efectivo
+                              </option>
 
-                            <option value="Tarjeta">
-                              Tarjeta
-                            </option>
-                          </select>
+                              <option value="Tarjeta">
+                                Tarjeta
+                              </option>
+                            </select>
+                          </div>
                         </td>
                       </tr>
                     );

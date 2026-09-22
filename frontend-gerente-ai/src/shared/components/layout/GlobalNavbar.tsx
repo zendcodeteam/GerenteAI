@@ -5,7 +5,6 @@ import {
   MapPin,
   ChevronDown,
   Check,
-  Bell,
   User,
   CreditCard,
   ShieldCheck,
@@ -18,6 +17,7 @@ import {
   Layers,
 } from "lucide-react";
 import { ThemeToggle } from "./ThemeToggle";
+import { NotificationCenter } from "./NotificationCenter";
 import { useAuth } from "@/features/auth/hooks/useAuth";
 import { usePlanPermissions } from "@/shared/hooks/usePlanPermissions";
 import { apiClient } from "@/lib/apiClient";
@@ -468,17 +468,11 @@ export function GlobalNavbar() {
             {/* Notificaciones + Theme */}
             <div className="flex items-center gap-1 sm:gap-2">
               {/* Notificaciones */}
-              <button
-                type="button"
-                className="relative w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors rounded-full hover:bg-muted cursor-pointer"
-                title="Notificaciones"
-              >
-                <Bell
-                  className="w-4 h-4 sm:w-5 sm:h-5"
-                  strokeWidth={2}
-                />
-                <span className="absolute top-1.5 right-2 sm:top-2 sm:right-2.5 w-1.5 h-1.5 bg-destructive rounded-full" />
-              </button>
+              <NotificationCenter
+                businessId={activeBusinessId}
+                sedeId={activeSedeId}
+                enabled={!isAdmin}
+              />
 
               {/* Tema */}
               <ThemeToggle />

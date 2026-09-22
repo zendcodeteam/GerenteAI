@@ -9,6 +9,7 @@ import { useDashboardMetrics } from "./hooks/useDashboardMetrics";
 import { usePlanPermissions } from "@/shared/hooks/usePlanPermissions";
 import { PlanLimitPaywallModal } from "@/shared/components/modals/PlanLimitPaywallModal";
 import { LiveStatusBadge } from "@/shared/components/ui/LiveStatusBadge";
+import { GoalsAndComparison } from "./components/GoalsAndComparison";
 
 export function DashboardView() {
   const {
@@ -149,6 +150,10 @@ export function DashboardView() {
                 />
               </div>
             </motion.div>
+
+            {transactions.length > 0 && (
+              <GoalsAndComparison transactions={transactions} />
+            )}
 
             {/* Transactions */}
             <motion.div
