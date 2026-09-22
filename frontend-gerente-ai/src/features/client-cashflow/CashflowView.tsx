@@ -10,6 +10,7 @@ import { PendingCashflow } from "./PendingCashflow";
 import { CashflowForecast } from "./CashflowForecast";
 import { DailyCashClose } from "./DailyCashClose";
 import { ExpenseInsights } from "./ExpenseInsights";
+import { RecurringObligations } from "./RecurringObligations";
 import { CashflowViewSkeleton } from "./components/CashflowSkeletons";
 
 import { useDashboardMetrics } from "@/features/client-dashboard/hooks/useDashboardMetrics";
@@ -217,6 +218,8 @@ export function CashflowView() {
       {transactions.length > 0 && (
         <ExpenseInsights transactions={transactions} />
       )}
+
+      <RecurringObligations />
 
       {/* ======================================================
           CONTENIDO PRINCIPAL

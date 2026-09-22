@@ -10,6 +10,7 @@ import { usePlanPermissions } from "@/shared/hooks/usePlanPermissions";
 import { PlanLimitPaywallModal } from "@/shared/components/modals/PlanLimitPaywallModal";
 import { LiveStatusBadge } from "@/shared/components/ui/LiveStatusBadge";
 import { GoalsAndComparison } from "./components/GoalsAndComparison";
+import { FinancialSimulator } from "./components/FinancialSimulator";
 
 export function DashboardView() {
   const {
@@ -24,6 +25,7 @@ export function DashboardView() {
     metrics,
     generalMetrics,
     transactions,
+    fiados,
     isLoading,
     isChartLoading,
     isRefreshing,
@@ -153,6 +155,10 @@ export function DashboardView() {
 
             {transactions.length > 0 && (
               <GoalsAndComparison transactions={transactions} />
+            )}
+
+            {transactions.length > 0 && (
+              <FinancialSimulator metrics={metrics} fiados={fiados} />
             )}
 
             {/* Transactions */}
