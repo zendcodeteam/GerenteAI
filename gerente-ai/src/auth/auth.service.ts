@@ -27,6 +27,8 @@ import { PrismaService } from '../services/prisma.service';
 import { NegociosService } from '../services/negocios.service';
 import { MailService } from './mail/mail.service';
 
+import { huellaDeContrasena } from './password-changed-at';
+
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { GoogleLoginDto } from './dto/google-login.dto';
@@ -40,6 +42,9 @@ import { CambiarEmailDto } from './dto/cambiar-email.dto';
 import { ConfirmarCambioEmailDto } from './dto/confirmar-cambio-email.dto';
 
 const BCRYPT_ROUNDS = 12;
+
+const ENLACE_YA_USADO =
+  'Este enlace ya fue usado o dejó de ser válido. Pide uno nuevo desde "Olvidé mi contraseña".';
 const MAX_INTENTOS_FALLIDOS = 5;
 const MINUTOS_BLOQUEO = 15;
 
@@ -385,6 +390,60 @@ export class AuthService {
   }
 
   // ============================================================
+  // LOGIN — INTENTOS FALLIDOS
+  // ============================================================
+
+  /**
+   * Suma un intento fallido y bloquea la cuenta al llegar al límite.
+   *
+   * El incremento es atómico (`increment`) y no leído-y-escrito: varias
+   * peticiones en paralelo con contraseñas distintas contaban todas sobre el
+   * mismo valor viejo, así que cinco intentos simultáneos dejaban el contador
+   * en 1 y el bloqueo no llegaba nunca.
+   *
+   * Al bloquear, el contador vuelve a cero: cuando el bloqueo venza, la
+   * persona tiene otra vez sus cinco intentos.
+   */
+  private async registrarIntentoFallido(
+    usuarioId: string,
+  ): Promise<void> {
+    const { intentosFallidos } =
+      await this.prisma.usuario.update({
+        where: { id: usuarioId },
+        data: {
+          intentosFallidos: {
+            increment: 1,
+          },
+        },
+        select: {
+          intentosFallidos: true,
+        },
+      });
+
+    if (
+      intentosFallidos <
+      MAX_INTENTOS_FALLIDOS
+    ) {
+      return;
+    }
+
+    await this.prisma.usuario.update({
+      where: { id: usuarioId },
+      data: {
+        bloqueadoHasta: new Date(
+          Date.now() +
+            MINUTOS_BLOQUEO * 60_000,
+        ),
+        intentosFallidos: 0,
+      },
+    });
+
+    this.logger.warn(
+      `Login bloqueado ${MINUTOS_BLOQUEO} min para el usuario ${usuarioId} por contraseñas incorrectas`,
+    );
+  }
+
+  // ============================================================
   // LOGIN TRADICIONAL
   // ============================================================
 
@@ -418,18 +477,9 @@ export class AuthService {
         },
       );
 
-    // 1. Revisar bloqueo temporal ANTES de comparar la contraseña
-    if (usuario && usuario.bloqueadoHasta) {
-      if (usuario.bloqueadoHasta > new Date()) {
-        const minutosRestantes = Math.ceil(
-          (usuario.bloqueadoHasta.getTime() - Date.now()) / (1000 * 60),
-        );
-        throw new UnauthorizedException(
-          `Cuenta bloqueada temporalmente por demasiados intentos fallidos. Intenta nuevamente en ${minutosRestantes} minuto(s).`,
-        );
-      }
-    }
-
+    // La contraseña se compara SIEMPRE, exista o no la cuenta y esté o no
+    // bloqueada: es lo que impide averiguar qué correos están registrados
+    // midiendo cuánto tarda la respuesta.
     const passwordValida = usuario
       ? await bcrypt.compare(
           dto.password,
@@ -440,27 +490,42 @@ export class AuthService {
           this.DUMMY_HASH,
         );
 
+    const bloqueadoHasta =
+      usuario?.bloqueadoHasta ?? null;
+
+    const sigueBloqueada =
+      bloqueadoHasta !== null &&
+      bloqueadoHasta > new Date();
+
+    if (sigueBloqueada) {
+      // Solo se le explica el bloqueo a quien acertó la contraseña. Si se le
+      // contara a cualquiera, bastaría con probar cinco contraseñas al azar
+      // para saber qué correos existen, que es justo lo que se unificó en el
+      // commit anterior de mensajes de login.
+      if (passwordValida) {
+        const minutosRestantes = Math.ceil(
+          (bloqueadoHasta.getTime() -
+            Date.now()) /
+            60_000,
+        );
+
+        throw new UnauthorizedException(
+          `Cuenta bloqueada temporalmente por demasiados intentos fallidos. Intenta nuevamente en ${minutosRestantes} minuto(s).`,
+        );
+      }
+
+      // Insistir durante el bloqueo no lo alarga ni suma intentos: si lo
+      // hiciera, un atacante podría dejar a alguien afuera indefinidamente.
+      throw new UnauthorizedException(
+        'Correo o contraseña incorrectos',
+      );
+    }
+
     if (!usuario || !passwordValida) {
       if (usuario) {
-        const nuevosIntentos = usuario.intentosFallidos + 1;
-        const seBloquea = nuevosIntentos >= MAX_INTENTOS_FALLIDOS;
-        const bloqueadoHasta = seBloquea
-          ? new Date(Date.now() + MINUTOS_BLOQUEO * 60 * 1000)
-          : null;
-
-        await this.prisma.usuario.update({
-          where: { id: usuario.id },
-          data: {
-            intentosFallidos: nuevosIntentos,
-            ...(seBloquea ? { bloqueadoHasta } : {}),
-          },
-        });
-
-        if (seBloquea) {
-          throw new UnauthorizedException(
-            `Has superado el límite de intentos fallidos. Tu cuenta ha sido bloqueada temporalmente por ${MINUTOS_BLOQUEO} minutos.`,
-          );
-        }
+        await this.registrarIntentoFallido(
+          usuario.id,
+        );
       }
 
       throw new UnauthorizedException(
@@ -2418,6 +2483,18 @@ export class AuthService {
           {
             sub: usuario.id,
             type: 'password-reset',
+
+            /**
+             * Huella de la contraseña vigente cuando se pidió el enlace.
+             *
+             * Es lo que hace el enlace de un solo uso: al cambiar la
+             * contraseña cambia el hash, y con él la huella, así que este
+             * token —y cualquier otro pedido antes— deja de coincidir. No
+             * hace falta guardar los tokens usados en ninguna parte.
+             */
+            pwd: huellaDeContrasena(
+              usuario.password,
+            ),
           },
           {
             expiresIn: '1h',
@@ -2447,6 +2524,7 @@ export class AuthService {
     let payload: {
       sub: string;
       type: string;
+      pwd?: string;
     };
 
     try {
@@ -2475,6 +2553,11 @@ export class AuthService {
           where: {
             id: payload.sub,
           },
+
+          select: {
+            id: true,
+            password: true,
+          },
         },
       );
 
@@ -2484,24 +2567,70 @@ export class AuthService {
       );
     }
 
+    /**
+     * Enlace de un solo uso.
+     *
+     * La huella se calculó sobre la contraseña que había cuando se pidió el
+     * enlace. Usarlo cambia la contraseña, así que la huella deja de
+     * coincidir: el mismo correo reenviado, guardado o interceptado después
+     * ya no sirve, y pedir un enlace nuevo mata al anterior.
+     */
+    if (
+      payload.pwd !==
+      huellaDeContrasena(
+        usuario.password,
+      )
+    ) {
+      throw new UnauthorizedException(
+        ENLACE_YA_USADO,
+      );
+    }
+
     const hashedPassword =
       await bcrypt.hash(
         dto.newPassword,
         BCRYPT_ROUNDS,
       );
 
-    await this.prisma.usuario.update(
-      {
-        where: {
-          id: usuario.id,
-        },
+    /**
+     * La contraseña vieja viaja en el WHERE: si dos peticiones con el mismo
+     * enlace entran a la vez, las dos pasan la comprobación de arriba pero
+     * solo una encuentra el hash que esperaba.
+     */
+    const cambiada =
+      await this.prisma.usuario.updateMany(
+        {
+          where: {
+            id: usuario.id,
+            password:
+              usuario.password,
+          },
 
-        data: {
-          password:
-            hashedPassword,
+          data: {
+            password:
+              hashedPassword,
+
+            /**
+             * Marca del cambio: JwtStrategy la compara contra la fecha de
+             * emisión de cada token de sesión, así que todo lo abierto antes
+             * deja de valer.
+             */
+            passwordChangedAt:
+              new Date(),
+
+            // Quien cambia su contraseña recupera el acceso de una vez: dejar
+            // el bloqueo puesto castigaría a la víctima de los intentos ajenos.
+            intentosFallidos: 0,
+            bloqueadoHasta: null,
+          },
         },
-      },
-    );
+      );
+
+    if (cambiada.count === 0) {
+      throw new UnauthorizedException(
+        ENLACE_YA_USADO,
+      );
+    }
 
     return {
       mensaje:

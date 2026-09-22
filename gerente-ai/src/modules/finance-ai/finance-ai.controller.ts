@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Param, Post, UseFilters } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 
 import { LlmExceptionFilter } from '../../ai/filters/llm-exception.filter';
 import { LlmService } from '../../ai/services/llm.service';
@@ -23,6 +24,14 @@ import { periodoContableActual } from './domain/periodo-contable';
  * Pendiente de autenticacion: hoy `tenantId` llega en el cuerpo. Cuando exista
  * JWT debe salir del token y dejar de ser un dato que el cliente elige.
  */
+/**
+ * 20 llamadas por minuto y por IP.
+ *
+ * Cada una cuesta dinero (una llamada al modelo) y hoy estas rutas no piden
+ * sesion, asi que el limite es lo unico que hay entre un desconocido y la
+ * cuota de IA. Nadie las usa mas rapido desde la interfaz.
+ */
+@Throttle({ default: { limit: 20, ttl: 60_000 } })
 @Controller('ai')
 @UseFilters(LlmExceptionFilter)
 export class FinanceAiController {

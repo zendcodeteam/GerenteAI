@@ -12,6 +12,8 @@ import {
   ValidateNested,
 } from 'class-validator';
 
+import { ContenidoCoincideConElTipo } from './media-file-type.validator';
+
 /**
  * Una nota de voz o una foto que el usuario mando por WhatsApp.
  *
@@ -46,6 +48,10 @@ export class MediaDto {
    * El tope son ~9,4 MB de base64 (unos 7 MB de archivo), por debajo del limite
    * de 12 MB del servidor. Meta ya no acepta imagenes de mas de 5 MB ni audios
    * de mas de 16, asi que lo que se corta aqui es lo que no deberia llegar.
+   *
+   * El `mimeType` de arriba es lo que DECLARA quien envia, y con eso no basta:
+   * se le miran los primeros bytes al archivo y tienen que ser los del tipo
+   * declarado. Lo que no se reconozca no llega al modelo.
    */
   @IsString()
   @IsNotEmpty()
@@ -53,6 +59,10 @@ export class MediaDto {
     message: 'El archivo es demasiado grande.',
   })
   @IsBase64(undefined, { message: 'media.dataBase64 no es base64 valido.' })
+  @ContenidoCoincideConElTipo({
+    message:
+      'El contenido del archivo no corresponde con el tipo declarado en media.mimeType.',
+  })
   dataBase64!: string;
 }
 

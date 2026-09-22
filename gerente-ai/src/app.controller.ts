@@ -1,4 +1,5 @@
 import { Controller, Get, Header } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 
 const VERSION = '1.0.0';
 
@@ -14,6 +15,8 @@ export class AppController {
 
   // El que consulta Render para el health check, y el que deben usar los
   // servicios: responde JSON y no toca ni la base de datos ni la IA.
+  // Lo consulta la plataforma de despliegue, no una persona: sin límite.
+  @SkipThrottle()
   @Get('health')
   health() {
     return {

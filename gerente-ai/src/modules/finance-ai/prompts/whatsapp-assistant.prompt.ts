@@ -21,6 +21,14 @@ import {
  * API, asi se puede saber que version produjo cada registro.
  *
  * ---------------------------------------------------------------------------
+ * v18: una posicion nombrada nunca significa "todo".
+ *
+ * Tras un "borra todo lo de hoy", el usuario contestaba "el 1" y Luka volvia
+ * a ofrecer borrar el dia entero: el modelo seguia devolviendo deleteAll
+ * porque el hilo venia de un borrado masivo, y esa bandera se comia la
+ * posicion. Ahora deleteAll y las posiciones son excluyentes.
+ *
+ * ---------------------------------------------------------------------------
  * v17: escoger VARIOS de una lista.
  *
  * "Borra el segundo y el tercero, el primero dejalo" ofrecia borrar los tres.
@@ -96,7 +104,7 @@ import {
  * ---------------------------------------------------------------------------
  */
 
-export const WHATSAPP_ASSISTANT_PROMPT_VERSION = 'asistente-whatsapp/v17';
+export const WHATSAPP_ASSISTANT_PROMPT_VERSION = 'asistente-whatsapp/v18';
 
 /**
  * Forma CRUDA de la respuesta del modelo.
@@ -424,6 +432,20 @@ REGLAS DE INTERPRETACIÓN:
       deleteAll true SOLO cuando dice "todos" o "todo". Un "borra los gastos de
       hoy" sin "todos" es ambiguo: pregunta con type "unclear".
 
+      ⚠️ deleteAll y referenceIndexes son EXCLUYENTES. Si el usuario nombra una
+      posición —"el 1", "el primero", "el 2 y el 3"—, eso NO es "todo":
+      referenceIndexes lleva las posiciones y deleteAll va en FALSE.
+
+      Esto importa sobre todo cuando vienes de ofrecerle borrar el día entero y
+      él responde escogiendo uno. El hilo es de borrado masivo, pero lo que
+      acaba de decir es lo contrario: quiere solo ese. Devolver deleteAll ahí
+      hace que se le vuelva a ofrecer borrar todo, y el usuario no consigue
+      salir de ese bucle.
+
+          Tú:      Voy a borrar estos 3 movimientos: 1) ... 2) ... 3) ...
+          Usuario: el 1
+          -> action "delete", referenceIndexes [1], deleteAll FALSE
+
    En los dos casos el sistema NO borra de una: le enseña al usuario qué se va
    a ir y espera que confirme. Tú no tienes que pedir la confirmación en
    responseText, el sistema la pide con las cifras reales.
@@ -455,6 +477,13 @@ REGLAS DE INTERPRETACIÓN:
    El contexto te dice a qué mensaje está respondiendo. Si en ese mensaje tú
    listaste movimientos y ahora dice "elimina esto", "corrige el segundo" o
    "ese está mal", se refiere a ESOS, no a los últimos que se registraron.
+
+   LAS POSICIONES CUENTAN EN EL ORDEN EN QUE TÚ LOS NOMBRASTE en ese mensaje.
+   Si dijiste "Registré 2 movimientos: 1) Gasto de $5.000 en transporte,
+   2) Compra de $40.000 en mercancía" y el usuario responde "borra el primer
+   registro", se refiere al de $5.000:
+       -> action "delete", referenceIndexes [1], deleteAll false
+   Funciona igual con "el segundo", "el 2", "el último" y "el 1 y el 3".
 
    El sistema ya sabe cuáles son exactamente los movimientos de ese mensaje:
    NO tienes que adivinarlos ni ponerles fecha para acotarlos. Basta con que
@@ -564,6 +593,20 @@ REGLAS DE INTERPRETACIÓN:
      un poema"), atiende la parte financiera y omite el resto.
 
 14. FUNCIONES DE PLANES PAGOS (type: "premium"):
+
+   MATRIZ COMERCIAL VIGENTE:
+       - Asistente (gratuito): 1 sede, 100 mensajes de IA al mes, reportes básicos.
+         Puede registrar movimientos, buscar sus propios registros y pedir resúmenes básicos.
+       - Gerente: 1 sede, 500 mensajes de IA al mes, reportes avanzados,
+         recomendaciones y análisis de margen.
+       - Administrador: hasta 3 sedes con WhatsApp, 1.500 mensajes de IA al mes,
+         reportes avanzados, recomendaciones y análisis de margen.
+       - Socio: hasta 5 sedes con WhatsApp, 3.000 mensajes de IA al mes,
+         reportes avanzados, recomendaciones y análisis de margen.
+
+   La diferencia entre los planes pagos es la cuota de IA y el número de sedes;
+   las funciones avanzadas de análisis están disponibles en Gerente, Administrador
+   y Socio. Nunca marques como premium una función avanzada para esos planes.
 
    Antes de usar este tipo, lee bien la lista de lo que SÍ está incluido gratis.
    Marcar como "premium" algo que es gratis es un error grave: le pides dinero al
@@ -706,6 +749,15 @@ Respuesta: {"type":"correction","movements":[],"declaredTotal":null,"discount":n
 
 Mensaje: "No, solo el 2 y el 3"  (venías de ofrecerle borrar tres y él acota)
 Respuesta: {"type":"correction","movements":[],"declaredTotal":null,"discount":null,"profitShares":[],"correction":{"action":"delete","reference":null,"referenceAmount":null,"referenceDate":null,"referenceIndexes":[2,3],"newAmount":null,"newConcept":null,"deleteAll":false,"matchAll":false},"payment":null,"confirmed":null,"confirmedCount":null,"concept":null,"queryKind":null,"queryPeriod":null,"responseText":"Entonces esos dos.","confidence":0.95}
+
+Mensaje: "el 1"  (venías de ofrecerle borrar los 3 movimientos del día)
+Respuesta: {"type":"correction","movements":[],"declaredTotal":null,"discount":null,"profitShares":[],"correction":{"action":"delete","reference":null,"referenceAmount":null,"referenceDate":null,"referenceIndexes":[1],"newAmount":null,"newConcept":null,"deleteAll":false,"matchAll":false},"payment":null,"confirmed":null,"confirmedCount":null,"concept":null,"queryKind":null,"queryPeriod":null,"responseText":"Entonces solo ese.","confidence":0.95}
+
+Mensaje: "borra el primer registro"  (citando un mensaje tuyo que listaba dos movimientos)
+Respuesta: {"type":"correction","movements":[],"declaredTotal":null,"discount":null,"profitShares":[],"correction":{"action":"delete","reference":null,"referenceAmount":null,"referenceDate":null,"referenceIndexes":[1],"newAmount":null,"newConcept":null,"deleteAll":false,"matchAll":false},"payment":null,"confirmed":null,"confirmedCount":null,"concept":null,"queryKind":null,"queryPeriod":null,"responseText":"Déjame ver cuál es.","confidence":0.95}
+
+Mensaje: "bórralo"  (citando un mensaje tuyo con un solo movimiento)
+Respuesta: {"type":"correction","movements":[],"declaredTotal":null,"discount":null,"profitShares":[],"correction":{"action":"delete","reference":null,"referenceAmount":null,"referenceDate":null,"referenceIndexes":[],"newAmount":null,"newConcept":null,"deleteAll":false,"matchAll":false},"payment":null,"confirmed":null,"confirmedCount":null,"concept":null,"queryKind":null,"queryPeriod":null,"responseText":"Déjame ver cuál es.","confidence":0.95}
 
 Mensaje: "Borra todos los registros de hoy"
 Respuesta: {"type":"correction","movements":[],"declaredTotal":null,"profitShares":[],"correction":{"action":"delete","reference":null,"referenceAmount":null,"referenceDate":null,"referenceIndexes":[],"newAmount":null,"newConcept":null,"deleteAll":true,"matchAll":false},"payment":null,"confirmed":null,"confirmedCount":null,"concept":null,"queryKind":null,"queryPeriod":"day","responseText":"Déjame ver qué tienes registrado hoy.","confidence":0.95}

@@ -798,15 +798,40 @@ export class WhatsAppMessageService {
       );
     }
 
-    // "Borra todo lo de hoy" no busca un movimiento: los junta todos.
-    if (correccion.action === 'delete' && correccion.deleteAll) {
+    // Lo que el usuario esta senalando al citar un mensaje de Luka, y el
+    // borrado que ya este sobre la mesa. Se calculan ANTES de cualquier otra
+    // decision porque las dos cosas son mas concretas que un "borra todo".
+    const citados = await this.buscarCitados(request);
+    const borradoAbierto = this.state.borradoPendiente(request.businessId);
+
+    /**
+     * "Borra todo lo de hoy" junta todos los del periodo. Pero solo cuando el
+     * usuario no señalo nada mas preciso.
+     *
+     * AQUI ESTABA EL DAÑO. Esta comprobacion iba primero y cortaba el metodo,
+     * asi que cuando el usuario contestaba "el 1" a una lista, el modelo seguia
+     * devolviendo deleteAll —el hilo venia de un borrado masivo— y se volvia a
+     * ofrecer borrar el dia entero. La posicion que acababa de dar se
+     * descartaba sin mirarla.
+     *
+     * Ahora una posicion dicha por el usuario, o un mensaje citado, mandan
+     * sobre el "todo". No se bloquea por tener un borrado abierto: repetir
+     * "borra todo lo de hoy" es legitimo y solo vuelve a preguntar.
+     */
+    const señaloAlgoConcreto =
+      tieneIdentificador(correccion) || citados !== null;
+
+    if (
+      correccion.action === 'delete' &&
+      correccion.deleteAll &&
+      !señaloAlgoConcreto
+    ) {
       return this.handleDeleteAll(intent, request, currency, meta);
     }
 
     // Con un borrado ya sobre la mesa, un identificador no abre una busqueda
     // nueva: acota lo que se iba a borrar. "El 2" significa "solo ese", que es
     // justo lo que hay que poder decir cuando la lista trae de mas.
-    const borradoAbierto = this.state.borradoPendiente(request.businessId);
 
     if (borradoAbierto && tieneIdentificador(correccion)) {
       const elegidos = resolverEntreCandidatos(
@@ -826,11 +851,6 @@ export class WhatsAppMessageService {
         };
       }
     }
-
-    // Lo que el usuario esta senalando al citar un mensaje de Luka. Manda
-    // sobre cualquier otra pista: son los movimientos exactos de ese mensaje,
-    // no los que se parezcan por fecha.
-    const citados = await this.buscarCitados(request);
 
     if (citados) {
       return this.corregirCitados(
@@ -1581,6 +1601,7 @@ export class WhatsAppMessageService {
     // el balance. El dueno necesita saber cuanto tiene, no cuanto vendio.
     let pendingCollection = 0;
     const byCategory = new Map<string, PeriodSummary['byCategory'][number]>();
+    const byPaymentMethod: PeriodSummary['byPaymentMethod'] = {};
 
     for (const row of rows) {
       if (row.isCredit) {
@@ -1593,6 +1614,11 @@ export class WhatsAppMessageService {
       }
 
       totals[row.type] += row.amount;
+
+      if (row.type === 'income' && row.paymentMethod) {
+        byPaymentMethod[row.paymentMethod] =
+          (byPaymentMethod[row.paymentMethod] ?? 0) + row.amount;
+      }
 
       const key = `${row.type}:${row.category}`;
       const bucket = byCategory.get(key) ?? {
@@ -1616,6 +1642,7 @@ export class WhatsAppMessageService {
       pendingCollection,
       transactionCount: rows.length,
       byCategory: [...byCategory.values()].sort((a, b) => b.total - a.total),
+      byPaymentMethod,
     };
   }
 }
@@ -2248,6 +2275,17 @@ export function renderSummary(summary: PeriodSummary): string {
     lines.push(
       `Aparte, te deben ${money(summary.pendingCollection)} de ventas fiadas.`,
     );
+  }
+
+  const paymentLines = PAYMENT_METHODS
+    .filter((method) => (summary.byPaymentMethod[method] ?? 0) > 0)
+    .map(
+      (method) =>
+        `${PAYMENT_METHOD_LABELS[method]}: ${money(summary.byPaymentMethod[method] ?? 0)}`,
+    );
+
+  if (paymentLines.length > 0) {
+    lines.push('Ingresos por forma de pago:', ...paymentLines);
   }
 
   lines.push(
@@ -2885,7 +2923,16 @@ export function renderMovementsRegistered(
   discount: number | null = null,
 ): string {
   const pagado = sumAmounts(transactions);
-  const lineas = transactions.map((row) => movementLine(row, currency));
+
+  // Numerados cuando son varios: "borra el primero" necesita que haya un
+  // primero A LA VISTA. Con viñetas, el usuario y el modelo tenian que deducir
+  // el orden, y el modelo lo deducia mal.
+  const lineas =
+    transactions.length > 1
+      ? transactions.map((row, indice) =>
+          movementLine(row, currency, `${indice + 1})`),
+        )
+      : transactions.map((row) => movementLine(row, currency));
 
   // Con descuento se ensenan las tres cifras: el usuario tiene la factura
   // delante y quiere reconocer el subtotal que ahi dice, no solo lo que pago.

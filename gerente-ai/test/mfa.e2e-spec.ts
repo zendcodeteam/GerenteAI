@@ -160,9 +160,9 @@ describe('MFA obligatorio para MASTER (contra Postgres real)', () => {
       const token = mfaToken(await login());
       const payload = jwt.verify<JwtPayload>(token);
 
-      expect(() => new JwtStrategy().validate(payload)).toThrow(
-        UnauthorizedException,
-      );
+      await expect(
+        new JwtStrategy(prisma).validate(payload),
+      ).rejects.toThrow(UnauthorizedException);
     });
 
     it('el token de activación no sirve para el paso de login', async () => {
