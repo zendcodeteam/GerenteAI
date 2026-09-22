@@ -4,6 +4,7 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { JwtPayload } from '../interfaces/jwt-payload.interface';
 import { PrismaService } from '../../services/prisma.service';
 import { tokenEsAnteriorAlCambio } from '../password-changed-at';
+import { AUDIENCIA, JWT_ISSUER } from '../jwt-claims';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -19,6 +20,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
       secretOrKey: secret,
+      // Emisor y audiencia de sesión. Un token de reseteo o de verificación de
+      // correo ni siquiera llega a `validate`: lo rechaza la librería.
+      issuer: JWT_ISSUER,
+      audience: AUDIENCIA.session,
     });
   }
 
@@ -27,9 +32,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
    * QUÉ se emitió el token, y si sigue vigente.
    *
    * Los de verificación de correo, reset de contraseña y cambio de correo se
-   * firman con el mismo secreto, así que sin esta comprobación cualquiera de
-   * ellos abriría sesión. El de verificación es el más grave: viaja dentro de un
-   * correo, y basta con leerlo para entrar a la cuenta sin saber la contraseña.
+   * firman con el mismo secreto, y ahora se separan por `aud`: la librería los
+   * rechaza antes de llegar aquí. La comprobación de `type` se queda como
+   * segunda barrera, por si algún token viejo o mal firmado se colara.
    *
    * Además se compara contra `passwordChangedAt`: un token firmado antes del
    * último cambio de contraseña ya no vale. Sin esto, cambiar la contraseña no
