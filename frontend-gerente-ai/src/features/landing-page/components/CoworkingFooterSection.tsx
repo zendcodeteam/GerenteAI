@@ -121,9 +121,17 @@ function MarqueeRow({
   );
 }
 
-export function CoworkingFooterSection() {
+export function CoworkingFooterSection({
+  showGreenSection = true,
+}: {
+  showGreenSection?: boolean;
+}) {
   return (
-    <footer className="relative -mt-7 w-full overflow-hidden bg-transparent pb-3 pt-0 text-white sm:pb-4 md:-mt-15">
+    <footer
+      className={`relative w-full overflow-hidden bg-transparent pb-3 pt-0 text-white sm:pb-4 ${
+        showGreenSection ? "-mt-7 md:-mt-15" : ""
+      }`}
+    >
       <style>{`
         @keyframes footerMarquee {
           0% {
@@ -163,12 +171,8 @@ export function CoworkingFooterSection() {
         }
       `}</style>
 
-      {/* =====================================================
-          ZONA VERDE
-          OCUPA TODO EL ANCHO DISPONIBLE
-          CONSERVA EL REDONDEADO SUPERIOR
-      ===================================================== */}
-      <div className="relative w-full overflow-hidden rounded-t-[34px] bg-[#063A35]">
+      {showGreenSection && (
+        <div className="relative w-full overflow-hidden rounded-t-[34px] bg-[#063A35]">
         {/* Ambient glow */}
         <div className="pointer-events-none absolute inset-0 overflow-hidden">
           <div className="absolute left-1/2 top-[-220px] h-[520px] w-[900px] -translate-x-1/2 rounded-full bg-emerald-400/[0.10] blur-[150px]" />
@@ -219,7 +223,8 @@ export function CoworkingFooterSection() {
             </a>
           </div>
         </div>
-      </div>
+        </div>
+      )}
 
       {/* =====================================================
           FOOTER TRADICIONAL
