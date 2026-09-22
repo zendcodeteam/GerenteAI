@@ -155,7 +155,7 @@ export function DashboardView() {
             </motion.div>
 
             {transactions.length > 0 && (
-              <GoalsAndComparison transactions={transactions} />
+              <GoalsAndComparison transactions={transactions} fiados={fiados} />
             )}
 
             {transactions.length > 0 && (

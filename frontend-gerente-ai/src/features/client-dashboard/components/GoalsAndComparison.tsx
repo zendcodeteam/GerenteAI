@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { BarChart3, Check, Target, TrendingDown, TrendingUp } from "lucide-react";
-import { DashboardTransactionItem } from "../types";
+import { DashboardTransactionItem, ReporteFiados } from "../types";
 import { dashboardConfigApi } from "@/shared/api/dashboardConfigApi";
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
@@ -51,8 +51,10 @@ const getProgress = (value: number, target: number) =>
 
 export function GoalsAndComparison({
   transactions,
+  fiados,
 }: {
   transactions: DashboardTransactionItem[];
+  fiados: ReporteFiados | null;
 }) {
   const storageKey = `luka-goals-${localStorage.getItem("active_business_id") || "business"}`;
   const [incomeGoal, setIncomeGoal] = useState(() => localStorage.getItem(`${storageKey}-income`) || "");
@@ -71,17 +73,24 @@ export function GoalsAndComparison({
 
   const comparison = useMemo(() => {
     const now = Date.now();
-    const current = summarizeTransactions(transactions, now - 30 * DAY_IN_MS, now);
-    const previous = summarizeTransactions(transactions, now - 60 * DAY_IN_MS, now - 30 * DAY_IN_MS);
+    const current = summarizeTransactions(transactions, now - 7 * DAY_IN_MS, now);
+    const previous = summarizeTransactions(transactions, now - 14 * DAY_IN_MS, now - 7 * DAY_IN_MS);
+    const historical = summarizeTransactions(transactions, now - 35 * DAY_IN_MS, now - 7 * DAY_IN_MS);
+    historical.income /= 4;
+    historical.expenses /= 4;
+    historical.balance /= 4;
 
     return {
       current,
       previous,
+      historical,
+      receivables: fiados?.totales?.porCobrar ?? 0,
+      overdue: fiados?.totales?.vencido ?? 0,
       incomeChange: previous.income > 0 ? (current.income - previous.income) / previous.income : null,
       expenseChange: previous.expenses > 0 ? (current.expenses - previous.expenses) / previous.expenses : null,
       balanceChange: previous.balance !== 0 ? (current.balance - previous.balance) / Math.abs(previous.balance) : null,
     };
-  }, [transactions]);
+  }, [fiados, transactions]);
 
   const saveGoals = () => {
     if (incomeGoal) localStorage.setItem(`${storageKey}-income`, incomeGoal);
@@ -121,7 +130,7 @@ export function GoalsAndComparison({
           <div>
             <h2 className="text-base font-black text-foreground sm:text-lg">Evolución y metas</h2>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground sm:text-sm">
-              Últimos 30 días frente a los 30 días anteriores.
+              Semana actual frente a la anterior y al promedio de las últimas cuatro semanas.
             </p>
           </div>
         </div>
@@ -135,7 +144,7 @@ export function GoalsAndComparison({
         </button>
       </div>
 
-      <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-3">
+      <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <div className="rounded-2xl border border-border bg-muted/30 p-4">
           <p className="text-xs font-bold text-muted-foreground">Ingresos</p>
           <p className="mt-2 text-lg font-black text-foreground">{formatCurrency(comparison.current.income)}</p>
@@ -153,6 +162,8 @@ export function GoalsAndComparison({
           </p>
           <p className="mt-1 text-xs">{renderChange(comparison.balanceChange)}</p>
         </div>
+        <ComparisonCard label="Promedio semanal" value={comparison.historical.balance} footer="Balance promedio" />
+        <ComparisonCard label="Cartera pendiente" value={comparison.receivables} footer={`${formatCurrency(comparison.overdue)} vencida`} />
       </div>
 
       {isEditing && (
@@ -206,6 +217,16 @@ function ProgressBar({ value, target }: { value: number; target: number }) {
       <div className="h-2 overflow-hidden rounded-full bg-muted">
         <div className="h-full rounded-full bg-blue-500 transition-all" style={{ width: `${progress}%` }} />
       </div>
+    </div>
+  );
+}
+
+function ComparisonCard({ label, value, footer }: { label: string; value: number; footer: string }) {
+  return (
+    <div className="rounded-2xl border border-border bg-muted/30 p-4">
+      <p className="text-xs font-bold text-muted-foreground">{label}</p>
+      <p className={`mt-2 text-lg font-black ${value >= 0 ? "text-foreground" : "text-destructive"}`}>{formatCurrency(value)}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{footer}</p>
     </div>
   );
 }
