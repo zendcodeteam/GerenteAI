@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { BarChart3, Check, Target, TrendingDown, TrendingUp } from "lucide-react";
 import { DashboardTransactionItem } from "../types";
+import { dashboardConfigApi } from "@/shared/api/dashboardConfigApi";
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
@@ -58,6 +59,16 @@ export function GoalsAndComparison({
   const [balanceGoal, setBalanceGoal] = useState(() => localStorage.getItem(`${storageKey}-balance`) || "");
   const [isEditing, setIsEditing] = useState(false);
 
+  useEffect(() => {
+    const sedeId = localStorage.getItem("active_sede_id") || undefined;
+    if (!sedeId || sedeId === "all") return;
+    void dashboardConfigApi.get(sedeId).then((configs) => {
+      const goals = configs.find((config) => config.clave === "goals")?.valor;
+      if (typeof goals?.incomeGoal === "string") setIncomeGoal(goals.incomeGoal);
+      if (typeof goals?.balanceGoal === "string") setBalanceGoal(goals.balanceGoal);
+    }).catch(() => undefined);
+  }, []);
+
   const comparison = useMemo(() => {
     const now = Date.now();
     const current = summarizeTransactions(transactions, now - 30 * DAY_IN_MS, now);
@@ -78,6 +89,11 @@ export function GoalsAndComparison({
 
     if (balanceGoal) localStorage.setItem(`${storageKey}-balance`, balanceGoal);
     else localStorage.removeItem(`${storageKey}-balance`);
+
+    const sedeId = localStorage.getItem("active_sede_id") || undefined;
+    if (sedeId && sedeId !== "all") {
+      void dashboardConfigApi.save("goals", { incomeGoal, balanceGoal }, sedeId).catch(() => undefined);
+    }
 
     setIsEditing(false);
   };

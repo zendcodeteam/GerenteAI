@@ -11,6 +11,7 @@ import { PlanLimitPaywallModal } from "@/shared/components/modals/PlanLimitPaywa
 import { LiveStatusBadge } from "@/shared/components/ui/LiveStatusBadge";
 import { GoalsAndComparison } from "./components/GoalsAndComparison";
 import { FinancialSimulator } from "./components/FinancialSimulator";
+import { WeeklySummary } from "./components/WeeklySummary";
 
 export function DashboardView() {
   const {
@@ -159,6 +160,10 @@ export function DashboardView() {
 
             {transactions.length > 0 && (
               <FinancialSimulator metrics={metrics} fiados={fiados} />
+            )}
+
+            {!isLoading && !hasNoBusiness && (
+              <WeeklySummary transactions={transactions} fiados={fiados} />
             )}
 
             {/* Transactions */}

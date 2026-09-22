@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, ClipboardCheck, Minus, Plus } from "lucide-react";
 import { DashboardTransactionItem } from "@/features/client-dashboard/types";
+import { dashboardConfigApi } from "@/shared/api/dashboardConfigApi";
 
 const formatCurrency = (value: number) =>
   new Intl.NumberFormat("es-CO", {
@@ -27,9 +28,27 @@ export function DailyCashClose({
   const [isSaved, setIsSaved] = useState(false);
 
   useEffect(() => {
-    const savedAmount = localStorage.getItem(storageKey);
-    setRealAmount(savedAmount ?? "");
-    setIsSaved(Boolean(savedAmount));
+    const sedeId = localStorage.getItem("active_sede_id") || undefined;
+    const load = async () => {
+      try {
+        if (sedeId && sedeId !== "all") {
+          const configs = await dashboardConfigApi.get(sedeId);
+          const remote = configs.find((config) => config.clave === "daily-close")?.valor;
+          if (typeof remote?.date === "string" && remote.date === todayKey && typeof remote.amount === "number") {
+            setRealAmount(String(remote.amount));
+            setIsSaved(true);
+            return;
+          }
+        }
+      } catch {
+        // Conserva el fallback local si el backend aún no está desplegado.
+      }
+
+      const savedAmount = localStorage.getItem(storageKey);
+      setRealAmount(savedAmount ?? "");
+      setIsSaved(Boolean(savedAmount));
+    };
+    void load();
   }, [storageKey]);
 
   const summary = useMemo(() => {
@@ -64,6 +83,10 @@ export function DailyCashClose({
   const saveClose = () => {
     if (realAmount === "" || !Number.isFinite(parsedRealAmount)) return;
     localStorage.setItem(storageKey, realAmount);
+    const sedeId = localStorage.getItem("active_sede_id") || undefined;
+    if (sedeId && sedeId !== "all") {
+      void dashboardConfigApi.save("daily-close", { date: todayKey, amount: parsedRealAmount }, sedeId).catch(() => undefined);
+    }
     setIsSaved(true);
   };
 
@@ -121,7 +144,7 @@ export function DailyCashClose({
                 setRealAmount(event.target.value);
                 setIsSaved(false);
               }}
-              placeholder="Ej. 250000"
+              placeholder="Ejemplo: 250000"
               className="h-11 w-full rounded-xl border border-border bg-background pl-8 pr-3 text-sm font-semibold text-foreground outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20"
             />
           </div>
