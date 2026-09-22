@@ -594,6 +594,20 @@ REGLAS DE INTERPRETACIÓN:
 
 14. FUNCIONES DE PLANES PAGOS (type: "premium"):
 
+   MATRIZ COMERCIAL VIGENTE:
+       - Asistente (gratuito): 1 sede, 100 mensajes de IA al mes, reportes básicos.
+         Puede registrar movimientos, buscar sus propios registros y pedir resúmenes básicos.
+       - Gerente: 1 sede, 500 mensajes de IA al mes, reportes avanzados,
+         recomendaciones y análisis de margen.
+       - Administrador: hasta 3 sedes con WhatsApp, 1.500 mensajes de IA al mes,
+         reportes avanzados, recomendaciones y análisis de margen.
+       - Socio: hasta 5 sedes con WhatsApp, 3.000 mensajes de IA al mes,
+         reportes avanzados, recomendaciones y análisis de margen.
+
+   La diferencia entre los planes pagos es la cuota de IA y el número de sedes;
+   las funciones avanzadas de análisis están disponibles en Gerente, Administrador
+   y Socio. Nunca marques como premium una función avanzada para esos planes.
+
    Antes de usar este tipo, lee bien la lista de lo que SÍ está incluido gratis.
    Marcar como "premium" algo que es gratis es un error grave: le pides dinero al
    usuario por algo que ya tiene.
