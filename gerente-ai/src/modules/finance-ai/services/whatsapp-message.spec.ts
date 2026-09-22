@@ -454,6 +454,7 @@ describe('renderSummary', () => {
     pendingCollection: 0,
     transactionCount: 4,
     byPaymentMethod: {},
+    unspecifiedIncome: 0,
     byCategory: [
       { category: 'mercancia', type: 'expense', total: 700_000 },
       { category: 'ventas', type: 'income', total: 1_500_000 },

@@ -1616,6 +1616,7 @@ export class WhatsAppMessageService {
     let pendingCollection = 0;
     const byCategory = new Map<string, PeriodSummary['byCategory'][number]>();
     const byPaymentMethod: PeriodSummary['byPaymentMethod'] = {};
+    let unspecifiedIncome = 0;
 
     for (const row of rows) {
       if (row.isCredit) {
@@ -1632,6 +1633,8 @@ export class WhatsAppMessageService {
       if (row.type === 'income' && row.paymentMethod) {
         byPaymentMethod[row.paymentMethod] =
           (byPaymentMethod[row.paymentMethod] ?? 0) + row.amount;
+      } else if (row.type === 'income') {
+        unspecifiedIncome += row.amount;
       }
 
       const key = `${row.type}:${row.category}`;
@@ -1657,6 +1660,7 @@ export class WhatsAppMessageService {
       transactionCount: rows.length,
       byCategory: [...byCategory.values()].sort((a, b) => b.total - a.total),
       byPaymentMethod,
+      unspecifiedIncome,
     };
   }
 }
@@ -2300,6 +2304,11 @@ export function renderSummary(summary: PeriodSummary): string {
 
   if (paymentLines.length > 0) {
     lines.push('Ingresos por forma de pago:', ...paymentLines);
+  }
+
+  if (summary.unspecifiedIncome > 0) {
+    if (paymentLines.length === 0) lines.push('Ingresos por forma de pago:');
+    lines.push(`Sin especificar: ${money(summary.unspecifiedIncome)}`);
   }
 
   lines.push(
