@@ -1,5 +1,5 @@
 import { CoworkingFooterSection } from "@/features/landing-page/components/CoworkingFooterSection";
 
 export function GlobalFooter() {
-  return <CoworkingFooterSection />;
+  return <CoworkingFooterSection showGreenSection={false} />;
 }
