@@ -17,6 +17,7 @@ import { useDashboardMetrics } from "@/features/client-dashboard/hooks/useDashbo
 
 import { usePlanPermissions } from "@/shared/hooks/usePlanPermissions";
 import { PlanLimitPaywallModal } from "@/shared/components/modals/PlanLimitPaywallModal";
+import { FeaturePaywallState } from "@/shared/components/paywalls/FeaturePaywallState";
 import { NoBusinessRedirectState } from "@/shared/components/states/NoBusinessRedirectState";
 import { LiveStatusBadge } from "@/shared/components/ui/LiveStatusBadge";
 
@@ -28,7 +29,6 @@ export function CashflowView() {
   const {
     planUsuarioId,
     planNombre,
-    puedeVerFiados,
     isPaywallOpen,
     paywallMotivo,
     paywallPlanRecomendadoId,
@@ -83,6 +83,67 @@ export function CashflowView() {
         <NoBusinessRedirectState
           title="Configura tu negocio para ver tu Flujo de Caja"
           description="Aún no tienes un comercio registrado. Registra tu negocio en la página principal para empezar a monitorear tus ingresos, egresos y cuentas por cobrar."
+        />
+      </div>
+    );
+  }
+
+  if (planUsuarioId === 1) {
+    return (
+      <div className="flex-1 min-w-0 overflow-auto pb-12 pr-0 sm:pr-4">
+        <FeaturePaywallState
+          onUpgrade={() =>
+            abrirPaywall(
+              "El Flujo de Caja está disponible a partir del Plan Gerente ($39.900/mes). Mejora tu plan para acceder al control de liquidez, cartera y proyecciones financieras.",
+              2,
+            )
+          }
+          badge="Disponible a partir del Plan Gerente ($39.900/mes)"
+          title={
+            <>
+              Entiende y controla el{" "}
+              <span className="bg-clip-text text-transparent bg-gradient-to-r from-emerald-600 via-teal-500 to-emerald-400">
+                Flujo de Caja
+              </span>
+            </>
+          }
+          description="Luka reúne tus ingresos, gastos, cartera y proyecciones para que sepas cuánto dinero tienes disponible y qué decisiones puedes tomar."
+          previewCards={[
+            {
+              label: "Liquidez",
+              title: "Balance disponible",
+              description: "Consulta tus entradas, salidas y evolución real de caja.",
+              icon: "wallet",
+              color: "emerald",
+            },
+            {
+              label: "Cartera",
+              title: "Cuentas por cobrar",
+              description: "Identifica deudas vencidas y prioriza tus próximos cobros.",
+              icon: "receipt",
+              color: "amber",
+            },
+            {
+              label: "Proyección",
+              title: "Próximos 30 días",
+              description: "Anticipa escenarios de caja y obligaciones del negocio.",
+              icon: "credit",
+              color: "cyan",
+            },
+          ]}
+          features={[
+            { title: "Control de liquidez", description: "Ingresos y egresos en un solo lugar." },
+            { title: "Cierre de caja", description: "Compara lo esperado con lo real." },
+            { title: "Cartera priorizada", description: "Sigue cobros y cuentas vencidas." },
+            { title: "Proyecciones", description: "Planifica tus próximos movimientos." },
+          ]}
+        />
+
+        <PlanLimitPaywallModal
+          isOpen={isPaywallOpen}
+          onClose={cerrarPaywall}
+          motivo={paywallMotivo}
+          planRecomendadoId={paywallPlanRecomendadoId}
         />
       </div>
     );
@@ -244,13 +305,6 @@ export function CashflowView() {
             fiados={fiados}
             isLoading={isFiadosLoading && !fiados}
             onRegisterPayment={handleRegisterPayment}
-            puedeVerFiados={puedeVerFiados}
-            onUpgradePlan={() =>
-              abrirPaywall(
-                "El control de Cuentas por Cobrar (Fiados) está disponible a partir del Plan Gerente ($39.900/mes). Mejora tu plan para visualizar tu cartera en la calle y registrar abonos.",
-                2,
-              )
-            }
           />
         </div>
       </div>

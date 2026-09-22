@@ -25,6 +25,7 @@ import { PagosModule } from './modules/pagos.module';
 import { RecordatoriosModule } from './modules/recordatorios.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { AuthModule } from './auth/auth.module';
+import { DashboardConfigModule } from './modules/dashboard-config.module';
 
 @Module({
   imports: [
@@ -92,6 +93,7 @@ import { AuthModule } from './auth/auth.module';
       skipIf: () => process.env.RATE_LIMIT_DISABLED === 'true',
     }),
     AuthModule,
+    DashboardConfigModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],

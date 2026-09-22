@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { BellRing, CalendarDays, Plus, Trash2, WalletCards, X } from "lucide-react";
+import { dashboardConfigApi } from "@/shared/api/dashboardConfigApi";
 
 type Frequency = "semanal" | "mensual" | "anual";
 
@@ -33,12 +34,29 @@ export function RecurringObligations() {
   const storageKey = getStorageKey();
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(storageKey);
-      setObligations(saved ? JSON.parse(saved) : []);
-    } catch {
-      setObligations([]);
-    }
+    const sedeId = localStorage.getItem("active_sede_id") || undefined;
+    const load = async () => {
+      try {
+        if (sedeId && sedeId !== "all") {
+          const configs = await dashboardConfigApi.get(sedeId);
+          const remote = configs.find((config) => config.clave === "obligations")?.valor.obligations;
+          if (Array.isArray(remote)) {
+            setObligations(remote as Obligation[]);
+            return;
+          }
+        }
+      } catch {
+        // Conserva el fallback local si el backend aún no está desplegado.
+      }
+
+      try {
+        const saved = localStorage.getItem(storageKey);
+        setObligations(saved ? JSON.parse(saved) : []);
+      } catch {
+        setObligations([]);
+      }
+    };
+    void load();
   }, [storageKey]);
 
   const activeObligations = useMemo(
@@ -55,6 +73,10 @@ export function RecurringObligations() {
   const persist = (next: Obligation[]) => {
     setObligations(next);
     localStorage.setItem(storageKey, JSON.stringify(next));
+    const sedeId = localStorage.getItem("active_sede_id") || undefined;
+    if (sedeId && sedeId !== "all") {
+      void dashboardConfigApi.save("obligations", { obligations: next }, sedeId).catch(() => undefined);
+    }
   };
 
   const addObligation = () => {
