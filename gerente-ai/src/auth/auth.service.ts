@@ -27,6 +27,8 @@ import { PrismaService } from '../services/prisma.service';
 import { NegociosService } from '../services/negocios.service';
 import { MailService } from './mail/mail.service';
 
+import { huellaDeContrasena } from './password-changed-at';
+
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { GoogleLoginDto } from './dto/google-login.dto';
@@ -40,6 +42,9 @@ import { CambiarEmailDto } from './dto/cambiar-email.dto';
 import { ConfirmarCambioEmailDto } from './dto/confirmar-cambio-email.dto';
 
 const BCRYPT_ROUNDS = 12;
+
+const ENLACE_YA_USADO =
+  'Este enlace ya fue usado o dejó de ser válido. Pide uno nuevo desde "Olvidé mi contraseña".';
 const MAX_INTENTOS_FALLIDOS = 5;
 const MINUTOS_BLOQUEO = 15;
 
@@ -2478,6 +2483,18 @@ export class AuthService {
           {
             sub: usuario.id,
             type: 'password-reset',
+
+            /**
+             * Huella de la contraseña vigente cuando se pidió el enlace.
+             *
+             * Es lo que hace el enlace de un solo uso: al cambiar la
+             * contraseña cambia el hash, y con él la huella, así que este
+             * token —y cualquier otro pedido antes— deja de coincidir. No
+             * hace falta guardar los tokens usados en ninguna parte.
+             */
+            pwd: huellaDeContrasena(
+              usuario.password,
+            ),
           },
           {
             expiresIn: '1h',
@@ -2507,6 +2524,7 @@ export class AuthService {
     let payload: {
       sub: string;
       type: string;
+      pwd?: string;
     };
 
     try {
@@ -2535,6 +2553,11 @@ export class AuthService {
           where: {
             id: payload.sub,
           },
+
+          select: {
+            id: true,
+            password: true,
+          },
         },
       );
 
@@ -2544,29 +2567,70 @@ export class AuthService {
       );
     }
 
+    /**
+     * Enlace de un solo uso.
+     *
+     * La huella se calculó sobre la contraseña que había cuando se pidió el
+     * enlace. Usarlo cambia la contraseña, así que la huella deja de
+     * coincidir: el mismo correo reenviado, guardado o interceptado después
+     * ya no sirve, y pedir un enlace nuevo mata al anterior.
+     */
+    if (
+      payload.pwd !==
+      huellaDeContrasena(
+        usuario.password,
+      )
+    ) {
+      throw new UnauthorizedException(
+        ENLACE_YA_USADO,
+      );
+    }
+
     const hashedPassword =
       await bcrypt.hash(
         dto.newPassword,
         BCRYPT_ROUNDS,
       );
 
-    await this.prisma.usuario.update(
-      {
-        where: {
-          id: usuario.id,
-        },
+    /**
+     * La contraseña vieja viaja en el WHERE: si dos peticiones con el mismo
+     * enlace entran a la vez, las dos pasan la comprobación de arriba pero
+     * solo una encuentra el hash que esperaba.
+     */
+    const cambiada =
+      await this.prisma.usuario.updateMany(
+        {
+          where: {
+            id: usuario.id,
+            password:
+              usuario.password,
+          },
 
-        data: {
-          password:
-            hashedPassword,
+          data: {
+            password:
+              hashedPassword,
 
-          // Quien cambia su contraseña recupera el acceso de una vez: dejar
-          // el bloqueo puesto castigaría a la víctima de los intentos ajenos.
-          intentosFallidos: 0,
-          bloqueadoHasta: null,
+            /**
+             * Marca del cambio: JwtStrategy la compara contra la fecha de
+             * emisión de cada token de sesión, así que todo lo abierto antes
+             * deja de valer.
+             */
+            passwordChangedAt:
+              new Date(),
+
+            // Quien cambia su contraseña recupera el acceso de una vez: dejar
+            // el bloqueo puesto castigaría a la víctima de los intentos ajenos.
+            intentosFallidos: 0,
+            bloqueadoHasta: null,
+          },
         },
-      },
-    );
+      );
+
+    if (cambiada.count === 0) {
+      throw new UnauthorizedException(
+        ENLACE_YA_USADO,
+      );
+    }
 
     return {
       mensaje:

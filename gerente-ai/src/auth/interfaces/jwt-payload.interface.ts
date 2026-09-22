@@ -12,4 +12,12 @@ export interface JwtPayload {
   negocioId: string;
   role: string;
   rolGlobal: 'MASTER' | 'CLIENTE';
+  /**
+   * Momento en que se firmó el token, en segundos. Lo pone `jsonwebtoken` solo.
+   *
+   * Es lo que permite saber si el token es anterior al último cambio de
+   * contraseña y, por lo tanto, si hay que rechazarlo.
+   */
+  iat?: number;
+  exp?: number;
 }
