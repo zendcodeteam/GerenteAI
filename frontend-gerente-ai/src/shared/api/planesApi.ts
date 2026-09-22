@@ -56,6 +56,7 @@ export const PLANES_FALLBACK: PlanBackend[] = [
       'recomendaciones_estadisticas',
       'anotaciones_por_foto',
       'anotaciones_por_audio',
+      'ia_avanzada',
     ],
   },
   {
@@ -70,6 +71,7 @@ export const PLANES_FALLBACK: PlanBackend[] = [
       'recomendaciones_estadisticas',
       'anotaciones_por_foto',
       'anotaciones_por_audio',
+      'ia_avanzada',
     ],
   },
   {

@@ -21,16 +21,23 @@ import { limpiar } from './helpers/contexto';
 const PASSWORD = 'Secreta123';
 const EMAIL = 'tendera@test.local';
 
+// El enlace de recuperación solo vale si lo emitió el backend: lleva una
+// huella de la contraseña vigente. Por eso se captura el que sale por correo
+// en vez de firmar uno a mano.
+let ultimoEnlace = '';
+
 const mailFalso = {
   sendVerificationEmail: () => Promise.resolve(),
-  sendPasswordResetEmail: () => Promise.resolve(),
+  sendPasswordResetEmail: (_email: string, _nombre: string, token: string) => {
+    ultimoEnlace = token;
+    return Promise.resolve();
+  },
   sendEmailChangeConfirmation: () => Promise.resolve(),
 };
 
 describe('Bloqueo de login (contra Postgres real)', () => {
   let prisma: PrismaService;
   let auth: AuthService;
-  let jwt: JwtService;
   let cerrar: () => Promise<void>;
   let usuarioId: string;
 
@@ -54,7 +61,6 @@ describe('Bloqueo de login (contra Postgres real)', () => {
 
     prisma = moduleRef.get(PrismaService);
     auth = moduleRef.get(AuthService);
-    jwt = moduleRef.get(JwtService);
     await prisma.$connect();
     cerrar = async () => {
       await prisma.$disconnect();
@@ -167,8 +173,11 @@ describe('Bloqueo de login (contra Postgres real)', () => {
   it('cambiar la contraseña levanta el bloqueo', async () => {
     await fallar(5);
 
-    const token = jwt.sign({ sub: usuarioId, type: 'password-reset' });
-    await auth.resetPassword({ token, newPassword: 'NuevaClave123*' });
+    await auth.forgotPassword({ email: EMAIL });
+    await auth.resetPassword({
+      token: ultimoEnlace,
+      newPassword: 'NuevaClave123*',
+    });
 
     const usuario = await estado();
     expect(usuario.bloqueadoHasta).toBeNull();

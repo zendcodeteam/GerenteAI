@@ -455,6 +455,8 @@ export interface PeriodSummary {
   pendingCollection: number;
   transactionCount: number;
   byCategory: CategoryTotal[];
+  /** Ingresos cobrados, agrupados por forma de pago. */
+  byPaymentMethod: Partial<Record<PaymentMethod, number>>;
 }
 
 /**

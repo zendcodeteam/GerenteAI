@@ -1601,6 +1601,7 @@ export class WhatsAppMessageService {
     // el balance. El dueno necesita saber cuanto tiene, no cuanto vendio.
     let pendingCollection = 0;
     const byCategory = new Map<string, PeriodSummary['byCategory'][number]>();
+    const byPaymentMethod: PeriodSummary['byPaymentMethod'] = {};
 
     for (const row of rows) {
       if (row.isCredit) {
@@ -1613,6 +1614,11 @@ export class WhatsAppMessageService {
       }
 
       totals[row.type] += row.amount;
+
+      if (row.type === 'income' && row.paymentMethod) {
+        byPaymentMethod[row.paymentMethod] =
+          (byPaymentMethod[row.paymentMethod] ?? 0) + row.amount;
+      }
 
       const key = `${row.type}:${row.category}`;
       const bucket = byCategory.get(key) ?? {
@@ -1636,6 +1642,7 @@ export class WhatsAppMessageService {
       pendingCollection,
       transactionCount: rows.length,
       byCategory: [...byCategory.values()].sort((a, b) => b.total - a.total),
+      byPaymentMethod,
     };
   }
 }
@@ -2268,6 +2275,17 @@ export function renderSummary(summary: PeriodSummary): string {
     lines.push(
       `Aparte, te deben ${money(summary.pendingCollection)} de ventas fiadas.`,
     );
+  }
+
+  const paymentLines = PAYMENT_METHODS
+    .filter((method) => (summary.byPaymentMethod[method] ?? 0) > 0)
+    .map(
+      (method) =>
+        `${PAYMENT_METHOD_LABELS[method]}: ${money(summary.byPaymentMethod[method] ?? 0)}`,
+    );
+
+  if (paymentLines.length > 0) {
+    lines.push('Ingresos por forma de pago:', ...paymentLines);
   }
 
   lines.push(
