@@ -7,6 +7,9 @@ import {
 
 import { RealCashflow } from "./RealCashflow";
 import { PendingCashflow } from "./PendingCashflow";
+import { CashflowForecast } from "./CashflowForecast";
+import { DailyCashClose } from "./DailyCashClose";
+import { ExpenseInsights } from "./ExpenseInsights";
 import { CashflowViewSkeleton } from "./components/CashflowSkeletons";
 
 import { useDashboardMetrics } from "@/features/client-dashboard/hooks/useDashboardMetrics";
@@ -198,6 +201,21 @@ export function CashflowView() {
             </Link>
           </div>
         </div>
+      )}
+
+      {transactions.length > 0 && (
+        <CashflowForecast
+          metrics={metrics}
+          transactions={transactions}
+        />
+      )}
+
+      {transactions.length > 0 && (
+        <DailyCashClose transactions={transactions} />
+      )}
+
+      {transactions.length > 0 && (
+        <ExpenseInsights transactions={transactions} />
       )}
 
       {/* ======================================================
