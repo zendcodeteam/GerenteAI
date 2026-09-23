@@ -11,12 +11,14 @@ import { CoworkingPricingSection } from "./components/CoworkingPricingSection";
 import { CoworkingFaqSection } from "./components/CoworkingFaqSection";
 import { CoworkingFooterSection } from "./components/CoworkingFooterSection";
 import { LukaDynamicAtmosphere } from "./components/LukaDynamicAtmosphere";
+import { BankSyncAnnouncementModal } from "./components/BankSyncAnnouncementModal";
 
 import { LukaChatProvider, LukaFloatingChat } from "@/features/assistant";
 
 export function LandingPageView() {
   return (
     <LukaChatProvider>
+      <BankSyncAnnouncementModal />
       <div
         className="
           relative
