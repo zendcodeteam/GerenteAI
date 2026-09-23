@@ -67,7 +67,27 @@ export class ClientesService {
     await this.verificarAccesoAlCliente(cliente.sedeId, userId, rolGlobal, {
       escritura: true,
     });
-    return this.prisma.cliente.delete({ where: { id } });
+
+    await this.prisma.$transaction(async (tx) => {
+      // Se conservan los movimientos contables, pero se separan del tercero
+      // antes de borrar sus datos identificables.
+      await tx.venta.updateMany({
+        where: { clienteId: id },
+        data: { clienteId: null },
+      });
+      await tx.abono.updateMany({
+        where: { clienteId: id },
+        data: { clienteId: null },
+      });
+      await tx.cliente.delete({ where: { id } });
+    });
+
+    return {
+      id,
+      suprimido: true,
+      mensaje:
+        'El cliente fue suprimido. Los movimientos contables se conservaron sin datos identificables.',
+    };
   }
 
   private async verificarAccesoAlCliente(
