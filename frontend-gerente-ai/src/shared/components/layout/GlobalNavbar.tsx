@@ -22,6 +22,7 @@ import { useAuth } from "@/features/auth/hooks/useAuth";
 import { usePlanPermissions } from "@/shared/hooks/usePlanPermissions";
 import { apiClient } from "@/lib/apiClient";
 import { profileApi } from "@/features/shared-profile/api/profileApi";
+import { LukaIconBadge } from "@/shared/components/ui/LukaIconBadge";
 
 interface NegocioItem {
   id: string;
@@ -505,15 +506,10 @@ export function GlobalNavbar() {
                         : "text-muted-foreground hover:text-foreground hover:bg-muted/80"
                     }`}
                   >
-                    <Icon
-                      className={`w-4 h-4 ${
-                        isActive
-                          ? "text-emerald-600 dark:text-emerald-500"
-                          : ""
-                      }`}
-                      strokeWidth={
-                        isActive ? 2.5 : 2
-                      }
+                    <LukaIconBadge
+                      icon={Icon}
+                      tone={isActive ? "emerald" : "cyan"}
+                      size="sm"
                     />
 
                     {label}
