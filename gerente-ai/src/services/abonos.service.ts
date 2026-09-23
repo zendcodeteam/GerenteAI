@@ -133,10 +133,12 @@ export class AbonosService {
 
     return this.prisma.$transaction(async (tx) => {
       // Anular el abono devuelve la deuda al cliente...
-      await tx.cliente.update({
-        where: { id: abono.clienteId },
-        data: { saldoPendiente: { increment: abono.monto } },
-      });
+      if (abono.clienteId) {
+        await tx.cliente.update({
+          where: { id: abono.clienteId },
+          data: { saldoPendiente: { increment: abono.monto } },
+        });
+      }
 
       // ...y a la venta concreta que había pagado, que es lo que mantiene
       // coherente la antigüedad de la deuda en el reporte de fiados.

@@ -240,7 +240,7 @@ model Venta {
   abonos           Abono[]
   detalles         DetalleVenta[]
   recordatorios    RecordatorioFiado?
-  cliente          Cliente?           @relation(fields: [clienteId], references: [id])
+  cliente          Cliente?           @relation(fields: [clienteId], references: [id], onDelete: SetNull)
   sede             Sede               @relation(fields: [sedeId], references: [id], onDelete: Cascade)
 
   @@index([sedeId, fecha])
@@ -342,10 +342,10 @@ model Abono {
   id        String   @id @default(uuid())
   monto     Decimal
   fecha     DateTime @default(now())
-  clienteId String
+  clienteId String?
   sedeId    String
   ventaId   String?
-  cliente   Cliente  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  cliente   Cliente? @relation(fields: [clienteId], references: [id], onDelete: SetNull)
   sede      Sede     @relation(fields: [sedeId], references: [id], onDelete: Cascade)
   venta     Venta?   @relation(fields: [ventaId], references: [id])
 

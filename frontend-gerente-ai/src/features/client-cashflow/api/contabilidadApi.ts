@@ -60,7 +60,7 @@ export interface Abono {
   id: string;
   monto: number | string;
   fecha: string;
-  clienteId: string;
+  clienteId: string | null;
   sedeId: string;
 }
 
