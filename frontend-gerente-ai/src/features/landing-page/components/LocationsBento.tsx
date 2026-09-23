@@ -376,10 +376,10 @@ export function LocationsBento() {
         relative
         w-full
         overflow-hidden
-        bg-slate-50
+        bg-transparent
         pt-3
         pb-8
-        dark:bg-[#070B12]
+        dark:bg-transparent
       "
     >
       {/* =========================================================

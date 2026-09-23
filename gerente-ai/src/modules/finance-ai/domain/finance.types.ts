@@ -457,6 +457,8 @@ export interface PeriodSummary {
   byCategory: CategoryTotal[];
   /** Ingresos cobrados, agrupados por forma de pago. */
   byPaymentMethod: Partial<Record<PaymentMethod, number>>;
+  /** Ingresos cobrados cuyo método no fue informado. */
+  unspecifiedIncome: number;
 }
 
 /**

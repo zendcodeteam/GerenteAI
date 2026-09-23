@@ -2,6 +2,7 @@ import { useEffect, useState, memo } from "react";
 import {
   ArrowUpRight,
   ArrowDownLeft,
+  CircleDollarSign,
   MoreHorizontal,
   Plus,
 } from "lucide-react";
@@ -221,6 +222,9 @@ function BalanceCardComponent({
     <div className="bg-card rounded-2xl p-6 shadow-sm border border-border flex flex-col h-full justify-between animate-in fade-in duration-300">
       <div>
         <div className="flex items-center gap-4 mb-6">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+            <CircleDollarSign className="h-5 w-5" />
+          </div>
           <div>
             <div className="flex items-center gap-2 mb-1">
               <p className="text-sm font-medium text-muted-foreground">

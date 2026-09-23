@@ -10,8 +10,8 @@ describe('PLAN_LIMITS', () => {
     expect(PLAN_LIMITS.asistente.monthlyAiMessages).toBe(100);
   });
 
-  it('Gerente incluye 600', () => {
-    expect(PLAN_LIMITS.gerente.monthlyAiMessages).toBe(600);
+  it('Gerente incluye 500', () => {
+    expect(PLAN_LIMITS.gerente.monthlyAiMessages).toBe(500);
   });
 
   it('Administrador incluye 1.500', () => {
