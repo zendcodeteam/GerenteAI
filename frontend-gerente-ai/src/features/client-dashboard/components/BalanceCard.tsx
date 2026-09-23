@@ -9,6 +9,8 @@ import {
 import { Skeleton } from "@/shared/components/ui/Skeleton";
 import { ReporteFinanciero } from "../types";
 import { formatNumber } from "../utils/formatters";
+import { lukaWhatsappUrl } from "@/lib/whatsapp";
+import { LukaIconBadge } from "@/shared/components/ui/LukaIconBadge";
 
 interface BalanceCardProps {
   metrics?: ReporteFinanciero;
@@ -222,9 +224,7 @@ function BalanceCardComponent({
     <div className="bg-card rounded-2xl p-6 shadow-sm border border-border flex flex-col h-full justify-between animate-in fade-in duration-300">
       <div>
         <div className="flex items-center gap-4 mb-6">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-            <CircleDollarSign className="h-5 w-5" />
-          </div>
+          <LukaIconBadge icon={CircleDollarSign} tone="emerald" size="lg" />
           <div>
             <div className="flex items-center gap-2 mb-1">
               <p className="text-sm font-medium text-muted-foreground">
@@ -267,8 +267,10 @@ function BalanceCardComponent({
           <button
             type="button"
             onClick={() =>
-              alert(
-                "Registrar Venta rápida: Abre el módulo de ventas o escribe a Luka por WhatsApp."
+              window.open(
+                lukaWhatsappUrl("Hola Luka, quiero registrar una venta"),
+                "_blank",
+                "noopener,noreferrer",
               )
             }
             className="flex-1 bg-foreground hover:bg-foreground/90 text-background font-bold py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer"
@@ -280,8 +282,10 @@ function BalanceCardComponent({
           <button
             type="button"
             onClick={() =>
-              alert(
-                "Registrar gasto rápido: Abre el módulo de gastos o envía la foto a Luka por WhatsApp."
+              window.open(
+                lukaWhatsappUrl("Hola Luka, quiero registrar un gasto"),
+                "_blank",
+                "noopener,noreferrer",
               )
             }
             className="flex-1 bg-foreground hover:bg-foreground/90 text-background font-bold py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer"
@@ -292,6 +296,9 @@ function BalanceCardComponent({
 
           <button
             type="button"
+            title="Más opciones financieras"
+            aria-label="Más opciones financieras"
+            onClick={() => window.location.assign("/cashflow")}
             className="w-12 bg-foreground hover:bg-foreground/90 text-background py-3 rounded-xl flex items-center justify-center transition-colors cursor-pointer"
           >
             <MoreHorizontal className="w-5 h-5" />
@@ -345,10 +352,11 @@ function BalanceCardComponent({
               type="button"
               onClick={
                 onSetGoal ||
-                (() =>
-                  alert(
-                    "Próximamente podrás configurar y monitorear metas financieras mensuales en tu comercio."
-                  ))
+                (() => {
+                  document
+                    .getElementById("metas-financieras")
+                    ?.scrollIntoView({ behavior: "smooth", block: "center" });
+                })
               }
               className="text-xs font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 px-3 py-1.5 rounded-lg transition-colors cursor-pointer flex items-center gap-1 shrink-0"
             >

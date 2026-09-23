@@ -277,14 +277,14 @@ export class DestinatariosService {
     return destinos;
   }
 
-  /** Sedes con al menos un movimiento en el rango, mirando las tres tablas. */
+  /** Sedes con al menos un movimiento en el rango, mirando todas las tablas. */
   private async sedesConMovimientoEntre(
     desde: Date,
     hasta: Date,
   ): Promise<Set<string>> {
     const rango = { gte: desde, lte: hasta };
 
-    const [gastos, ventas, compras] = await Promise.all([
+    const [gastos, ventas, compras, abonos] = await Promise.all([
       this.prisma.gasto.findMany({
         where: { fecha: rango },
         select: { sedeId: true },
@@ -300,10 +300,17 @@ export class DestinatariosService {
         select: { sedeId: true },
         distinct: ['sedeId'],
       }),
+      this.prisma.abono.findMany({
+        where: { fecha: rango },
+        select: { sedeId: true },
+        distinct: ['sedeId'],
+      }),
     ]);
 
     return new Set(
-      [...gastos, ...ventas, ...compras].map((fila) => fila.sedeId),
+      [...gastos, ...ventas, ...compras, ...abonos].map(
+        (fila) => fila.sedeId,
+      ),
     );
   }
 }

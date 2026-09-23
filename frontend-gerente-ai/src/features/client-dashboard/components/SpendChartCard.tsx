@@ -23,6 +23,7 @@ import { motion } from 'motion/react';
 import { Skeleton } from '@/shared/components/ui/Skeleton';
 import { ReporteFinanciero, PeriodoTipo, DashboardTransactionItem } from '../types';
 import { formatNumber } from '../utils/formatters';
+import { LukaIconBadge } from '@/shared/components/ui/LukaIconBadge';
 
 interface SpendChartCardProps {
   metrics?: ReporteFinanciero;
@@ -562,9 +563,7 @@ export function SpendChartCard({
           <div>
             <div className="flex items-center gap-2 mb-1">
               <h2 className="text-xl font-black text-foreground tracking-tight flex items-center gap-2">
-                <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-cyan-500/20 bg-cyan-500/10 text-cyan-600 dark:text-cyan-400">
-                  <Activity className="h-4 w-4" />
-                </span>
+                <LukaIconBadge icon={Activity} tone="cyan" size="sm" />
                 Rendimiento Financiero
               </h2>
               <span
