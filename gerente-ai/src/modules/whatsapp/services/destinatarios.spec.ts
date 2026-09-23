@@ -13,6 +13,7 @@ function fakePrisma(datos: {
   gastos?: { sedeId: string }[];
   ventas?: { sedeId: string }[];
   compras?: { sedeId: string }[];
+  abonos?: { sedeId: string }[];
   ventasFiadas?: unknown[];
 }) {
   const creados: unknown[] = [];
@@ -31,6 +32,7 @@ function fakePrisma(datos: {
           ),
       },
       compra: { findMany: () => Promise.resolve(datos.compras ?? []) },
+      abono: { findMany: () => Promise.resolve(datos.abonos ?? []) },
       recordatorioFiado: {
         createMany: (args: { data: unknown[] }) => {
           creados.push(...args.data);
@@ -178,6 +180,31 @@ describe('DestinatariosService - recordatorio nocturno', () => {
       sedes: conLinea,
       gastos: [{ sedeId: 's1' }],
       compras: [{ sedeId: 's2' }],
+    });
+
+    const destinos = await new DestinatariosService(
+      prisma,
+    ).sedesSinMovimientosHoy();
+
+    expect(destinos).toHaveLength(0);
+  });
+
+  it('incluye una sede sin mensajes si no tiene movimientos', async () => {
+    const { prisma } = fakePrisma({
+      sedes: [sede({ telefono: '573001111111' })],
+    });
+
+    const destinos = await new DestinatariosService(
+      prisma,
+    ).sedesSinMovimientosHoy();
+
+    expect(destinos).toHaveLength(1);
+  });
+
+  it('no avisa si hoy se registró un abono', async () => {
+    const { prisma } = fakePrisma({
+      sedes: [sede({ telefono: '573001111111' })],
+      abonos: [{ sedeId: 's1' }],
     });
 
     const destinos = await new DestinatariosService(

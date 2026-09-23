@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { BarChart3, Check, Target, TrendingDown, TrendingUp } from "lucide-react";
 import { DashboardTransactionItem, ReporteFiados } from "../types";
 import { dashboardConfigApi } from "@/shared/api/dashboardConfigApi";
+import { LukaIconBadge } from "@/shared/components/ui/LukaIconBadge";
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
 
@@ -121,12 +122,10 @@ export function GoalsAndComparison({
   };
 
   return (
-    <section className="mt-6 rounded-3xl border border-border bg-card p-5 shadow-sm sm:p-6">
+    <section id="metas-financieras" className="mt-6 rounded-3xl border border-border bg-card p-5 shadow-sm sm:p-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-blue-500/10 text-blue-600 dark:text-blue-400">
-            <BarChart3 className="h-5 w-5" />
-          </div>
+          <LukaIconBadge icon={BarChart3} tone="blue" />
           <div>
             <h2 className="text-base font-black text-foreground sm:text-lg">Evolución y metas</h2>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground sm:text-sm">
