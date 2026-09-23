@@ -348,7 +348,7 @@ export function LoginForm() {
         items-center
         justify-center
         overflow-hidden
-        bg-background
+        bg-transparent
       "
     >
       <div
