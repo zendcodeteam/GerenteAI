@@ -19,7 +19,7 @@ const STAMPS: LogoStamp[] = [
   { x: 0.67, y: 0.91, size: 98, rotation: 0.12, alpha: 0.06 },
 ];
 
-export function LukaDynamicAtmosphere() {
+export function LukaDynamicAtmosphere({ contained = false }: { contained?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -60,8 +60,11 @@ export function LukaDynamicAtmosphere() {
 
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      width = window.innerWidth;
-      height = window.innerHeight;
+      const bounds = contained
+        ? canvas.parentElement?.getBoundingClientRect()
+        : undefined;
+      width = bounds?.width ?? window.innerWidth;
+      height = bounds?.height ?? window.innerHeight;
       canvas.width = Math.round(width * dpr);
       canvas.height = Math.round(height * dpr);
       canvas.style.width = `${width}px`;
@@ -75,6 +78,14 @@ export function LukaDynamicAtmosphere() {
     resize();
     window.addEventListener("resize", resize);
 
+    const parentResizeObserver = contained && canvas.parentElement
+      ? new ResizeObserver(resize)
+      : undefined;
+
+    if (parentResizeObserver && canvas.parentElement) {
+      parentResizeObserver.observe(canvas.parentElement);
+    }
+
     const observer = new MutationObserver(draw);
     observer.observe(document.documentElement, {
       attributes: true,
@@ -83,9 +94,16 @@ export function LukaDynamicAtmosphere() {
 
     return () => {
       window.removeEventListener("resize", resize);
+      parentResizeObserver?.disconnect();
       observer.disconnect();
     };
   }, []);
 
-  return <canvas ref={canvasRef} className="luka-dynamic-atmosphere" aria-hidden="true" />;
+  return (
+    <canvas
+      ref={canvasRef}
+      className={contained ? "pointer-events-none absolute inset-0 z-0 h-full w-full" : "luka-dynamic-atmosphere"}
+      aria-hidden="true"
+    />
+  );
 }
