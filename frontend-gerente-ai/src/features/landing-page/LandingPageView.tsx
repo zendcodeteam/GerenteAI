@@ -10,11 +10,9 @@ import { CoworkingPhilosophySection } from "./components/CoworkingPhilosophySect
 import { CoworkingPricingSection } from "./components/CoworkingPricingSection";
 import { CoworkingFaqSection } from "./components/CoworkingFaqSection";
 import { CoworkingFooterSection } from "./components/CoworkingFooterSection";
+import { LukaDynamicAtmosphere } from "./components/LukaDynamicAtmosphere";
 
-import {
-  LukaChatProvider,
-  LukaFloatingChat,
-} from "@/features/assistant";
+import { LukaChatProvider, LukaFloatingChat } from "@/features/assistant";
 
 export function LandingPageView() {
   return (
@@ -33,6 +31,7 @@ export function LandingPageView() {
           selection:bg-emerald-500/30
           dark:bg-[#070B12]
           dark:text-slate-50
+          luka-surface-pattern
         "
       >
         {/* =====================================================
@@ -50,7 +49,10 @@ export function LandingPageView() {
             Todas las secciones deben dejar este fondo visible.
         ===================================================== */}
 
-        <div className="relative z-10">
+        <LukaDynamicAtmosphere />
+        <div className="luka-home-gradient" aria-hidden="true" />
+
+        <div className="relative z-30">
           {/* ===================================================
               NAVBAR
           =================================================== */}
