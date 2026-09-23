@@ -27,7 +27,8 @@ export function LoginShowcase() {
         items-center
         justify-center
         overflow-hidden
-        bg-background
+        bg-slate-50
+        dark:bg-[#070B12]
       "
     >
       {/* ============================================================
@@ -35,74 +36,6 @@ export function LoginShowcase() {
       ============================================================ */}
 
       <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <motion.div
-          initial={
-            shouldReduceMotion
-              ? { opacity: 0.35, scale: 1 }
-              : {
-                  opacity: 0,
-                  scale: 0.92,
-                }
-          }
-          animate={{
-            opacity: 0.35,
-            scale: 1,
-          }}
-          transition={{
-            duration: shouldReduceMotion ? 0 : 1.3,
-            ease,
-          }}
-          className="
-            absolute
-            left-[10%]
-            top-[20%]
-            h-[360px]
-            w-[360px]
-            rounded-full
-            bg-primary/[0.08]
-            blur-[110px]
-          "
-        />
-
-        <motion.div
-          initial={
-            shouldReduceMotion
-              ? { opacity: 0.18, scale: 1 }
-              : {
-                  opacity: 0,
-                  scale: 0.9,
-                }
-          }
-          animate={{
-            opacity: 0.18,
-            scale: 1,
-          }}
-          transition={{
-            duration: shouldReduceMotion ? 0 : 1.5,
-            delay: shouldReduceMotion ? 0 : 0.1,
-            ease,
-          }}
-          className="
-            absolute
-            bottom-[8%]
-            right-[5%]
-            h-[280px]
-            w-[280px]
-            rounded-full
-            bg-indigo-500/[0.06]
-            blur-[100px]
-          "
-        />
-
-        <div
-          className="
-            absolute
-            inset-0
-            opacity-[0.022]
-            [background-image:linear-gradient(to_right,currentColor_1px,transparent_1px),linear-gradient(to_bottom,currentColor_1px,transparent_1px)]
-            [background-size:72px_72px]
-          "
-        />
       </div>
 
       {/* ============================================================

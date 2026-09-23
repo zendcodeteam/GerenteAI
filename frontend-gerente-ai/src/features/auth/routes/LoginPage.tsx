@@ -3,12 +3,14 @@ import { ArrowLeft } from "lucide-react";
 
 import { LoginForm } from "@/features/auth/components/LoginForm";
 import { LoginShowcase } from "@/features/auth/components/LoginShowcase";
+import { LukaDynamicAtmosphere } from "@/features/landing-page/components/LukaDynamicAtmosphere";
 
 import { ThemeToggle } from "@/shared/components/layout/ThemeToggle";
 
 export function LoginPage() {
   return (
-    <div className="min-h-screen w-full flex bg-background font-body">
+    <div className="relative min-h-screen w-full overflow-hidden flex bg-slate-50 dark:bg-[#070B12] font-body">
+      <div className="luka-home-gradient" aria-hidden="true" />
       {/* =========================
           LEFT SIDE: FORM
       ========================== */}
@@ -16,15 +18,18 @@ export function LoginPage() {
         className="
           w-full
           lg:w-1/2
+          relative
+          z-20
           flex
           flex-col
-          relative
           animate-in
           fade-in
           slide-in-from-left-8
           duration-700
+          bg-transparent
         "
       >
+        <LukaDynamicAtmosphere contained />
         {/* =========================
             MOBILE NAVIGATION
         ========================== */}
@@ -138,6 +143,8 @@ export function LoginPage() {
           fade-in
           slide-in-from-right-8
           duration-700
+          relative
+          z-20
         "
       >
         <LoginShowcase />

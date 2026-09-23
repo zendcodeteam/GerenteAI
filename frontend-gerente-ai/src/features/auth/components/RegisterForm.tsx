@@ -391,7 +391,7 @@ export function RegisterForm() {
 
   if (isSuccess) {
     return (
-      <div className="flex h-full min-h-0 w-full items-center justify-center overflow-hidden bg-background">
+      <div className="flex h-full min-h-0 w-full items-center justify-center overflow-hidden bg-transparent">
         <motion.div
           initial={
             shouldReduceMotion
@@ -450,7 +450,7 @@ export function RegisterForm() {
   ================================================================ */
 
   return (
-    <div className="flex h-full min-h-0 w-full items-center justify-center overflow-hidden bg-background">
+    <div className="flex h-full min-h-0 w-full items-center justify-center overflow-hidden bg-transparent">
       <div className="flex h-full min-h-0 w-full max-w-[560px] flex-col px-6 py-5 sm:px-10 sm:py-6 lg:px-12 lg:py-6">
         <motion.div
           key={isGoogleOnboarding ? "google-onboarding" : "normal-register"}

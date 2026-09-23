@@ -3,11 +3,13 @@ import { ArrowLeft } from "lucide-react";
 
 import { RegisterForm } from "@/features/auth/components/RegisterForm";
 import { RegisterShowcase } from "@/features/auth/components/RegisterShowcase";
+import { LukaDynamicAtmosphere } from "@/features/landing-page/components/LukaDynamicAtmosphere";
 import { ThemeToggle } from "@/shared/components/layout/ThemeToggle";
 
 export function RegisterPage() {
   return (
-    <div className="min-h-screen w-full flex bg-background font-body">
+    <div className="relative min-h-screen w-full overflow-hidden flex bg-slate-50 dark:bg-[#070B12] font-body">
+      <div className="luka-home-gradient" aria-hidden="true" />
       {/* =========================
           LEFT SIDE: FORM
       ========================== */}
@@ -15,18 +17,21 @@ export function RegisterPage() {
         className="
           w-full
           lg:w-1/2
+          relative
+          z-20
           flex
           flex-col
           justify-between
-          relative
           animate-in
           fade-in
           slide-in-from-left-8
           duration-700
+          bg-transparent
           p-6
           sm:p-8
         "
       >
+        <LukaDynamicAtmosphere contained />
         {/* =========================
             MOBILE NAVIGATION
         ========================== */}
@@ -135,6 +140,8 @@ export function RegisterPage() {
           fade-in
           slide-in-from-right-8
           duration-700
+          relative
+          z-20
         "
       >
         <RegisterShowcase />
