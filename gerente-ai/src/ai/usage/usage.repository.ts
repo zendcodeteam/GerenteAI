@@ -10,6 +10,7 @@ export interface AiUsageRecord {
   businessId?: string;
   /** Caso de uso: "whatsapp.extraction", "insights.generate", "assistant.chat". */
   feature: string;
+  solicitudId?: string;
   providerId: string;
   model: string;
   inputTokens: number;
@@ -38,6 +39,26 @@ export interface AiUsageRepository {
   /** Llamadas exitosas del tenant dentro del rango. */
   countMessages(tenantId: string, from: Date, to: Date): Promise<number>;
   summarize(tenantId: string, from: Date, to: Date): Promise<AiUsageSummary>;
+  reserveWhatsAppMessage(
+    context: AiCallContext,
+    requestId: string,
+  ): Promise<QuotaReservation>;
+  releaseWhatsAppMessage(tenantId: string, requestId: string): Promise<void>;
+}
+
+export interface AiCallContext {
+  tenantId: string;
+  businessId?: string;
+  feature: string;
+  solicitudId?: string;
+  plan?: string;
+  periodo?: { inicio: Date; fin: Date };
+}
+
+export interface QuotaReservation {
+  used: number;
+  limit: number;
+  remaining: number;
 }
 
 export const AI_USAGE_REPOSITORY = Symbol('AI_USAGE_REPOSITORY');

@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import { LlmError, type LlmErrorCode } from '../../../ai/core/llm.errors';
@@ -16,6 +16,7 @@ import {
 } from '../../finance-ai/services/whatsapp-message.service';
 import type { InterpretMessageDto } from '../dto/interpret-message.dto';
 import { MessageDedupeService } from './message-dedupe.service';
+import { AiUsageService } from '../../../ai/usage/usage.service';
 import { LimitePorRemitenteService } from './limite-por-remitente.service';
 import {
   maskPhone,
@@ -184,6 +185,9 @@ const GENERIC_FALLBACK =
 const MENSAJE_LIMITE_REMITENTE =
   'Estás enviando muchos mensajes seguidos 🙏 Espera unos minutos y vuelve a escribirme; no registré este último.';
 
+const MENSAJE_LIMITE_PLAN =
+  'Alcanzaste el límite de mensajes de IA de tu plan para este ciclo. Puedes esperar a la próxima renovación o mejorar tu plan desde el panel de Luka AI.';
+
 @Injectable()
 export class WhatsappInterpretService {
   private readonly logger = new Logger(WhatsappInterpretService.name);
@@ -194,6 +198,7 @@ export class WhatsappInterpretService {
     private readonly dedupe: MessageDedupeService,
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    @Optional() private readonly usage?: AiUsageService,
     private readonly limite: LimitePorRemitenteService = new LimitePorRemitenteService(),
   ) {}
 
@@ -317,6 +322,32 @@ export class WhatsappInterpretService {
       });
     }
 
+    const requestId = dto.messageId ?? `${sender.phone ?? sender.userId}:${Date.now()}`;
+    try {
+      if (typeof this.usage?.reserveWhatsAppMessage === 'function') await this.usage.reserveWhatsAppMessage(
+        {
+          tenantId: context.negocioId,
+          businessId: context.sedeId,
+          feature: 'whatsapp.request',
+          plan: context.plan,
+          periodo: context.ventanaDeCuota,
+        },
+        requestId,
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message === 'quota_exceeded') {
+        const aviso = this.emptyResponse({
+          type: 'plan_requerido',
+          reply: MENSAJE_LIMITE_PLAN,
+          durationMs: Date.now() - startedAt,
+          duplicate: false,
+        });
+        this.dedupe.remember(dto.messageId, aviso);
+        return aviso;
+      }
+      throw error;
+    }
+
     // ---- 3. Historial ------------------------------------------------------
     // Se lee ANTES de guardar el mensaje nuevo: si no, el modelo recibiria dos
     // veces el mismo texto (como turno anterior y como mensaje actual).
@@ -351,6 +382,7 @@ export class WhatsappInterpretService {
         plan: context.plan,
         planName: context.planName,
         planIsFree: context.planIsFree,
+        requestId,
         history,
         quotedMessage,
         // La nota de voz o la foto, si venia una. El corte por plan lo hace
@@ -360,6 +392,7 @@ export class WhatsappInterpretService {
         persist: dto.persist ?? true,
       });
     } catch (error) {
+      if (typeof this.usage?.releaseWhatsAppMessage === 'function') await this.usage.releaseWhatsAppMessage(context.negocioId, requestId);
       return this.degradedResponse(error, context, Date.now() - startedAt);
     }
 

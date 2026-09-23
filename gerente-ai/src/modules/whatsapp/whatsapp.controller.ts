@@ -87,7 +87,12 @@ export class WhatsappController {
   @Get('recordatorios/nocturno')
   async recordatorioNocturno() {
     const destinatarios = await this.destinatarios.sedesSinMovimientosHoy();
-    return { total: destinatarios.length, destinatarios };
+    const resumenes = await this.destinatarios.resumenesConMovimientosHoy();
+    return {
+      total: destinatarios.length + resumenes.length,
+      destinatarios,
+      resumenes,
+    };
   }
 
   /**
