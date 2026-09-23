@@ -50,10 +50,6 @@ export class WhatsAppMessageDto {
   })
   currency?: string;
 
-  @IsOptional()
-  @IsIn(PLANS)
-  plan?: (typeof PLANS)[number];
-
   /** Si es true, los movimientos detectados se guardan. */
   @IsOptional()
   @IsBoolean()

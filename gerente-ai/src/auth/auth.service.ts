@@ -28,6 +28,7 @@ import { NegociosService } from '../services/negocios.service';
 import { MailService } from './mail/mail.service';
 
 import { huellaDeContrasena } from './password-changed-at';
+import { firmaDe, verificacionDe } from './jwt-claims';
 
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -277,9 +278,9 @@ export class AuthService {
             sub: usuario.id,
             type: 'email-verification',
           },
-          {
+          firmaDe('email-verification', {
             expiresIn: '24h',
-          },
+          }),
         );
 
       /**
@@ -334,6 +335,9 @@ export class AuthService {
       payload =
         this.jwtService.verify(
           token,
+          verificacionDe(
+            'email-verification',
+          ),
         );
     } catch {
       throw new UnauthorizedException(
@@ -1410,10 +1414,10 @@ export class AuthService {
         type: 'mfa-pending',
         purpose,
       },
-      {
+      firmaDe('mfa-pending', {
         expiresIn:
           MFA_TOKEN_EXPIRES_IN,
-      },
+      }),
     );
   }
 
@@ -1437,6 +1441,9 @@ export class AuthService {
       payload =
         this.jwtService.verify<MfaPendingPayload>(
           token,
+          verificacionDe(
+            'mfa-pending',
+          ),
         );
     } catch {
       throw new UnauthorizedException(
@@ -2261,6 +2268,7 @@ export class AuthService {
       access_token:
         this.jwtService.sign(
           payload,
+          firmaDe('session'),
         ),
 
       user: {
@@ -2308,9 +2316,9 @@ export class AuthService {
           sub: usuario.id,
           type: 'email-verification',
         },
-        {
+        firmaDe('email-verification', {
           expiresIn: '24h',
-        },
+        }),
       );
 
     void this.mailService.sendVerificationEmail(
@@ -2496,9 +2504,9 @@ export class AuthService {
               usuario.password,
             ),
           },
-          {
+          firmaDe('password-reset', {
             expiresIn: '1h',
-          },
+          }),
         );
 
       void this.mailService.sendPasswordResetEmail(
@@ -2531,6 +2539,9 @@ export class AuthService {
       payload =
         this.jwtService.verify(
           dto.token,
+          verificacionDe(
+            'password-reset',
+          ),
         );
     } catch {
       throw new UnauthorizedException(
@@ -2701,9 +2712,9 @@ export class AuthService {
           nuevoEmail,
           type: 'email-change',
         },
-        {
+        firmaDe('email-change', {
           expiresIn: '1h',
-        },
+        }),
       );
 
     void this.mailService.sendEmailChangeConfirmation(
@@ -2735,6 +2746,7 @@ export class AuthService {
       payload =
         this.jwtService.verify(
           dto.token,
+          verificacionDe('email-change'),
         );
     } catch {
       throw new UnauthorizedException(

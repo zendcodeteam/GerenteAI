@@ -253,14 +253,14 @@ export function CoworkingPricingSection() {
         relative
         -mt-7
         overflow-hidden
-        bg-slate-50
+        bg-transparent
         px-6
         pb-24
         pt-0
         transition-colors
         duration-500
 
-        dark:bg-slate-950
+        dark:bg-transparent
 
         md:-mt-18
         md:px-12

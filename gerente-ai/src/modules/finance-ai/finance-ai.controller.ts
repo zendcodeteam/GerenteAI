@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Param, Post, UseFilters } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  ForbiddenException,
+  Get,
+  NotFoundException,
+  Param,
+  Post,
+  UseFilters,
+  UseGuards,
+} from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 
 import { LlmExceptionFilter } from '../../ai/filters/llm-exception.filter';
@@ -14,6 +24,10 @@ import { InsightsService } from './services/insights.service';
 import { WhatsAppMessageService } from './services/whatsapp-message.service';
 import { PrismaService } from '../../services/prisma.service';
 import { periodoContableActual } from './domain/periodo-contable';
+import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
+import { CurrentUser } from '../../auth/decorators/current-user.decorator';
+
+type AuthUser = { userId: string; rolGlobal: string };
 
 /**
  * API de IA que consume el frontend (y, mas adelante, el webhook de WhatsApp).
@@ -50,14 +64,41 @@ export class FinanceAiController {
    * respuesta listo para enviar al usuario.
    */
   @Post('whatsapp/message')
-  async handleWhatsAppMessage(@Body() dto: WhatsAppMessageDto) {
+  @UseGuards(JwtAuthGuard)
+  async handleWhatsAppMessage(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: WhatsAppMessageDto,
+  ) {
+    const negocio = await this.prisma.negocio.findUnique({
+      where: { id: dto.businessId },
+      select: {
+        id: true,
+        nombre: true,
+        plan: true,
+        planVenceEl: true,
+        usuariosNegocio: {
+          where: { usuarioId: user.userId },
+          select: { id: true },
+        },
+      },
+    });
+
+    if (!negocio) throw new NotFoundException('El negocio no existe');
+    if (user.rolGlobal !== 'MASTER' && negocio.usuariosNegocio.length === 0) {
+      throw new ForbiddenException('No tienes permisos sobre este negocio');
+    }
+
+    const planId = planNumberForBusiness(negocio);
+
     const result = await this.whatsapp.handleMessage({
-      tenantId: dto.tenantId ?? 'demo-tenant',
-      businessId: dto.businessId,
+      tenantId: negocio.id,
+      businessId: negocio.id,
       message: dto.message,
-      businessName: dto.businessName,
+      businessName: negocio.nombre,
       currency: dto.currency,
-      plan: dto.plan,
+      plan: planNameForId(planId),
+      planName: planLabelForId(planId),
+      planIsFree: planId === 1,
       persist: dto.persist ?? false,
     });
 
@@ -143,4 +184,33 @@ function planIdForBusiness(negocio: {
     4: 'socio',
     5: 'corporativo',
   }[plan ?? 1] ?? 'asistente';
+}
+
+function planNumberForBusiness(negocio: {
+  plan?: number;
+  planVenceEl?: Date | null;
+}): number {
+  return negocio.planVenceEl && negocio.planVenceEl <= new Date()
+    ? 1
+    : negocio.plan ?? 1;
+}
+
+function planNameForId(plan: number): string {
+  return {
+    1: 'asistente',
+    2: 'gerente',
+    3: 'director',
+    4: 'socio',
+    5: 'corporativo',
+  }[plan] ?? 'asistente';
+}
+
+function planLabelForId(plan: number): string {
+  return {
+    1: 'Asistente',
+    2: 'Gerente',
+    3: 'Administrador',
+    4: 'Socio',
+    5: 'Corporativo',
+  }[plan] ?? 'Asistente';
 }

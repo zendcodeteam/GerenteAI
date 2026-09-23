@@ -1336,7 +1336,7 @@ export function CoworkingHowItWorksSection() {
         relative
         w-full
         overflow-hidden
-        bg-slate-50
+        bg-transparent
         px-6
         pt-4
         pb-6
@@ -1389,7 +1389,7 @@ export function CoworkingHowItWorksSection() {
               min-h-[440px]
               overflow-hidden
               rounded-[2rem]
-              bg-white
+              bg-white/60
               px-7
               py-10
               shadow-sm
@@ -1402,7 +1402,7 @@ export function CoworkingHowItWorksSection() {
 
               dark:border
               dark:border-white/[0.06]
-              dark:bg-[#101722]
+              dark:bg-[#101722]/70
             "
             initial={
               shouldReduceMotion

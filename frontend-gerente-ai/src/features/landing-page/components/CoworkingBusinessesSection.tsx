@@ -201,14 +201,14 @@ export function CoworkingBusinessesSection() {
           rounded-[2.5rem]
           border
           border-slate-200/90
-          bg-slate-100/90
+          bg-white/45
           px-6
           py-16
           shadow-[0_25px_70px_rgba(15,23,42,0.08)]
           backdrop-blur-xl
 
           dark:border-white/[0.08]
-          dark:bg-[#111925]
+          dark:bg-[#111925]/65
           dark:shadow-black/20
 
           md:px-10

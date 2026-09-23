@@ -53,7 +53,7 @@ export function CoworkingFaqSection() {
       {/* =====================================================
           GRAN CONTENEDOR
       ===================================================== */}
-      <div className="relative mx-auto max-w-7xl overflow-hidden rounded-[40px] border border-slate-200/80 bg-white/60 px-6 py-12 shadow-[0_30px_100px_-50px_rgba(15,23,42,0.18)] backdrop-blur-xl dark:border-white/[0.08] dark:bg-[#101827] dark:shadow-[0_30px_100px_-50px_rgba(0,0,0,0.7)] sm:px-10 sm:py-16 md:px-14 md:py-20 lg:px-16 lg:py-24">
+      <div className="relative mx-auto max-w-7xl overflow-hidden rounded-[40px] border border-slate-200/80 bg-white/35 px-6 py-12 shadow-[0_30px_100px_-50px_rgba(15,23,42,0.18)] backdrop-blur-xl dark:border-white/[0.08] dark:bg-[#101827]/65 dark:shadow-[0_30px_100px_-50px_rgba(0,0,0,0.7)] sm:px-10 sm:py-16 md:px-14 md:py-20 lg:px-16 lg:py-24">
 
         {/* =====================================================
             GLOW INTERNO
