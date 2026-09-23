@@ -12,6 +12,7 @@ import { AssistantService } from './services/assistant.service';
 import { ConversationStateService } from './services/conversation-state.service';
 import { InsightsService } from './services/insights.service';
 import { WhatsAppMessageService } from './services/whatsapp-message.service';
+import { NegociosModule } from '../negocios.module';
 
 /**
  * Casos de uso de IA sobre las finanzas del negocio.
@@ -26,6 +27,7 @@ import { WhatsAppMessageService } from './services/whatsapp-message.service';
  *                           levantar el frontend o hacer demos sin infraestructura.
  */
 @Module({
+  imports: [NegociosModule],
   controllers: [FinanceAiController],
   providers: [
     PrismaFinanceDataAdapter,

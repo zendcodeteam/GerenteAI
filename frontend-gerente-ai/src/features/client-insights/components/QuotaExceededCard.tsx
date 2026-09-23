@@ -6,14 +6,14 @@ interface QuotaExceededCardProps {
 
 export function QuotaExceededCard({ onUpgrade }: QuotaExceededCardProps) {
   return (
-    <div className="relative isolate flex min-h-[min(620px,calc(100vh-180px))] w-full items-center justify-center overflow-hidden rounded-[2rem] border border-amber-500/20 bg-card px-4 py-10 shadow-sm sm:px-8 sm:py-14">
+    <div className="relative isolate flex min-h-[min(500px,calc(100vh-210px))] w-full items-center justify-center overflow-hidden rounded-[2rem] border border-amber-500/20 bg-card px-4 py-8 shadow-sm sm:px-10 sm:py-10 lg:px-16">
       <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
         <div className="absolute left-1/2 top-1/2 h-[520px] w-[520px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-emerald-500/[0.08] blur-[110px] dark:bg-emerald-400/[0.06]" />
         <div className="absolute -right-20 top-12 h-56 w-56 rounded-full bg-amber-400/[0.12] blur-[90px] dark:bg-amber-400/[0.08]" />
         <div className="absolute -left-20 bottom-10 h-64 w-64 rounded-full bg-cyan-400/[0.1] blur-[100px] dark:bg-cyan-400/[0.06]" />
       </div>
 
-      <div className="w-full max-w-2xl text-center">
+      <div className="w-full max-w-5xl text-center">
         <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center rounded-[1.75rem] border border-amber-400/30 bg-gradient-to-br from-amber-400/20 via-orange-400/10 to-emerald-400/10 text-amber-500 shadow-[0_20px_50px_-24px_rgba(245,158,11,0.65)]">
           <div className="relative">
             <Zap className="h-9 w-9" strokeWidth={2.2} />
@@ -27,15 +27,15 @@ export function QuotaExceededCard({ onUpgrade }: QuotaExceededCardProps) {
           Cuota de IA agotada
         </span>
 
-        <h3 className="mx-auto mt-5 max-w-xl text-2xl font-black tracking-tight text-foreground sm:text-4xl">
+        <h3 className="mx-auto mt-5 max-w-3xl text-2xl font-black tracking-tight text-foreground sm:text-4xl">
           Luka necesita un poco más de espacio para seguir analizando tu negocio.
         </h3>
 
-        <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-muted-foreground sm:text-base">
+        <p className="mx-auto mt-4 max-w-2xl text-sm leading-relaxed text-muted-foreground sm:text-base">
           Ya utilizaste los mensajes de IA incluidos en tu ciclo actual. Aumenta tu cuota para continuar recibiendo recomendaciones, alertas y análisis basados en tus datos.
         </p>
 
-        <div className="mx-auto mt-8 grid max-w-xl grid-cols-1 gap-3 text-left sm:grid-cols-3">
+        <div className="mx-auto mt-7 grid max-w-4xl grid-cols-1 gap-3 text-left sm:grid-cols-3">
           <Benefit icon={BarChart3} text="Análisis más frecuentes" />
           <Benefit icon={MessageSquare} text="Más consultas a Luka" />
           <Benefit icon={Check} text="Decisiones basadas en datos" />

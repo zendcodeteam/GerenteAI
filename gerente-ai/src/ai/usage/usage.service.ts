@@ -6,7 +6,10 @@ import {
   AI_USAGE_REPOSITORY,
   type AiUsageRepository,
   type AiUsageSummary,
+  type QuotaReservation,
 } from './usage.repository';
+import type { AiCallContext } from './usage.repository';
+export type { AiCallContext } from './usage.repository';
 
 /**
  * Planes comerciales de Luka AI. Los limites reflejan la pantalla de
@@ -79,23 +82,6 @@ export function resolvePlan(plan: string | undefined): PlanLimits {
   return PLAN_LIMITS[key] ?? PLAN_LIMITS.asistente;
 }
 
-export interface AiCallContext {
-  tenantId: string;
-  businessId?: string;
-  /** Caso de uso, para poder desglosar consumo por funcionalidad. */
-  feature: string;
-  /** Plan vigente del tenant. Por defecto "gerente". */
-  plan?: string;
-  /**
-   * Periodo de 30 dias contra el que se mide la cuota.
-   *
-   * Lo calcula el catalogo de planes, que sabe cuando renueva cada negocio. Si
-   * no viene, se cae al mes de calendario: es el caso de las llamadas del panel,
-   * donde no hay un ciclo de cobro con el que alinearse.
-   */
-  periodo?: { inicio: Date; fin: Date };
-}
-
 export interface QuotaStatus {
   plan: PlanLimits;
   used: number;
@@ -160,6 +146,17 @@ export class AiUsageService {
       periodStart: start,
       periodEnd: end,
     };
+  }
+
+  async reserveWhatsAppMessage(
+    context: AiCallContext,
+    requestId: string,
+  ): Promise<QuotaReservation> {
+    return this.repository.reserveWhatsAppMessage(context, requestId);
+  }
+
+  async releaseWhatsAppMessage(tenantId: string, requestId: string) {
+    await this.repository.releaseWhatsAppMessage(tenantId, requestId);
   }
 
   async recordSuccess(
