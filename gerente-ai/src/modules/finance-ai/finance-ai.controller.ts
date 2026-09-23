@@ -26,6 +26,7 @@ import { PrismaService } from '../../services/prisma.service';
 import { periodoContableActual } from './domain/periodo-contable';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { CurrentUser } from '../../auth/decorators/current-user.decorator';
+import { NegociosService } from '../../services/negocios.service';
 
 type AuthUser = { userId: string; rolGlobal: string };
 
@@ -56,6 +57,7 @@ export class FinanceAiController {
     private readonly llm: LlmService,
     private readonly usage: AiUsageService,
     private readonly prisma: PrismaService,
+    private readonly negocios: NegociosService,
   ) {}
 
   /**
@@ -107,11 +109,16 @@ export class FinanceAiController {
 
   /** Genera las recomendaciones del panel a partir de los datos del negocio. */
   @Post('insights')
-  async generateInsights(@Body() dto: GenerateInsightsDto) {
+  @UseGuards(JwtAuthGuard)
+  async generateInsights(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: GenerateInsightsDto,
+  ) {
+    const contexto = await this.contextoAutorizado(user, dto.businessId);
     const result = await this.insights.generate({
-      tenantId: dto.tenantId ?? 'demo-tenant',
-      businessId: dto.businessId,
-      plan: dto.plan,
+      tenantId: contexto.negocio.id,
+      businessId: contexto.sede.id,
+      plan: contexto.plan,
       limit: dto.limit,
     });
 
@@ -120,13 +127,18 @@ export class FinanceAiController {
 
   /** Pregunta libre sobre las finanzas del negocio. */
   @Post('assistant/ask')
-  async ask(@Body() dto: AskAssistantDto) {
+  @UseGuards(JwtAuthGuard)
+  async ask(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: AskAssistantDto,
+  ) {
+    const contexto = await this.contextoAutorizado(user, dto.businessId);
     const result = await this.assistant.ask({
-      tenantId: dto.tenantId ?? 'demo-tenant',
-      businessId: dto.businessId,
+      tenantId: contexto.negocio.id,
+      businessId: contexto.sede.id,
       question: dto.question,
       history: dto.history,
-      plan: dto.plan,
+      plan: contexto.plan,
     });
 
     return { success: true, data: result };
@@ -167,6 +179,40 @@ export class FinanceAiController {
     ]);
 
     return { success: true, data: { quota, summary } };
+  }
+
+  private async contextoAutorizado(user: AuthUser, sedeId: string) {
+    const sede = await this.prisma.sede.findUnique({
+      where: { id: sedeId },
+      select: {
+        id: true,
+        negocioId: true,
+        createdAt: true,
+        negocio: {
+          select: {
+            id: true,
+            nombre: true,
+            plan: true,
+            planVenceEl: true,
+          },
+        },
+      },
+    });
+
+    if (!sede) throw new NotFoundException('La sede no existe');
+
+    await this.negocios.verificarAccesoSede(
+      user.userId,
+      sede,
+      user.rolGlobal,
+    );
+
+    const planId = planNumberForBusiness(sede.negocio);
+    return {
+      sede,
+      negocio: sede.negocio,
+      plan: planNameForId(planId),
+    };
   }
 }
 

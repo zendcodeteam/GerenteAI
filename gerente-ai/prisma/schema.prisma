@@ -410,6 +410,8 @@ model ConsumoIa {
   /// Funcionalidad que produjo el consumo.
   /// Ejemplos: "whatsapp", "chat", "reportes", etc.
   feature      String
+  /// Identificador único del mensaje de WhatsApp que consumió una solicitud.
+  solicitudId  String?
   /// Identificador del proveedor de IA utilizado.
   /// Ejemplos: "openai", "anthropic", etc.
   providerId   String
@@ -437,6 +439,7 @@ model ConsumoIa {
   @@index([providerId, createdAt])
   @@index([feature, createdAt])
   @@index([exitosa, createdAt])
+  @@unique([negocioId, solicitudId])
 }
 
 /// Bitácora de auditoría para operaciones destructivas (eliminación, sustitución, corrección).

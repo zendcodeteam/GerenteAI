@@ -43,6 +43,13 @@ export interface Destinatario {
   via: 'sede_telefono' | 'sede_identidad' | 'usuario_telefono';
 }
 
+export interface ResumenNocturno extends Destinatario {
+  ingresos: number;
+  gastos: number;
+  balance: number;
+  movimientos: number;
+}
+
 /** Un fiado que lleva dias sin cobrarse. */
 export interface FiadoPorCobrar extends Destinatario {
   ventaId: string;
@@ -178,6 +185,50 @@ export class DestinatariosService {
       // Si otra ejecucion se adelanto, no es un error: el aviso ya salio.
       skipDuplicates: true,
     });
+  }
+
+  /** Sedes con actividad financiera para recibir el resumen de las 21:00. */
+  async resumenesConMovimientosHoy(
+    ahora = new Date(),
+  ): Promise<ResumenNocturno[]> {
+    const hoy = fechaColombiana(ahora);
+    const rango = { gte: inicioDelDia(hoy), lte: finDelDia(hoy) };
+    const alcanzables = await this.sedesAlcanzables();
+    const ids = alcanzables.map((destino) => destino.sedeId);
+    if (ids.length === 0) return [];
+
+    const [gastos, compras, ventas, abonos] = await Promise.all([
+      this.prisma.gasto.findMany({ where: { sedeId: { in: ids }, fecha: rango }, select: { sedeId: true, monto: true } }),
+      this.prisma.compra.findMany({ where: { sedeId: { in: ids }, fecha: rango }, select: { sedeId: true, total: true } }),
+      this.prisma.venta.findMany({ where: { sedeId: { in: ids }, fecha: rango }, select: { sedeId: true, total: true, tipo: true } }),
+      this.prisma.abono.findMany({ where: { sedeId: { in: ids }, fecha: rango }, select: { sedeId: true, monto: true } }),
+    ]);
+
+    const totals = new Map<string, { ingresos: number; gastos: number; movimientos: number }>();
+    const add = (sedeId: string, field: 'ingresos' | 'gastos', amount: number) => {
+      const current = totals.get(sedeId) ?? { ingresos: 0, gastos: 0, movimientos: 0 };
+      current[field] += amount;
+      current.movimientos += 1;
+      totals.set(sedeId, current);
+    };
+
+    for (const venta of ventas) {
+      if (venta.tipo === 'FIADO') {
+        const current = totals.get(venta.sedeId) ?? { ingresos: 0, gastos: 0, movimientos: 0 };
+        current.movimientos += 1;
+        totals.set(venta.sedeId, current);
+      } else add(venta.sedeId, 'ingresos', Number(venta.total));
+    }
+    for (const abono of abonos) add(abono.sedeId, 'ingresos', Number(abono.monto));
+    for (const gasto of gastos) add(gasto.sedeId, 'gastos', Number(gasto.monto));
+    for (const compra of compras) add(compra.sedeId, 'gastos', Number(compra.total));
+
+    return alcanzables
+      .filter((destino) => (totals.get(destino.sedeId)?.movimientos ?? 0) > 0)
+      .map((destino) => {
+        const total = totals.get(destino.sedeId)!;
+        return { ...destino, ...total, balance: total.ingresos - total.gastos };
+      });
   }
 
   // ----------------------------------------------------------------- interno

@@ -95,6 +95,8 @@ export interface WhatsAppMessageRequest {
   planName?: string;
   /** true si el plan vigente es el gratuito. */
   planIsFree?: boolean;
+  /** Identificador único del mensaje entrante de WhatsApp. */
+  requestId?: string;
   /**
    * El mensaje al que el usuario esta respondiendo, cuando cito uno.
    *
@@ -215,7 +217,8 @@ export class WhatsAppMessageService {
     const context: AiCallContext = {
       tenantId: request.tenantId,
       businessId: request.businessId,
-      feature: 'whatsapp.message',
+      feature: 'whatsapp.internal',
+      solicitudId: request.requestId,
       plan: request.plan,
       periodo: request.ventanaDeCuota,
     };

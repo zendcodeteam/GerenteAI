@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 
 import type {
+  AiCallContext,
   AiUsageRecord,
   AiUsageRepository,
   AiUsageSummary,
@@ -21,6 +22,36 @@ export class InMemoryAiUsageRepository implements AiUsageRepository {
   /** Tope por tenant para que un proceso largo no consuma memoria sin limite. */
   private readonly maxEntriesPerTenant = 5_000;
 
+  async reserveWhatsAppMessage(context: AiCallContext, requestId: string) {
+    const entries = this.entries.get(context.tenantId) ?? [];
+    const existing = entries.some((entry) => entry.solicitudId === requestId);
+    const limit = ({ asistente: 100, gerente: 500, director: 1500, socio: 3000, corporativo: Infinity } as Record<string, number>)[context.plan ?? 'asistente'] ?? 100;
+    const used = entries.filter((entry) => entry.success && entry.feature !== 'whatsapp.internal').length;
+    if (!existing && used >= limit) throw new Error('quota_exceeded');
+    if (!existing) {
+      await this.record({
+        tenantId: context.tenantId,
+        businessId: context.businessId,
+        feature: 'whatsapp.request',
+        solicitudId: requestId,
+        providerId: 'whatsapp-request',
+        model: 'reserved',
+        inputTokens: 0,
+        outputTokens: 0,
+        costUsd: 0,
+        latencyMs: 0,
+        success: true,
+        createdAt: new Date(),
+      });
+    }
+    return { used: existing ? used : used + 1, limit, remaining: Math.max(0, limit - (existing ? used : used + 1)) };
+  }
+
+  async releaseWhatsAppMessage(tenantId: string, requestId: string) {
+    const entries = this.entries.get(tenantId) ?? [];
+    this.entries.set(tenantId, entries.filter((entry) => entry.solicitudId !== requestId));
+  }
+
   record(entry: AiUsageRecord): Promise<void> {
     const list = this.entries.get(entry.tenantId) ?? [];
     list.push(entry);
@@ -35,7 +66,7 @@ export class InMemoryAiUsageRepository implements AiUsageRepository {
 
   countMessages(tenantId: string, from: Date, to: Date): Promise<number> {
     return Promise.resolve(
-      this.inRange(tenantId, from, to).filter((entry) => entry.success).length,
+      this.inRange(tenantId, from, to).filter((entry) => entry.success && entry.feature !== 'whatsapp.internal').length,
     );
   }
 
@@ -48,7 +79,7 @@ export class InMemoryAiUsageRepository implements AiUsageRepository {
       tenantId,
       from,
       to,
-      messages: records.length,
+      messages: records.filter((entry) => entry.feature !== 'whatsapp.internal').length,
       inputTokens: 0,
       outputTokens: 0,
       costUsd: 0,

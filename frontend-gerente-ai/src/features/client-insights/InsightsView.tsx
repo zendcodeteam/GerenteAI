@@ -333,7 +333,7 @@ export function InsightsView() {
           />
         </div>
       ) : (
-        <div className="max-w-3xl flex flex-col gap-3">
+        <div className="w-full min-w-0 flex flex-col gap-3">
           {/* ==================================================
               LOADING
           =================================================== */}
