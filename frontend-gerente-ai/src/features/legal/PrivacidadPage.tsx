@@ -539,6 +539,45 @@ export default function PrivacidadPage() {
               </p>
             </LegalSection>
 
+            {/* 11 */}
+            <LegalSection
+              number="11"
+              title="Datos de terceros y clientes fiados"
+              icon={<Users size={18} />}
+            >
+              <p>
+                Cuando un negocio registra en Luka los datos de sus clientes
+                fiados, el negocio actúa como responsable del tratamiento
+                frente a esas personas. Debe contar con una base de
+                legitimación válida, informar las finalidades y atender los
+                derechos de los titulares.
+              </p>
+
+              <p>
+                Zendcode S.A.S. actúa como encargado por cuenta del negocio y
+                trata estos datos únicamente para administrar ventas a
+                crédito, cuentas por cobrar, abonos, recordatorios y reportes
+                solicitados por el negocio.
+              </p>
+
+              <p>
+                El negocio puede solicitar la supresión de un cliente fiado
+                desde el flujo autorizado. La supresión elimina sus datos
+                identificables y desvincula su identidad de los movimientos
+                históricos, pero conserva importes, fechas y demás información
+                estrictamente necesaria para la trazabilidad contable o el
+                cumplimiento de obligaciones legales.
+              </p>
+
+              <p>
+                La relación entre el negocio responsable y Zendcode S.A.S.
+                como encargado deberá quedar documentada mediante la aceptación
+                de los términos del servicio o un contrato de encargo de
+                tratamiento, con instrucciones, confidencialidad, seguridad,
+                atención de derechos y gestión de incidentes.
+              </p>
+            </LegalSection>
+
             {/* 10 */}
             <LegalSection
               number="10"
@@ -566,9 +605,9 @@ export default function PrivacidadPage() {
               </p>
             </LegalSection>
 
-            {/* 11 */}
+            {/* 12 */}
             <LegalSection
-              number="11"
+              number="12"
               title="Datos sensibles"
               icon={<LockKeyhole size={18} />}
             >
@@ -592,9 +631,9 @@ export default function PrivacidadPage() {
               </p>
             </LegalSection>
 
-            {/* 12 */}
+            {/* 13 */}
             <LegalSection
-              number="12"
+              number="13"
               title="Seguridad de la información"
               icon={<LockKeyhole size={18} />}
             >
@@ -621,9 +660,9 @@ export default function PrivacidadPage() {
               </p>
             </LegalSection>
 
-            {/* 13 */}
+            {/* 14 */}
             <LegalSection
-              number="13"
+              number="14"
               title="Conservación de los datos"
               icon={<Database size={18} />}
             >
@@ -650,9 +689,9 @@ export default function PrivacidadPage() {
               </p>
             </LegalSection>
 
-            {/* 14 */}
+            {/* 15 */}
             <LegalSection
-              number="14"
+              number="15"
               title="Derechos de los titulares"
               icon={<CheckCircle2 size={18} />}
             >
@@ -705,9 +744,9 @@ export default function PrivacidadPage() {
               </p>
             </LegalSection>
 
-            {/* 15 */}
+            {/* 16 */}
             <LegalSection
-              number="15"
+              number="16"
               title="Procedimiento para consultas y reclamos"
               icon={<FileText size={18} />}
             >
@@ -756,9 +795,9 @@ export default function PrivacidadPage() {
               </p>
             </LegalSection>
 
-            {/* 16 */}
+            {/* 17 */}
             <LegalSection
-              number="16"
+              number="17"
               title="Cookies y tecnologías similares"
               icon={<Database size={18} />}
             >
@@ -777,9 +816,9 @@ export default function PrivacidadPage() {
               </p>
             </LegalSection>
 
-            {/* 17 */}
+            {/* 18 */}
             <LegalSection
-              number="17"
+              number="18"
               title="Menores de edad"
               icon={<ShieldCheck size={18} />}
             >
@@ -796,9 +835,9 @@ export default function PrivacidadPage() {
               </p>
             </LegalSection>
 
-            {/* 18 */}
+            {/* 19 */}
             <LegalSection
-              number="18"
+              number="19"
               title="Modificaciones de esta Política"
               icon={<FileText size={18} />}
             >
@@ -820,9 +859,9 @@ export default function PrivacidadPage() {
               </p>
             </LegalSection>
 
-            {/* 19 */}
+            {/* 20 */}
             <LegalSection
-              number="19"
+              number="20"
               title="Vigencia"
               icon={<CheckCircle2 size={18} />}
             >
@@ -846,9 +885,9 @@ export default function PrivacidadPage() {
               </p>
             </LegalSection>
 
-            {/* 20 */}
+            {/* 21 */}
             <LegalSection
-              number="20"
+              number="21"
               title="Contacto"
               icon={<ShieldCheck size={18} />}
             >

@@ -161,7 +161,7 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
         id: abono.id,
         businessId: abono.sedeId,
         date: isoDate(abono.fecha),
-        description: `Abono de ${abono.cliente.nombre}`,
+        description: `Abono de ${abono.cliente?.nombre ?? 'cliente suprimido'}`,
         category: 'cobros',
         amount: toNumber(abono.monto),
         type: 'income',
@@ -171,7 +171,7 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
         paymentMethod: null,
         isCredit: false,
         pendingAmount: null,
-        customerName: abono.cliente.nombre,
+        customerName: abono.cliente?.nombre ?? null,
         groupId: null,
       })),
       ...compras.map((compra): Transaction => ({
