@@ -25,5 +25,13 @@ export class CreateProductoDto {
 
   @IsString()
   @IsNotEmpty()
+
+  @IsString()
+  @IsOptional()
+  categoria?: string;
+
+  @IsString({ each: true })
+  @IsOptional()
+  alias?: string[];
   sedeId!: string;
 }

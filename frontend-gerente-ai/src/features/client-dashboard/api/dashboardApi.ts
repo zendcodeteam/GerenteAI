@@ -48,6 +48,10 @@ interface BackendVenta {
   total: number;
   tipo: "CONTADO" | "FIADO";
   fecha: string;
+  detalles?: Array<{
+    productoId: string;
+    cantidad: number;
+  }>;
 
   cliente?: {
     id: string;
@@ -67,6 +71,10 @@ interface BackendCompra {
   id: string;
   total: number;
   fecha: string;
+  detalles?: Array<{
+    productoId: string;
+    cantidad: number;
+  }>;
 
   proveedor?: {
     id: string;
@@ -308,6 +316,10 @@ export const dashboardApi = {
               ),
 
               rawDate: venta.fecha,
+              productLines: venta.detalles?.map((detalle) => ({
+                productId: detalle.productoId,
+                quantity: detalle.cantidad,
+              })),
             });
           }
         }
@@ -436,6 +448,10 @@ export const dashboardApi = {
               ),
 
               rawDate: compra.fecha,
+              purchaseLines: compra.detalles?.map((detalle) => ({
+                productId: detalle.productoId,
+                quantity: detalle.cantidad,
+              })),
             });
           }
         }

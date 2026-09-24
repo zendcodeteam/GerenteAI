@@ -26,6 +26,7 @@ import { RecordatoriosModule } from './modules/recordatorios.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { AuthModule } from './auth/auth.module';
 import { DashboardConfigModule } from './modules/dashboard-config.module';
+import { CuentasProveedoresModule } from './modules/cuentas-proveedores.module';
 
 @Module({
   imports: [
@@ -94,6 +95,7 @@ import { DashboardConfigModule } from './modules/dashboard-config.module';
     }),
     AuthModule,
     DashboardConfigModule,
+    CuentasProveedoresModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],

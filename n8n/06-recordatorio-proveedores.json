@@ -1,0 +1,80 @@
+{
+  "name": "Luka AI · 06 · Recordatorio de pagos a proveedores",
+  "nodes": [
+    {
+      "parameters": { "rule": { "interval": [{ "field": "cronExpression", "expression": "0 9 * * *" }] } },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-220, 0],
+      "id": "a6b00000-0000-4000-8000-000000000001",
+      "name": "Todos los días 09:00"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.BACKEND_URL || 'https://TU-BACKEND.up.railway.app' }}/ai/recordatorios/proveedores",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": { "timeout": 90000 }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [0, 0],
+      "id": "a6b00000-0000-4000-8000-000000000002",
+      "name": "Obtener cuentas por pagar",
+      "credentials": { "httpHeaderAuth": { "id": "REEMPLAZAR_ID_CREDENCIAL", "name": "Backend Luka AI (x-api-key)" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const respuesta = $input.first().json;\nconst dinero = (valor) => '$' + Math.round(Number(valor) || 0).toLocaleString('es-CO');\nconst recordatorios = respuesta.recordatorios || [];\nreturn recordatorios.filter((r) => r.telefono).map((r) => ({ json: { ...r, saldoTexto: dinero(r.saldoPendiente), fechaTexto: new Date(r.fechaVencimiento).toLocaleDateString('es-CO') } }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 0],
+      "id": "a6b00000-0000-4000-8000-000000000003",
+      "name": "Preparar recordatorio"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/{{ $env.WHATSAPP_API_VERSION || 'v25.0' }}/{{ $env.WHATSAPP_PHONE_NUMBER_ID || '1276800955509419' }}/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ messaging_product: 'whatsapp', recipient_type: 'individual', to: $json.telefono, type: 'template', template: { name: $env.WHATSAPP_TEMPLATE_PROVEEDOR || 'recordatorio_proveedor', language: { code: $env.WHATSAPP_TEMPLATE_LANG || 'es' }, components: [{ type: 'body', parameters: [{ type: 'text', text: $json.proveedor }, { type: 'text', text: $json.saldoTexto }, { type: 'text', text: $json.fechaTexto }, { type: 'text', text: $json.tipo === 'cinco_dias' ? 'faltan 5 días' : ($json.tipo === 'vencimiento' ? 'vence hoy' : 'está vencida') }] }] } } }) }}",
+        "options": { "timeout": 15000, "batching": { "batch": { "batchSize": 10, "batchInterval": 1000 } } }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [440, 0],
+      "id": "a6b00000-0000-4000-8000-000000000004",
+      "name": "Enviar recordatorio al negocio",
+      "credentials": { "httpBearerAuth": { "id": "Pjjumysctcj1HMVh", "name": "Bearer Auth account" } },
+      "onError": "continueErrorOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": { "jsCode": "for (const item of $input.all()) console.error('[Proveedor] ERROR de envío:', JSON.stringify(item.json).slice(0, 800)); return $input.all();" },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 140],
+      "id": "a6b00000-0000-4000-8000-000000000005",
+      "name": "Registrar fallos"
+    }
+  ],
+  "connections": {
+    "Todos los días 09:00": { "main": [[{ "node": "Obtener cuentas por pagar", "type": "main", "index": 0 }]] },
+    "Obtener cuentas por pagar": { "main": [[{ "node": "Preparar recordatorio", "type": "main", "index": 0 }]] },
+    "Preparar recordatorio": { "main": [[{ "node": "Enviar recordatorio al negocio", "type": "main", "index": 0 }]] },
+    "Enviar recordatorio al negocio": { "main": [[], [{ "node": "Registrar fallos", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1", "timezone": "America/Bogota", "saveDataErrorExecution": "all", "saveDataSuccessExecution": "all", "executionTimeout": 600 },
+  "tags": [],
+  "meta": {
+    "setup": "Importar, configurar las credenciales y activar manualmente. Crear en Meta la plantilla aprobada recordatorio_proveedor con {{1}} proveedor, {{2}} saldo, {{3}} fecha y {{4}} estado. El endpoint marca los recordatorios de cinco días y de vencimiento al consultarlos para evitar duplicados."
+  }
+}

@@ -71,6 +71,11 @@ function movimiento(
     paymentMethod: null,
     isCredit: false,
     customerName: null,
+    productName: 'producto de prueba',
+    quantity: 1,
+    supplierName: null,
+    supplierCreditDays: null,
+    isSupplierCredit: false,
     ...parcial,
   };
 }
@@ -240,6 +245,82 @@ const BASE_REQUEST = {
 };
 
 describe('WhatsAppMessageService', () => {
+  it('pide producto y unidades antes de registrar una venta incompleta', async () => {
+    const { service, financeData } = buildService({
+      type: 'income',
+      movements: [
+        movimiento({
+          type: 'income',
+          amount: 20_000,
+          category: 'ventas',
+          productName: null,
+          quantity: null,
+        }),
+      ],
+    });
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    expect(result.intent.type).toBe('unclear');
+    expect(result.replyText).toContain('producto');
+    expect(result.replyText).toContain('unidades');
+    expect(financeData.saved).toHaveLength(0);
+  });
+
+  it('pide producto y unidades antes de registrar un gasto incompleto', async () => {
+    const { service, financeData } = buildService({
+      type: 'expense',
+      movements: [
+        movimiento({
+          amount: 20_000,
+          category: 'mercancia',
+          productName: null,
+          quantity: null,
+        }),
+      ],
+    });
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    expect(result.intent.type).toBe('unclear');
+    expect(result.replyText).toContain('producto');
+    expect(result.replyText).toContain('unidades');
+    expect(financeData.saved).toHaveLength(0);
+  });
+
+  it('también exige producto y unidades en un fiado incompleto', async () => {
+    const { service, financeData } = buildService({
+      type: 'income',
+      movements: [
+        movimiento({
+          type: 'income',
+          amount: 20_000,
+          category: 'ventas',
+          isCredit: true,
+          customerName: 'Carlos',
+          productName: null,
+          quantity: null,
+        }),
+      ],
+    });
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    expect(result.intent.type).toBe('unclear');
+    expect(result.replyText).toContain('producto');
+    expect(result.replyText).toContain('unidades');
+    expect(financeData.saved).toHaveLength(0);
+  });
+
   it('registra un gasto y responde con el texto del modelo', async () => {
     const { service, financeData } = buildService({
       type: 'expense',

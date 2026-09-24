@@ -372,6 +372,25 @@ export class WhatsAppMessageService {
       );
     }
 
+    const movimientoSinProductoOCantidad = intent.movements.find(
+      (movimiento) => !movimiento.productName || !movimiento.quantity,
+    );
+
+    if (movimientoSinProductoOCantidad) {
+      const faltaProducto = !movimientoSinProductoOCantidad.productName;
+      const faltaCantidad = !movimientoSinProductoOCantidad.quantity;
+
+      return this.needsClarification(
+        intent,
+        faltaProducto && faltaCantidad
+          ? '¿Qué producto fue y cuántas unidades? Necesito esos datos para registrar correctamente el movimiento y actualizar el inventario.'
+          : faltaProducto
+            ? '¿Qué producto fue? Necesito el nombre exacto para actualizar el inventario.'
+            : '¿Cuántas unidades fueron? Necesito la cantidad para actualizar el inventario.',
+        meta,
+      );
+    }
+
     // Un fiado sin nombre es una deuda que nadie puede cobrar: no se sabe a
     // quien reclamarle ni a que saldo aplicarle un abono despues. Preguntar
     // ahora cuesta un mensaje; descubrirlo un mes despues cuesta la plata.
@@ -383,6 +402,21 @@ export class WhatsAppMessageService {
       return this.needsClarification(
         intent,
         '¿A quién le fiaste? Necesito el nombre para saber después quién te debe.',
+        meta,
+      );
+    }
+
+    const compraSinPlazo = intent.movements.find(
+      (movimiento) =>
+        movimiento.isSupplierCredit &&
+        (!movimiento.supplierName || !movimiento.supplierCreditDays),
+    );
+    if (compraSinPlazo) {
+      return this.needsClarification(
+        intent,
+        compraSinPlazo.supplierName
+          ? `¿A cuántos días le pagarás a ${compraSinPlazo.supplierName}?`
+          : '¿A qué proveedor le quedó pendiente esta compra y a cuántos días le pagarás?',
         meta,
       );
     }
@@ -1531,6 +1565,11 @@ export class WhatsAppMessageService {
       paymentMethod: movement.paymentMethod,
       isCredit: movement.isCredit,
       customerName: movement.customerName,
+      productName: movement.productName,
+      quantity: movement.quantity,
+      supplierName: movement.supplierName,
+      supplierCreditDays: movement.supplierCreditDays,
+      isSupplierCredit: movement.isSupplierCredit,
       groupId: grupo,
     }));
   }
@@ -1773,6 +1812,10 @@ function normalizeMovements(value: unknown): MovementDraft[] {
         amount,
         category: normalizeCategory(row.category, type),
         concept: cleanText(row.concept),
+        productName: cleanText(row.productName),
+        supplierName: cleanText(row.supplierName),
+        supplierCreditDays: normalizeQuantity(row.supplierCreditDays),
+        isSupplierCredit: row.isSupplierCredit === true,
         paymentMethod: normalizePaymentMethod(row.paymentMethod),
         isCredit: row.isCredit === true,
         customerName: cleanText(row.customerName),

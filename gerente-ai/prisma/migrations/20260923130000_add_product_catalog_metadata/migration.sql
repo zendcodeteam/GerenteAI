@@ -1,0 +1,2 @@
+ALTER TABLE "Producto" ADD COLUMN "categoria" TEXT;
+ALTER TABLE "Producto" ADD COLUMN "alias" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];
