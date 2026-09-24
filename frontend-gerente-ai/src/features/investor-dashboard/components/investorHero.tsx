@@ -1,4 +1,17 @@
-export function InvestorHero() {
+import { LiveStatusBadge } from "@/shared/components/ui/LiveStatusBadge";
+
+const PERIODO_ACTUAL = new Intl.DateTimeFormat("es-CO", {
+  month: "long",
+  year: "numeric",
+}).format(new Date());
+
+export function InvestorHero({
+  isRefreshing = false,
+  lastUpdated = null,
+}: {
+  isRefreshing?: boolean;
+  lastUpdated?: Date | null;
+}) {
   return (
     <section
       id="overview"
@@ -66,18 +79,6 @@ export function InvestorHero() {
             bg-[radial-gradient(circle_at_center,rgba(20,184,166,0.10),transparent_70%)]
             blur-3xl
             dark:bg-[radial-gradient(circle_at_center,rgba(20,184,166,0.14),transparent_70%)]
-          "
-        />
-
-        {/* Grid */}
-
-        <div
-          className="
-            absolute
-            inset-0
-            bg-[linear-gradient(to_right,#8080800d_1px,transparent_1px),linear-gradient(to_bottom,#8080800d_1px,transparent_1px)]
-            bg-[size:36px_36px]
-            dark:bg-[linear-gradient(to_right,#ffffff08_1px,transparent_1px),linear-gradient(to_bottom,#ffffff08_1px,transparent_1px)]
           "
         />
 
@@ -171,14 +172,14 @@ export function InvestorHero() {
             className="
               animate-cascade
               font-heading
-              text-5xl
+              text-4xl
               font-black
               leading-[1.05]
               tracking-[-0.04em]
               text-slate-950
-              sm:text-6xl
-              lg:text-7xl
-              xl:text-[5.5rem]
+              sm:text-5xl
+              lg:text-6xl
+              xl:text-[4.25rem]
               dark:text-white
             "
             style={{
@@ -251,61 +252,11 @@ export function InvestorHero() {
           >
             {/* Real-time status */}
 
-            <div
-              className="
-                flex
-                items-center
-                gap-2.5
-                rounded-full
-                border
-                border-emerald-500/20
-                bg-white/70
-                px-4
-                py-2.5
-                text-sm
-                font-semibold
-                text-slate-700
-                shadow-sm
-                backdrop-blur-md
-                transition-all
-                duration-300
-                hover:border-emerald-500/30
-                hover:bg-white
-                hover:shadow-[0_0_20px_rgba(16,185,129,0.10)]
-                dark:border-emerald-500/20
-                dark:bg-white/5
-                dark:text-slate-200
-                dark:hover:bg-white/10
-              "
-            >
-              <span className="relative flex h-2 w-2">
-                <span
-                  className="
-                    absolute
-                    inline-flex
-                    h-full
-                    w-full
-                    animate-ping
-                    rounded-full
-                    bg-emerald-400
-                    opacity-75
-                  "
-                />
-
-                <span
-                  className="
-                    relative
-                    inline-flex
-                    h-2
-                    w-2
-                    rounded-full
-                    bg-emerald-500
-                  "
-                />
-              </span>
-
-              Datos actualizados en tiempo real
-            </div>
+            <LiveStatusBadge
+              lastUpdated={lastUpdated}
+              isRefreshing={isRefreshing}
+              className="px-4 py-2.5 text-sm"
+            />
 
             {/* Current period */}
 
@@ -332,7 +283,7 @@ export function InvestorHero() {
                 dark:hover:bg-white/10
               "
             >
-              Agosto 2026
+              {PERIODO_ACTUAL.charAt(0).toUpperCase() + PERIODO_ACTUAL.slice(1)}
             </div>
           </div>
 

@@ -806,8 +806,8 @@ export function GlobalNavbar() {
             MOBILE SUB-NAVBAR (SOLO MOBILE & TABLET < 1024px)
             Ubicada arriba, directamente debajo de la barra principal
         ==================================================== */}
-        <div className="lg:hidden border-t border-border/60 bg-muted/20 px-2 sm:px-4 py-2">
-          <nav className="flex items-center justify-center gap-1.5 sm:gap-2">
+        <div className="lg:hidden border-t border-border/60 bg-muted/20 px-2 sm:px-4 py-2 overflow-x-auto scrollbar-thin">
+          <nav className="mx-auto flex w-fit items-center gap-1 sm:gap-2">
             {nav.map(
               ({
                 id,
@@ -825,7 +825,7 @@ export function GlobalNavbar() {
                   <Link
                     key={id}
                     to={id}
-                    className={`flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 text-xs font-bold rounded-xl transition-all duration-300 ${
+                    className={`flex shrink-0 items-center gap-1.5 px-2 sm:px-3.5 py-1.5 text-xs font-bold rounded-xl transition-all duration-300 ${
                       isActive
                         ? "bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 shadow-xs ring-1 ring-emerald-500/20"
                         : "text-muted-foreground hover:text-foreground hover:bg-muted/80"
@@ -837,7 +837,7 @@ export function GlobalNavbar() {
                       size="sm"
                     />
 
-                    <span className="truncate max-w-[90px] sm:max-w-[110px]">{mobileLabel}</span>
+                    <span className="truncate max-w-[76px] sm:max-w-[110px]">{mobileLabel}</span>
 
                     {badge && (
                       <span
