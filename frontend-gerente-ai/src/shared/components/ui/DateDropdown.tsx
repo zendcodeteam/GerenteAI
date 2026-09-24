@@ -36,7 +36,7 @@ export function DateDropdown({
       <Calendar
         className="
           absolute
-          left-3
+          left-2.5
           z-10
           h-4
           w-4
@@ -61,10 +61,10 @@ export function DateDropdown({
           border-border
           bg-muted/50
           py-2
-          pl-9
-          pr-9
+          pl-8
+          pr-7
           text-xs
-          font-semibold
+          font-bold
           text-foreground
           outline-none
           transition-all
@@ -98,7 +98,7 @@ export function DateDropdown({
       <div
         className="
           absolute
-          right-3
+          right-2.5
           pointer-events-none
           text-muted-foreground
         "
