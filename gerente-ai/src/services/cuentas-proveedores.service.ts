@@ -47,7 +47,9 @@ export class CuentasProveedoresService {
     });
     if (!cuenta) throw new NotFoundException('La cuenta por pagar no existe');
 
-    const sede = await this.prisma.sede.findUnique({ where: { id: cuenta.sedeId } });
+    const sede = await this.prisma.sede.findUnique({
+      where: { id: cuenta.sedeId },
+    });
     if (!sede) throw new NotFoundException('La sede indicada no existe');
     await this.negociosService.verificarAccesoSede(userId, sede, rolGlobal, {
       escritura: true,
@@ -90,7 +92,10 @@ export class CuentasProveedoresService {
         proveedor: true,
         sede: {
           include: {
-            usuariosSede: { include: { usuario: true }, orderBy: { id: 'asc' } },
+            usuariosSede: {
+              include: { usuario: true },
+              orderBy: { id: 'asc' },
+            },
             negocio: {
               include: {
                 usuariosNegocio: {
@@ -114,6 +119,7 @@ export class CuentasProveedoresService {
       sede: string;
       saldoPendiente: number;
       fechaVencimiento: string;
+      estadoTexto: string;
       mensaje: string;
     }[] = [];
 
@@ -124,7 +130,19 @@ export class CuentasProveedoresService {
       );
       let tipo: 'cinco_dias' | 'vencimiento' | 'vencida' | null = null;
 
-      if (dias === 5 && !cuenta.recordatorioCincoDiasAt) {
+      /*
+       * El aviso previo se manda en CUALQUIER dia de los cinco anteriores al
+       * vencimiento, no solo cuando faltan exactamente cinco.
+       *
+       * Con la condicion exacta, un dia sin ejecutar el workflow —n8n caido,
+       * Render dormido, una ejecucion fallida— hacia que ese aviso no se
+       * mandara nunca: al dia siguiente ya faltaban cuatro y la condicion no
+       * volvia a cumplirse. El de vencimiento se recupera solo porque `dias < 0`
+       * lo recoge al dia siguiente; este no tenia esa red.
+       *
+       * Sigue mandandose UNA sola vez: lo garantiza `recordatorioCincoDiasAt`.
+       */
+      if (dias > 0 && dias <= 5 && !cuenta.recordatorioCincoDiasAt) {
         tipo = 'cinco_dias';
       } else if (dias === 0 && !cuenta.recordatorioVencimientoAt) {
         tipo = 'vencimiento';
@@ -136,12 +154,16 @@ export class CuentasProveedoresService {
       const saldo = Number(cuenta.saldoPendiente);
       const personas = [
         ...cuenta.sede.usuariosSede.map((vinculo) => vinculo.usuario),
-        ...cuenta.sede.negocio.usuariosNegocio.map((vinculo) => vinculo.usuario),
+        ...cuenta.sede.negocio.usuariosNegocio.map(
+          (vinculo) => vinculo.usuario,
+        ),
       ];
       const telefono =
         cuenta.sede.telefono?.trim() ||
         cuenta.sede.whatsappUserId ||
-        personas.find((persona) => persona.telefono?.trim())?.telefono?.trim() ||
+        personas
+          .find((persona) => persona.telefono?.trim())
+          ?.telefono?.trim() ||
         null;
       resultados.push({
         id: cuenta.id,
@@ -152,9 +174,15 @@ export class CuentasProveedoresService {
         sede: cuenta.sede.nombre,
         saldoPendiente: saldo,
         fechaVencimiento: cuenta.fechaVencimiento.toISOString(),
+        // Lo que se le muestra al usuario sobre el estado de la cuenta.
+        //
+        // Lo arma el backend y no n8n: el workflow lo tenia escrito a mano
+        // ("faltan 5 días"), y al empezar a avisar tambien con cuatro o tres
+        // dias ese texto habria quedado mintiendo.
+        estadoTexto: textoDeEstado(tipo, dias),
         mensaje:
           tipo === 'cinco_dias'
-            ? `Recordatorio: tienes ${saldo.toLocaleString('es-CO')} pendientes con ${cuenta.proveedor.nombre}. La cuenta vence en 5 días.`
+            ? `Recordatorio: tienes ${saldo.toLocaleString('es-CO')} pendientes con ${cuenta.proveedor.nombre}. La cuenta ${textoDeEstado(tipo, dias)}.`
             : tipo === 'vencimiento'
               ? `Hoy vence la cuenta de ${saldo.toLocaleString('es-CO')} con ${cuenta.proveedor.nombre}.`
               : `La cuenta de ${saldo.toLocaleString('es-CO')} con ${cuenta.proveedor.nombre} está vencida.`,
@@ -176,6 +204,21 @@ export class CuentasProveedoresService {
 
     return resultados;
   }
+}
+
+/**
+ * Como se le nombra al estado de la cuenta en el mensaje.
+ *
+ * Vive junto al calculo y no en el workflow para que no haya dos sitios donde
+ * decir lo mismo y terminen discrepando.
+ */
+function textoDeEstado(
+  tipo: 'cinco_dias' | 'vencimiento' | 'vencida',
+  dias: number,
+): string {
+  if (tipo === 'vencimiento') return 'vence hoy';
+  if (tipo === 'vencida') return 'está vencida';
+  return dias === 1 ? 'vence mañana' : `vence en ${dias} días`;
 }
 
 function diferenciaEntreFechas(desde: string, hasta: string): number {
