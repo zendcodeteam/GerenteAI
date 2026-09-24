@@ -1,4 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 import {
   BeneficiarioReparto,
   CategoriaGasto,
@@ -265,11 +270,45 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
     // la lista de operaciones atomicas.
     const clientes = await this.resolveCustomers(transactions);
 
-    const operations: Prisma.PrismaPromise<unknown>[] = transactions.flatMap(
-      (transaction) => this.buildWriteOperations(transaction, clientes),
-    );
+    const productos = await this.resolveProducts(transactions);
+    const proveedores = await this.resolveSuppliers(transactions);
 
-    await this.prisma.$transaction(operations);
+    await this.prisma.$transaction(async (tx) => {
+      for (const transaction of transactions) {
+        const producto = productos.get(transaction.id);
+        if (producto) {
+          if (transaction.type === 'income') {
+            const updated = await tx.producto.updateMany({
+              where: { id: producto.id, stock: { gte: producto.quantity } },
+              data: { stock: { decrement: producto.quantity } },
+            });
+            if (updated.count === 0) {
+              throw new ConflictException(
+                'El stock cambió mientras se registraba la venta. Intenta de nuevo.',
+              );
+            }
+          } else {
+            await tx.producto.update({
+              where: { id: producto.id },
+              data: {
+                stock: { increment: producto.quantity },
+                precioCompra: producto.unitPrice,
+              },
+            });
+          }
+        }
+
+        await Promise.all(
+          this.buildWriteOperations(
+            transaction,
+            clientes,
+            productos,
+            proveedores,
+            tx,
+          ),
+        );
+      }
+    });
 
     this.logger.log(
       `Guardados ${transactions.length} movimientos en sede ${transactions[0].businessId} (origen: ${transactions[0].source}).`,
@@ -778,16 +817,24 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
   private buildWriteOperations(
     transaction: Transaction,
     clientes: Map<string, string>,
+    productos: Map<string, { id: string; quantity: number; unitPrice: Prisma.Decimal }> = new Map(),
+    proveedores: Map<string, string> = new Map(),
+    db: Prisma.TransactionClient = this.prisma,
   ): Prisma.PrismaPromise<unknown>[] {
     const clienteId = transaction.customerName
       ? (clientes.get(customerKey(transaction)) ?? null)
       : null;
 
     const esFiado = transaction.type === 'income' && !!transaction.isCredit;
+    const producto = productos.get(transaction.id);
+    const esCompraInventario = transaction.type === 'expense' && !!producto;
+    const proveedorId = transaction.supplierName
+      ? proveedores.get(transaction.id) ?? null
+      : null;
 
     const movimiento =
       transaction.type === 'income'
-        ? this.prisma.venta.create({
+        ? db.venta.create({
             data: {
               id: transaction.id,
               sedeId: transaction.businessId,
@@ -813,9 +860,52 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
               grupoId: transaction.groupId ?? null,
               clienteId,
               fecha: fechaDelMovimiento(transaction),
+              ...(producto
+                ? {
+                    detalles: {
+                      create: {
+                        productoId: producto.id,
+                        cantidad: producto.quantity,
+                        precio: producto.unitPrice,
+                      },
+                    },
+                  }
+                : {}),
             },
           })
-        : this.prisma.gasto.create({
+        : esCompraInventario
+          ? db.compra.create({
+              data: {
+                id: transaction.id,
+                sedeId: transaction.businessId,
+                proveedorId,
+                total: new Prisma.Decimal(transaction.amount),
+                detalles: {
+                  create: {
+                    productoId: producto!.id,
+                    cantidad: producto!.quantity,
+                    costo: producto!.unitPrice,
+                  },
+                },
+                ...(transaction.isSupplierCredit && proveedorId
+                  ? {
+                      cuentaPorPagar: {
+                        create: {
+                          proveedorId,
+                          sedeId: transaction.businessId,
+                          montoOriginal: new Prisma.Decimal(transaction.amount),
+                          saldoPendiente: new Prisma.Decimal(transaction.amount),
+                          fechaVencimiento: sumarDiasAFecha(
+                            fechaDelMovimiento(transaction),
+                            transaction.supplierCreditDays ?? 0,
+                          ),
+                        },
+                      },
+                    }
+                  : {}),
+              },
+            })
+          : db.gasto.create({
             data: {
               id: transaction.id,
               sedeId: transaction.businessId,
@@ -830,15 +920,18 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
             },
           });
 
-    if (!esFiado || !clienteId) return [movimiento];
+    const operaciones: Prisma.PrismaPromise<unknown>[] = [movimiento];
 
-    return [
-      movimiento,
-      this.prisma.cliente.update({
+    if (!esFiado || !clienteId) return operaciones;
+
+    operaciones.push(
+      db.cliente.update({
         where: { id: clienteId },
         data: { saldoPendiente: { increment: transaction.amount } },
       }),
-    ];
+    );
+
+    return operaciones;
   }
 
   /**
@@ -878,6 +971,90 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
       resultado.set(clave, cliente.id);
     }
 
+    return resultado;
+  }
+
+  private async resolveProducts(
+    transactions: Transaction[],
+  ): Promise<
+    Map<string, { id: string; quantity: number; unitPrice: Prisma.Decimal }>
+  > {
+    const candidates = transactions.filter(
+      (transaction) =>
+        (transaction.type === 'income' || transaction.type === 'expense') &&
+        transaction.productName,
+    );
+    const result = new Map<
+      string,
+      { id: string; quantity: number; unitPrice: Prisma.Decimal }
+    >();
+
+    for (const transaction of candidates) {
+      const quantity = transaction.quantity;
+      if (!quantity || quantity < 1) {
+        throw new BadRequestException(
+          `¿Cuántas unidades de "${transaction.productName}" se vendieron?`,
+        );
+      }
+
+      const products = await this.prisma.producto.findMany({
+        where: { sedeId: transaction.businessId },
+      });
+      const query = normalizeProductText(transaction.productName!);
+      const matches = products.filter((product) =>
+        [product.nombre, ...product.alias].some(
+          (value) => normalizeProductText(value) === query,
+        ),
+      );
+
+      if (!matches.length) {
+        throw new BadRequestException(
+          `No encontré "${transaction.productName}" en el inventario de esta sede. Registra primero el producto o dime otro nombre.`,
+        );
+      }
+      if (matches.length > 1) {
+        throw new ConflictException(
+          `Encontré varios productos para "${transaction.productName}". Indica el nombre exacto.`,
+        );
+      }
+
+      const product = matches[0];
+      if (product.stock < quantity) {
+        throw new ConflictException(
+          `No hay stock suficiente de "${product.nombre}". Disponible: ${product.stock}; solicitado: ${quantity}.`,
+        );
+      }
+
+      result.set(transaction.id, {
+        id: product.id,
+        quantity,
+        unitPrice: new Prisma.Decimal(transaction.amount).div(quantity),
+      });
+    }
+
+    return result;
+  }
+
+  private async resolveSuppliers(
+    transactions: Transaction[],
+  ): Promise<Map<string, string>> {
+    const resultado = new Map<string, string>();
+    for (const transaction of transactions) {
+      if (!transaction.supplierName) continue;
+      const nombre = transaction.supplierName.trim();
+      const existente = await this.prisma.proveedor.findFirst({
+        where: {
+          sedeId: transaction.businessId,
+          nombre: { equals: nombre, mode: 'insensitive' },
+        },
+      });
+      const proveedor =
+        existente ??
+        (await this.prisma.proveedor.create({
+          data: { nombre, sedeId: transaction.businessId },
+        }));
+      resultado.set(transaction.id, proveedor.id);
+    }
     return resultado;
   }
 }
@@ -922,6 +1099,15 @@ const SIN_CLIENTE = 'sin-cliente';
 
 function sumarDiasAFecha(fecha: Date, dias: number): Date {
   return new Date(fecha.getTime() + dias * UN_DIA_MS);
+}
+
+function normalizeProductText(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
 }
 
 /** Dias completos entre dos fechas YYYY-MM-DD. Nunca negativo. */

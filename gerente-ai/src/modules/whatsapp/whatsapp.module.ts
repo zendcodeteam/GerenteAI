@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { FinanceAiModule } from '../finance-ai/finance-ai.module';
+import { CuentasProveedoresModule } from '../cuentas-proveedores.module';
 import { PlanesModule } from '../planes.module';
 import { DestinatariosService } from './services/destinatarios.service';
 import { LimitePorRemitenteService } from './services/limite-por-remitente.service';
@@ -23,7 +24,7 @@ import { WhatsappController } from './whatsapp.controller';
  * `PrismaService` no se importa: `PrismaModule` es @Global.
  */
 @Module({
-  imports: [FinanceAiModule, PlanesModule],
+  imports: [FinanceAiModule, PlanesModule, CuentasProveedoresModule],
   controllers: [WhatsappController],
   providers: [
     WhatsappInterpretService,

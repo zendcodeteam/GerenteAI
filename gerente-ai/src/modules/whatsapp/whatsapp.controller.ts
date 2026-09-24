@@ -17,6 +17,7 @@ import {
   type InterpretResponse,
 } from './services/whatsapp-interpret.service';
 import type { FiadoPorCobrar } from './services/destinatarios.service';
+import { CuentasProveedoresService } from '../../services/cuentas-proveedores.service';
 
 /**
  * API que consume n8n. Es la unica puerta de entrada del canal de WhatsApp.
@@ -39,6 +40,7 @@ export class WhatsappController {
   constructor(
     private readonly interpretService: WhatsappInterpretService,
     private readonly destinatarios: DestinatariosService,
+    private readonly cuentasProveedores: CuentasProveedoresService,
   ) {}
 
   /**
@@ -120,6 +122,15 @@ export class WhatsappController {
         // workflow envia las partes por separado; el tono se cambia aqui.
         mensaje: mensajeDeCobro(fiado),
       })),
+    };
+  }
+
+  @Get('recordatorios/proveedores')
+  async recordatorioProveedores() {
+    const recordatorios = await this.cuentasProveedores.recordatorios();
+    return {
+      total: recordatorios.length,
+      recordatorios,
     };
   }
 

@@ -177,4 +177,13 @@ export interface DashboardTransactionItem {
   date: string;
 
   rawDate: string;
+
+  productLines?: Array<{
+    productId: string;
+    quantity: number;
+  }>;
+  purchaseLines?: Array<{
+    productId: string;
+    quantity: number;
+  }>;
 }
