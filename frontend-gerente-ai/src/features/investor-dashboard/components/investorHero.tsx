@@ -82,18 +82,6 @@ export function InvestorHero({
           "
         />
 
-        {/* Grid */}
-
-        <div
-          className="
-            absolute
-            inset-0
-            bg-[linear-gradient(to_right,#8080800d_1px,transparent_1px),linear-gradient(to_bottom,#8080800d_1px,transparent_1px)]
-            bg-[size:36px_36px]
-            dark:bg-[linear-gradient(to_right,#ffffff08_1px,transparent_1px),linear-gradient(to_bottom,#ffffff08_1px,transparent_1px)]
-          "
-        />
-
         {/* Soft top fade */}
 
         <div
@@ -184,14 +172,14 @@ export function InvestorHero({
             className="
               animate-cascade
               font-heading
-              text-5xl
+              text-4xl
               font-black
               leading-[1.05]
               tracking-[-0.04em]
               text-slate-950
-              sm:text-6xl
-              lg:text-7xl
-              xl:text-[5.5rem]
+              sm:text-5xl
+              lg:text-6xl
+              xl:text-[4.25rem]
               dark:text-white
             "
             style={{
