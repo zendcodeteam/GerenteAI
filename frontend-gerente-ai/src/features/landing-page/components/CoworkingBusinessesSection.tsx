@@ -2,53 +2,82 @@
 
 import { motion, useReducedMotion } from "motion/react";
 import type { Variants } from "motion/react";
+import {
+  BookOpen,
+  CarFront,
+  Coffee,
+  Scissors,
+  ShoppingBasket,
+  Store,
+  UtensilsCrossed,
+  Wrench,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 type Business = {
   title: string;
   description: string;
-  logo: string;
+  icon: LucideIcon;
+  iconColor: string;
+  iconBackground: string;
 };
 
 const businesses: Business[] = [
   {
     title: "Cafeterías",
     description: "Ventas, insumos y clientes frecuentes.",
-    logo: "/Starbucks.jpg",
+    icon: Coffee,
+    iconColor: "text-amber-700",
+    iconBackground: "bg-amber-100",
   },
   {
     title: "Restaurantes",
     description: "Pedidos, inventario y gastos diarios.",
-    logo: "/McDonalds.jpg",
+    icon: UtensilsCrossed,
+    iconColor: "text-rose-700",
+    iconBackground: "bg-rose-100",
   },
   {
     title: "Tiendas",
     description: "Control de productos y ventas.",
-    logo: "/Ara.png",
+    icon: Store,
+    iconColor: "text-sky-700",
+    iconBackground: "bg-sky-100",
   },
   {
     title: "Minimercados",
     description: "Inventario y proveedores.",
-    logo: "/Carulla.jpg",
+    icon: ShoppingBasket,
+    iconColor: "text-emerald-700",
+    iconBackground: "bg-emerald-100",
   },
   {
     title: "Peluquerías",
     description: "Citas, clientes e ingresos.",
-    logo: "/Arte.png",
+    icon: Scissors,
+    iconColor: "text-fuchsia-700",
+    iconBackground: "bg-fuchsia-100",
   },
   {
     title: "Ferreterías",
     description: "Stock y compras.",
-    logo: "/Homecenter.jpg",
+    icon: Wrench,
+    iconColor: "text-orange-700",
+    iconBackground: "bg-orange-100",
   },
   {
     title: "Talleres",
     description: "Servicios, repuestos y clientes.",
-    logo: "/Auteco.jpg",
+    icon: CarFront,
+    iconColor: "text-indigo-700",
+    iconBackground: "bg-indigo-100",
   },
   {
     title: "Papelerías",
     description: "Productos escolares y ventas.",
-    logo: "/Buscalibre.png",
+    icon: BookOpen,
+    iconColor: "text-violet-700",
+    iconBackground: "bg-violet-100",
   },
 ];
 
@@ -421,7 +450,7 @@ export function CoworkingBusinessesSection() {
 
                 <div className="relative z-10">
                   {/* =================================================
-                      LOGO
+                      ICONO
                   ================================================= */}
 
                   <motion.div
@@ -454,7 +483,7 @@ export function CoworkingBusinessesSection() {
                             },
                           }
                     }
-                    className="
+                    className={`
                       flex
                       h-14
                       w-14
@@ -464,26 +493,20 @@ export function CoworkingBusinessesSection() {
                       overflow-hidden
                       rounded-full
                       border
-                      border-slate-200/80
-                      bg-white
+                      border-transparent
                       shadow-sm
                       ring-1
                       ring-slate-200/60
 
-                      dark:border-slate-200/80
-                      dark:bg-white
+                      dark:border-white/10
                       dark:ring-white/10
-                    "
+                      ${business.iconBackground}
+                    `}
                   >
-                    <img
-                      src={business.logo}
-                      alt={`Logo de ${business.title}`}
-                      className="
-                        h-full
-                        w-full
-                        rounded-full
-                        object-contain
-                      "
+                    <business.icon
+                      aria-hidden="true"
+                      className={`h-7 w-7 ${business.iconColor}`}
+                      strokeWidth={2.2}
                     />
                   </motion.div>
 
