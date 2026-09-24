@@ -254,12 +254,6 @@ export function AppRoutes() {
           PUBLIC LANDING ROUTES
           ====================================================== */}
 
-      {/* Raíz pública: la página principal de Luka */}
-      <Route
-        path="/"
-        element={<RootRoute />}
-      />
-
       {/* Home */}
       <Route
         path="/home"
@@ -527,21 +521,6 @@ function FallbackRoute() {
   return (
     <Navigate
       to="/login"
-      replace
-    />
-  );
-}
-
-function RootRoute() {
-  const { isAuthenticated, isLoading } = useAuth();
-
-  if (isLoading) {
-    return <PageSkeleton />;
-  }
-
-  return (
-    <Navigate
-      to={isAuthenticated ? "/dashboard" : "/home"}
       replace
     />
   );
