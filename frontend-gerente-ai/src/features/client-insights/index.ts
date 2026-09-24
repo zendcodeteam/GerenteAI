@@ -1,1 +1,0 @@
-export { InsightsView } from './InsightsView';
