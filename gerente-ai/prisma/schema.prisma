@@ -93,6 +93,7 @@ model Sede {
   abonos             Abono[]
   clientes           Cliente[]
   compras            Compra[]
+  cuentasPorPagar    CuentaPorPagarProveedor[]
   consumosIa         ConsumoIa[]
   gastos             Gasto[]
   mensajes           Mensaje[]
@@ -186,6 +187,8 @@ model Producto {
   id             String          @id @default(uuid())
   nombre         String
   stock          Int             @default(0)
+  categoria      String?
+  alias          String[]        @default([])
   stockMinimo    Int             @default(0)
   precioCompra   Decimal
   precioVenta    Decimal
@@ -216,6 +219,7 @@ model Proveedor {
   direccion String?
   sedeId    String
   compras   Compra[]
+  cuentasPorPagar CuentaPorPagarProveedor[]
   sede      Sede     @relation(fields: [sedeId], references: [id], onDelete: Cascade)
 }
 
@@ -280,6 +284,7 @@ model Compra {
   proveedor   Proveedor?      @relation(fields: [proveedorId], references: [id])
   sede        Sede            @relation(fields: [sedeId], references: [id], onDelete: Cascade)
   detalles    DetalleCompra[]
+  cuentaPorPagar CuentaPorPagarProveedor?
 
   @@index([sedeId, fecha])
 }
@@ -543,4 +548,40 @@ model DashboardConfig {
 
   @@unique([negocioId, scopeId, clave])
   @@index([sedeId, clave])
+}
+
+model CuentaPorPagarProveedor {
+  id                        String                 @id @default(uuid())
+  compraId                  String                 @unique
+  proveedorId               String
+  sedeId                    String
+  montoOriginal             Decimal
+  saldoPendiente            Decimal
+  fechaVencimiento          DateTime
+  estado                    EstadoCuentaProveedor @default(PENDIENTE)
+  recordatorioCincoDiasAt   DateTime?
+  recordatorioVencimientoAt DateTime?
+  compra                    Compra                 @relation(fields: [compraId], references: [id], onDelete: Cascade)
+  proveedor                 Proveedor              @relation(fields: [proveedorId], references: [id])
+  sede                      Sede                   @relation(fields: [sedeId], references: [id], onDelete: Cascade)
+  pagos                     PagoProveedor[]
+
+  @@index([sedeId, estado, fechaVencimiento])
+  @@index([proveedorId, estado])
+}
+
+model PagoProveedor {
+  id               String                  @id @default(uuid())
+  cuentaPorPagarId String
+  monto            Decimal
+  fecha            DateTime                @default(now())
+  cuentaPorPagar   CuentaPorPagarProveedor @relation(fields: [cuentaPorPagarId], references: [id], onDelete: Cascade)
+
+  @@index([cuentaPorPagarId, fecha])
+}
+
+enum EstadoCuentaProveedor {
+  PENDIENTE
+  PAGADA
+  VENCIDA
 }

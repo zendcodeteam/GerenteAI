@@ -120,6 +120,10 @@ export interface WhatsAppIntentOutput {
     amount?: number | string | null;
     category?: string | null;
     concept?: string | null;
+    productName?: string | null;
+    supplierName?: string | null;
+    supplierCreditDays?: number | string | null;
+    isSupplierCredit?: boolean | null;
     paymentMethod?: string | null;
     isCredit?: boolean | null;
     customerName?: string | null;
@@ -180,6 +184,10 @@ código, sin markdown. El JSON debe tener esta estructura exacta:
       "amount": number,
       "category": string,
       "concept": string,
+        "productName": string | null,
+        "supplierName": string | null,
+        "supplierCreditDays": number | null,
+        "isSupplierCredit": boolean,
       "paymentMethod": "efectivo" | "transferencia" | "tarjeta" | "otro" | null,
       "isCredit": boolean,
       "customerName": string | null,
@@ -220,6 +228,15 @@ código, sin markdown. El JSON debe tener esta estructura exacta:
 
 REGLA DE ORO: "movements" es una LISTA. Un mensaje puede traer varios movimientos y
 cada uno va como un elemento aparte. NUNCA los sumes en uno solo.
+
+REGLA OBLIGATORIA DE PRODUCTOS:
+   - Para cada venta, gasto de mercancía o fiado, debes extraer siempre
+     "productName" y "quantity" cuando el usuario los diga.
+   - Si no aparecen, deja esos campos en null. El backend le preguntará al
+     usuario antes de registrar el movimiento; nunca inventes el producto ni
+     la cantidad.
+   - Una venta o gasto de mercancía no debe considerarse completo solo porque
+     tenga monto: también necesita producto y unidades.
 
 REGLAS DE INTERPRETACIÓN:
 
@@ -285,8 +302,10 @@ REGLAS DE INTERPRETACIÓN:
        Descuento:         $920.000   <- va en "discount"
        Total a pagar:   $1.000.000   <- va en "declaredTotal"
 
-   - Cada producto de la factura es un movimiento aparte, con su concepto, su
-     monto de línea y sus unidades en "quantity".
+   - Cada producto de la factura es un movimiento aparte, con su nombre exacto
+     en "productName", su concepto, su monto de línea y sus unidades en
+     "quantity". No inventes nombres ni códigos: conserva el nombre que dijo
+     el usuario para que el backend lo resuelva contra el inventario de la sede.
    - "discount" es el descuento del CONJUNTO, no de cada línea.
    - NO restes el descuento tú de los montos: pon las líneas como están en la
      factura y el descuento aparte. El sistema lo reparte y hace las cuentas.
@@ -958,6 +977,10 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
           'date',
           'customerName',
           'quantity',
+          'productName',
+          'supplierName',
+          'supplierCreditDays',
+          'isSupplierCredit',
         ],
         properties: {
           type: {
@@ -998,6 +1021,23 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
             type: ['number', 'null'],
             description:
               'Unidades de este producto, si la factura o el mensaje las dicen.',
+          },
+          productName: {
+            type: ['string', 'null'],
+            description:
+              'Nombre exacto del producto vendido, si el movimiento corresponde a inventario.',
+          },
+          supplierName: {
+            type: ['string', 'null'],
+            description: 'Proveedor de una compra a crédito, si se menciona.',
+          },
+          supplierCreditDays: {
+            type: ['number', 'null'],
+            description: 'Días hasta pagar al proveedor, si la compra es a crédito.',
+          },
+          isSupplierCredit: {
+            type: 'boolean',
+            description: 'true si la compra quedó pendiente de pago al proveedor.',
           },
           date: {
             type: ['string', 'null'],

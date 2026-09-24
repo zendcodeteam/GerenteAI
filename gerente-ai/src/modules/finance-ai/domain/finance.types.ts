@@ -177,6 +177,11 @@ export interface MovementDraft {
   amount: number;
   category: TransactionCategory;
   concept: string | null;
+  /** Nombre del producto cuando el movimiento corresponde a inventario. */
+  productName: string | null;
+  supplierName: string | null;
+  supplierCreditDays: number | null;
+  isSupplierCredit: boolean;
   /** null = el usuario no dijo como pago. */
   paymentMethod: PaymentMethod | null;
   /** true = venta fiada: quedo registrada pero el dinero aun no entro. */
@@ -401,6 +406,12 @@ export interface Transaction {
   pendingAmount?: number | null;
   /** Cliente al que se le fio. */
   customerName?: string | null;
+  productName?: string | null;
+  productId?: string | null;
+  quantity?: number | null;
+  supplierName?: string | null;
+  supplierCreditDays?: number | null;
+  isSupplierCredit?: boolean;
   /** Une el total con sus desgloses por metodo de pago. */
   groupId?: string | null;
   /**

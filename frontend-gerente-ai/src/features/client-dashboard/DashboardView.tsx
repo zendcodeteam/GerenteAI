@@ -12,6 +12,7 @@ import { LiveStatusBadge } from "@/shared/components/ui/LiveStatusBadge";
 import { GoalsAndComparison } from "./components/GoalsAndComparison";
 import { FinancialSimulator } from "./components/FinancialSimulator";
 import { WeeklySummary } from "./components/WeeklySummary";
+import { InventoryPanel } from "./components/InventoryPanel";
 
 export function DashboardView() {
   const {
@@ -161,6 +162,8 @@ export function DashboardView() {
             {transactions.length > 0 && (
               <FinancialSimulator metrics={metrics} fiados={fiados} />
             )}
+
+            <InventoryPanel sedeId={sedeId} transactions={transactions} />
 
             {!isLoading && !hasNoBusiness && (
               <WeeklySummary transactions={transactions} fiados={fiados} />

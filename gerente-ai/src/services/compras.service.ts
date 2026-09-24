@@ -28,6 +28,17 @@ export class ComprasService {
     });
 
     const proveedorId = dto.proveedorId ?? null;
+    const fechaVencimiento = dto.fechaVencimiento
+      ? new Date(dto.fechaVencimiento)
+      : null;
+    if (fechaVencimiento && Number.isNaN(fechaVencimiento.getTime())) {
+      throw new BadRequestException('La fecha de vencimiento no es válida');
+    }
+    if (fechaVencimiento && !proveedorId) {
+      throw new BadRequestException(
+        'Una compra a crédito requiere un proveedor',
+      );
+    }
     if (proveedorId) {
       const proveedor = await this.prisma.proveedor.findUnique({
         where: { id: proveedorId },
@@ -111,8 +122,21 @@ export class ComprasService {
           sedeId: dto.sedeId,
           proveedorId,
           detalles: { create: lineas },
+          ...(fechaVencimiento && proveedorId
+            ? {
+                cuentaPorPagar: {
+                  create: {
+                    proveedorId,
+                    sedeId: dto.sedeId,
+                    montoOriginal: total,
+                    saldoPendiente: total,
+                    fechaVencimiento,
+                  },
+                },
+              }
+            : {}),
         },
-        include: { detalles: true },
+        include: { detalles: true, cuentaPorPagar: true },
       });
     });
   }

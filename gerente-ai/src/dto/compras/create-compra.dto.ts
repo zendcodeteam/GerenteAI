@@ -29,6 +29,10 @@ export class CreateCompraDto {
   @IsOptional()
   total?: number;
 
+  @IsString()
+  @IsOptional()
+  fechaVencimiento?: string;
+
   @IsArray()
   @ArrayMinSize(1)
   @ValidateNested({ each: true })
