@@ -800,19 +800,57 @@ export default function PrivacidadPage() {
               number="17"
               title="Cookies y tecnologías similares"
               icon={<Database size={18} />}
+              id="cookies"
             >
               <p>
-                Luka y sus servicios asociados pueden utilizar tecnologías
-                necesarias para mantener sesiones, recordar determinadas
-                preferencias, proteger la plataforma y obtener información
-                técnica relacionada con el funcionamiento del servicio.
+                Luka utiliza cookies y tecnologías similares con criterios de
+                necesidad, proporcionalidad y transparencia. No recolectamos
+                la mayor cantidad posible de información por defecto: solo
+                tratamos los datos necesarios para prestar el servicio y los
+                datos opcionales cuando el usuario los autoriza.
+              </p>
+
+              <div className="space-y-3">
+                <ThirdPartyCard
+                  name="Cookies esenciales"
+                  purpose="Mantener la sesión, proteger la plataforma, conservar la elección de consentimiento, recordar el estado técnico de la barra lateral (sidebar_state) y permitir funciones indispensables. Estas cookies no pueden desactivarse desde el banner porque Luka no funcionaría correctamente sin ellas."
+                />
+
+                <ThirdPartyCard
+                  name="Cookies de preferencias"
+                  purpose="Recordar opciones como tema, idioma o configuraciones de interfaz. Solo se activan cuando el usuario acepta cookies opcionales."
+                />
+
+                <ThirdPartyCard
+                  name="Cookies analíticas"
+                  purpose="Medir de forma agregada el uso, rendimiento y errores de Luka para mejorar el servicio. No deben activarse hasta integrar un proveedor específico y obtener consentimiento válido."
+                />
+
+                <ThirdPartyCard
+                  name="Cookies de marketing"
+                  purpose="Permitir campañas, medición publicitaria o personalización comercial. Actualmente no se activan ni se utilizan para vender o compartir datos personales."
+                />
+              </div>
+
+              <p>
+                El banner de Luka ofrece las opciones “Acepto todas las
+                cookies” y “Solo cookies esenciales”. La elección se guarda
+                en la cookie técnica de consentimiento{' '}
+                <strong className="text-foreground/85">
+                  luka_cookie_consent
+                </strong>
+                , con una duración máxima de doce meses. El usuario puede
+                retirar o modificar su elección mediante los mecanismos que
+                Luka habilite.
               </p>
 
               <p>
-                Cuando se utilicen tecnologías que requieran información o
-                autorización adicional conforme a la legislación aplicable,
-                se proporcionará la información correspondiente mediante los
-                mecanismos habilitados.
+                Las cookies pueden ser propias o de terceros. Antes de
+                incorporar herramientas analíticas, publicitarias o de
+                seguimiento, Luka deberá identificar al proveedor, finalidad,
+                duración, datos tratados y transferencias aplicables, y
+                solicitar el consentimiento correspondiente cuando sea
+                exigible.
               </p>
             </LegalSection>
 
@@ -1009,6 +1047,7 @@ interface LegalSectionProps {
   title: string;
   icon: React.ReactNode;
   children: React.ReactNode;
+  id?: string;
 }
 
 function LegalSection({
@@ -1016,9 +1055,10 @@ function LegalSection({
   title,
   icon,
   children,
+  id,
 }: LegalSectionProps) {
   return (
-    <section>
+    <section id={id}>
       <div className="mb-5 flex items-start gap-4">
         <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-emerald-400/10 bg-emerald-400/[0.05] text-emerald-600/80 dark:text-emerald-400/80">
           {icon}
