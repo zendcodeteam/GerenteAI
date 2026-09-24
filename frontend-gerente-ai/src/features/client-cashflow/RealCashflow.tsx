@@ -281,12 +281,12 @@ function RealCashflowComponent({
           CHART
       ========================== */}
       <div className="bg-card border border-border rounded-2xl shadow-sm p-6 max-w-5xl">
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6">
           <h2 className="text-lg font-bold text-foreground">
             Evolución de Caja
           </h2>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() =>
                 setExportando(true)
@@ -503,8 +503,8 @@ function RealCashflowComponent({
           TABLE
       ========================== */}
       <div className="bg-card border border-border rounded-2xl shadow-sm overflow-hidden max-w-5xl">
-        <div className="p-4 border-b border-border flex items-center justify-between bg-muted/20">
-          <div className="relative group">
+        <div className="p-4 border-b border-border flex flex-wrap items-center gap-3 justify-between bg-muted/20">
+          <div className="relative group min-w-0 w-full sm:w-auto sm:flex-1 sm:max-w-72">
             <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
 
             <input
@@ -516,13 +516,13 @@ function RealCashflowComponent({
                 )
               }
               placeholder="Buscar transacción..."
-              className="pl-9 pr-4 py-2 w-72 bg-card border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all shadow-sm"
+              className="pl-9 pr-4 py-2 w-full bg-card border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all shadow-sm"
             />
           </div>
 
           <button
             type="button"
-            className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-muted-foreground bg-card border border-border rounded-xl shadow-sm hover:text-foreground hover:bg-muted transition-colors"
+            className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-muted-foreground bg-card border border-border rounded-xl shadow-sm hover:text-foreground hover:bg-muted transition-colors shrink-0"
           >
             <Filter className="w-4 h-4" />
 

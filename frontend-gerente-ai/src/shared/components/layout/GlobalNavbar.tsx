@@ -405,17 +405,20 @@ export function GlobalNavbar() {
       id: "/",
       Icon: LayoutDashboard,
       label: "Resumen",
+      mobileLabel: "Resumen",
     },
     {
       id: "/insights",
       Icon: Bot,
       label: "Recomendaciones de IA",
+      mobileLabel: "Recomendaciones",
       badge: planUsuarioId >= 2 ? 2 : undefined,
     },
     {
       id: "/cashflow",
       Icon: TrendingUp,
       label: "Flujo de Caja",
+      mobileLabel: "Flujo de Caja",
     },
   ];
 
@@ -424,11 +427,13 @@ export function GlobalNavbar() {
       id: "/admin/crm",
       Icon: Briefcase,
       label: "Negocio (CRM)",
+      mobileLabel: "Negocio",
     },
     {
       id: "/admin/ops",
       Icon: Server,
       label: "Sistema (Ops)",
+      mobileLabel: "Sistema",
     },
   ];
 
@@ -436,6 +441,7 @@ export function GlobalNavbar() {
     id: string;
     Icon: any;
     label: string;
+    mobileLabel: string;
     badge?: number;
   }> = isAdmin ? adminNav : clientNav;
 
@@ -556,7 +562,7 @@ export function GlobalNavbar() {
                   >
                     <MapPin className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
 
-                    <span className="max-w-[75px] sm:max-w-[110px] md:max-w-[140px] truncate">
+                    <span className="hidden sm:inline sm:max-w-[110px] md:max-w-[140px] truncate">
                       {activeSedeName}
                     </span>
 
@@ -801,12 +807,13 @@ export function GlobalNavbar() {
             Ubicada arriba, directamente debajo de la barra principal
         ==================================================== */}
         <div className="lg:hidden border-t border-border/60 bg-muted/20 px-2 sm:px-4 py-2">
-          <nav className="flex items-center justify-around sm:justify-center gap-1 sm:gap-2">
+          <nav className="flex items-center justify-center gap-1.5 sm:gap-2">
             {nav.map(
               ({
                 id,
                 Icon,
                 label,
+                mobileLabel,
                 badge,
               }) => {
                 const isActive =
@@ -824,18 +831,13 @@ export function GlobalNavbar() {
                         : "text-muted-foreground hover:text-foreground hover:bg-muted/80"
                     }`}
                   >
-                    <Icon
-                      className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${
-                        isActive
-                          ? "text-emerald-600 dark:text-emerald-500"
-                          : ""
-                      }`}
-                      strokeWidth={
-                        isActive ? 2.5 : 2
-                      }
+                    <LukaIconBadge
+                      icon={Icon}
+                      tone={isActive ? "emerald" : "cyan"}
+                      size="sm"
                     />
 
-                    <span className="truncate max-w-[110px]">{label}</span>
+                    <span className="truncate max-w-[90px] sm:max-w-[110px]">{mobileLabel}</span>
 
                     {badge && (
                       <span
