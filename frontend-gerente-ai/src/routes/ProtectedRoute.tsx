@@ -6,6 +6,15 @@ export function ProtectedRoute() {
   const location = useLocation();
 
   if (!isAuthenticated) {
+    if (location.pathname === "/") {
+      return (
+        <Navigate
+          to="/home"
+          replace
+        />
+      );
+    }
+
     return (
       <Navigate
         to="/login"
