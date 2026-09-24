@@ -8,9 +8,17 @@ import {
   YAxis,
 } from "recharts";
 
-import { businessGrowthData } from "../data/investor.mock";
+import type { InvestorStatsResponse } from "../api/investorApi";
 
-export function InvestorUsersChart() {
+export function InvestorUsersChart({
+  stats,
+  isLoading,
+}: {
+  stats: InvestorStatsResponse | null;
+  isLoading: boolean;
+}) {
+  const data = stats?.crecimiento.negocios ?? [];
+
   return (
     <section className="px-6 pb-20 scroll-mt-28">
       <div className="mx-auto max-w-7xl">
@@ -23,18 +31,18 @@ export function InvestorUsersChart() {
               </p>
 
               <h2 className="mt-2 text-2xl font-bold tracking-tight text-foreground">
-                Negocios activos
+                Negocios registrados
               </h2>
 
               <p className="mt-2 text-sm text-muted-foreground">
-                Evolución del número de negocios registrados en Luka.
+                Evolución acumulada del número de negocios registrados en Luka.
               </p>
             </div>
 
-            <div className="h-[300px] w-full">
+            <div className={`h-[300px] w-full ${isLoading ? "animate-pulse opacity-60" : ""}`}>
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart
-                  data={businessGrowthData}
+                  data={data}
                   margin={{
                     top: 10,
                     right: 10,
@@ -50,7 +58,7 @@ export function InvestorUsersChart() {
                   />
 
                   <XAxis
-                    dataKey="month"
+                    dataKey="mes"
                     axisLine={false}
                     tickLine={false}
                     tick={{
@@ -98,7 +106,7 @@ export function InvestorUsersChart() {
                   />
 
                   <Bar
-                    dataKey="businesses"
+                    dataKey="total"
                     fill="#10b981"
                     radius={[8, 8, 0, 0]}
                     activeBar={{
@@ -136,11 +144,12 @@ export function InvestorUsersChart() {
                 </p>
 
                 <p className="mt-2 text-5xl font-bold tracking-tight">
-                  347
+                  {stats ? stats.negocios.total.toLocaleString("es-CO") : "—"}
                 </p>
 
                 <div className="mt-4 inline-flex items-center rounded-full bg-emerald-400/10 px-3 py-1.5 text-sm font-semibold text-emerald-400">
-                  +12.4% este mes
+                  {stats ? stats.negocios.activosUltimos30Dias.toLocaleString("es-CO") : "—"}{" "}
+                  activos en los últimos 30 días
                 </div>
               </div>
             </div>

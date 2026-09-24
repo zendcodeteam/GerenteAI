@@ -27,6 +27,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { AuthModule } from './auth/auth.module';
 import { DashboardConfigModule } from './modules/dashboard-config.module';
 import { CuentasProveedoresModule } from './modules/cuentas-proveedores.module';
+import { EstadisticasPublicasModule } from './modules/estadisticas-publicas.module';
 
 @Module({
   imports: [
@@ -96,6 +97,7 @@ import { CuentasProveedoresModule } from './modules/cuentas-proveedores.module';
     AuthModule,
     DashboardConfigModule,
     CuentasProveedoresModule,
+    EstadisticasPublicasModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],

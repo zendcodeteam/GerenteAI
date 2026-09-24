@@ -1,44 +1,46 @@
 import {
   Activity,
+  Building2,
   Repeat2,
-  TrendingDown,
-  TrendingUp,
+  Users,
 } from "lucide-react";
 
-import { investorOverview } from "../data/investor.mock";
+import type { InvestorStatsResponse } from "../api/investorApi";
 
-const metrics = [
-  {
-    label: "Retención",
-    value: `${investorOverview.retention.rate}%`,
-    description: "usuarios que permanecen activos",
-    icon: Repeat2,
-    positive: true,
-  },
-  {
-    label: "Churn",
-    value: `${investorOverview.retention.churn}%`,
-    description: "tasa mensual de abandono",
-    icon: TrendingDown,
-    positive: true,
-  },
-  {
-    label: "Usuarios activos",
-    value: investorOverview.users.active.toLocaleString("es-CO"),
-    description: "usuarios activos actualmente",
-    icon: Activity,
-    positive: true,
-  },
-  {
-    label: "Negocios activos",
-    value: investorOverview.businesses.active.toLocaleString("es-CO"),
-    description: "negocios utilizando Luka",
-    icon: TrendingUp,
-    positive: true,
-  },
-];
+export function InvestorRetention({
+  stats,
+  isLoading,
+}: {
+  stats: InvestorStatsResponse | null;
+  isLoading: boolean;
+}) {
+  const metrics = [
+    {
+      label: "Retención de clientes de pago",
+      value: stats ? `${stats.monetizacion.tasaRetencionPagos}%` : "—",
+      description: "de los negocios que alguna vez pagaron, siguen con un plan vigente",
+      icon: Repeat2,
+    },
+    {
+      label: "Negocios que han pagado",
+      value: stats ? stats.monetizacion.negociosQuePagaronAlgunaVez.toLocaleString("es-CO") : "—",
+      description: "negocios que activaron al menos una suscripción",
+      icon: Building2,
+    },
+    {
+      label: "Usuarios totales",
+      value: stats ? stats.usuarios.total.toLocaleString("es-CO") : "—",
+      description: "cuentas registradas en Luka",
+      icon: Users,
+    },
+    {
+      label: "Negocios activos",
+      value: stats ? stats.negocios.activosUltimos30Dias.toLocaleString("es-CO") : "—",
+      description: "con actividad de WhatsApp en los últimos 30 días",
+      icon: Activity,
+    },
+  ];
 
-export function InvestorRetention() {
   return (
     <section className="scroll-mt-28 px-6 pb-20">
       <div className="mx-auto max-w-7xl">
@@ -79,7 +81,9 @@ export function InvestorRetention() {
                 </p>
 
                 {/* Value */}
-                <p className="mt-2 text-3xl font-bold tracking-tight text-foreground">
+                <p
+                  className={`mt-2 text-3xl font-bold tracking-tight text-foreground ${isLoading ? "animate-pulse opacity-60" : ""}`}
+                >
                   {metric.value}
                 </p>
 

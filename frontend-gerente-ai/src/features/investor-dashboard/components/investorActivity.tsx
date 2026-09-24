@@ -1,22 +1,41 @@
 import {
   Activity,
   Building2,
-  FileText,
   MessageSquare,
   UserPlus,
 } from "lucide-react";
 
-import { recentActivity } from "../data/investor.mock";
+import type { InvestorStatsResponse } from "../api/investorApi";
 
 const icons = {
-  business: Building2,
-  user: UserPlus,
-  subscription: Activity,
-  report: FileText,
-  ai: MessageSquare,
+  negocio: Building2,
+  usuario: UserPlus,
+  pago: Activity,
 };
 
-export function InvestorActivity() {
+function formatRelativeTime(iso: string): string {
+  const fecha = new Date(iso);
+  const segundos = Math.max(0, Math.floor((Date.now() - fecha.getTime()) / 1000));
+
+  if (segundos < 60) return "Hace un momento";
+  const minutos = Math.floor(segundos / 60);
+  if (minutos < 60) return `Hace ${minutos} min`;
+  const horas = Math.floor(minutos / 60);
+  if (horas < 24) return `Hace ${horas} h`;
+  const dias = Math.floor(horas / 24);
+  return `Hace ${dias} d`;
+}
+
+export function InvestorActivity({
+  stats,
+  isLoading,
+}: {
+  stats: InvestorStatsResponse | null;
+  isLoading: boolean;
+}) {
+  const eventos = stats?.actividadReciente ?? [];
+  const actividad = stats?.actividadPlataforma;
+
   return (
     <section
       id="activity"
@@ -38,19 +57,24 @@ export function InvestorActivity() {
               </h2>
 
               <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500 transition-colors duration-300 dark:text-slate-400">
-                Una muestra de los eventos que ocurren dentro del ecosistema
-                de Luka.
+                Los últimos eventos reales que ocurrieron dentro del
+                ecosistema de Luka.
               </p>
             </div>
 
             <div className="divide-y divide-slate-100 dark:divide-slate-800">
-              {recentActivity.map((activity) => {
-                const Icon =
-                  icons[activity.type as keyof typeof icons] ?? Activity;
+              {eventos.length === 0 && (
+                <p className={`py-6 text-sm text-slate-500 dark:text-slate-400 ${isLoading ? "animate-pulse" : ""}`}>
+                  {isLoading ? "Cargando actividad..." : "Todavía no hay actividad registrada."}
+                </p>
+              )}
+
+              {eventos.map((evento, index) => {
+                const Icon = icons[evento.tipo] ?? Activity;
 
                 return (
                   <div
-                    key={activity.id}
+                    key={`${evento.tipo}-${index}`}
                     className="group flex gap-4 py-5 first:pt-0 last:pb-0"
                   >
                     <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-600 transition-all duration-300 group-hover:bg-cyan-50 group-hover:text-cyan-600 dark:bg-slate-900 dark:text-slate-400 dark:group-hover:bg-cyan-950/40 dark:group-hover:text-cyan-400">
@@ -60,16 +84,16 @@ export function InvestorActivity() {
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-col justify-between gap-1 sm:flex-row">
                         <p className="text-sm font-semibold text-slate-900 transition-colors duration-300 dark:text-slate-100">
-                          {activity.title}
+                          {evento.titulo}
                         </p>
 
                         <span className="text-xs text-slate-400 transition-colors duration-300 dark:text-slate-500">
-                          {activity.time}
+                          {formatRelativeTime(evento.fecha)}
                         </span>
                       </div>
 
                       <p className="mt-1 text-sm leading-6 text-slate-500 transition-colors duration-300 dark:text-slate-400">
-                        {activity.description}
+                        {evento.descripcion}
                       </p>
                     </div>
                   </div>
@@ -104,8 +128,8 @@ export function InvestorActivity() {
                 </h3>
 
                 <p className="mt-4 text-sm leading-7 text-slate-400">
-                  Cada interacción representa datos, actividad y oportunidades
-                  para entender mejor el comportamiento de nuestros usuarios.
+                  Cada interacción representa datos reales de negocios usando
+                  Luka a través de WhatsApp, todos los días.
                 </p>
               </div>
 
@@ -113,25 +137,26 @@ export function InvestorActivity() {
               <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
                 <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 transition-all duration-300 hover:border-white/20 hover:bg-white/[0.07]">
                   <p className="text-xs font-medium uppercase tracking-[0.15em] text-slate-500">
-                    Interacciones
+                    Interacciones de IA
                   </p>
 
-                  <p className="mt-2 text-3xl font-bold tracking-tight">
-                    76.340
+                  <p className={`mt-2 text-3xl font-bold tracking-tight ${isLoading ? "animate-pulse opacity-60" : ""}`}>
+                    {actividad ? actividad.interaccionesIa.toLocaleString("es-CO") : "—"}
                   </p>
 
-                  <p className="mt-2 text-xs text-emerald-400">
+                  <p className="mt-2 text-xs text-emerald-400 flex items-center gap-1.5">
+                    <MessageSquare className="h-3.5 w-3.5" />
                     Actividad registrada
                   </p>
                 </div>
 
                 <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 transition-all duration-300 hover:border-white/20 hover:bg-white/[0.07]">
                   <p className="text-xs font-medium uppercase tracking-[0.15em] text-slate-500">
-                    Mensajes procesados
+                    Mensajes de WhatsApp procesados
                   </p>
 
-                  <p className="mt-2 text-3xl font-bold tracking-tight">
-                    184.920
+                  <p className={`mt-2 text-3xl font-bold tracking-tight ${isLoading ? "animate-pulse opacity-60" : ""}`}>
+                    {actividad ? actividad.mensajesWhatsapp.toLocaleString("es-CO") : "—"}
                   </p>
 
                   <p className="mt-2 text-xs text-emerald-400">

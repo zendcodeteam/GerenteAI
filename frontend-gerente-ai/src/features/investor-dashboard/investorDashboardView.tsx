@@ -7,32 +7,73 @@ import { InvestorUsersChart } from "./components/investorUsersChart";
 import { InvestorRetention } from "./components/investorRetention";
 import { InvestorBusinessMetrics } from "./components/investorBusinessMetrics";
 import { InvestorActivity } from "./components/investorActivity";
-import { InvestorFooter } from "./components/investorFooter";
+import { LukaDynamicAtmosphere } from "@/features/landing-page/components/LukaDynamicAtmosphere";
+import { CoworkingFooterSection } from "@/features/landing-page/components/CoworkingFooterSection";
+import { useInvestorStats } from "./hooks/useInvestorStats";
 
 export default function InvestorDashboardView() {
+  const { data, isLoading, isRefreshing, error, lastUpdated, refresh } =
+    useInvestorStats();
+
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <InvestorNavbar />
+    <div
+      className="
+        relative
+        min-h-screen
+        w-full
+        overflow-hidden
+        bg-slate-50
+        font-sans
+        text-slate-900
+        transition-colors
+        duration-500
+        selection:bg-emerald-500/30
+        dark:bg-[#070B12]
+        dark:text-slate-50
+        luka-surface-pattern
+      "
+    >
+      <LukaDynamicAtmosphere />
+      <div className="luka-home-gradient" aria-hidden="true" />
 
-      <main>
-        <InvestorHero />
+      <div className="relative z-30">
+        <InvestorNavbar
+          isRefreshing={isRefreshing}
+          lastUpdated={lastUpdated}
+          onRefresh={refresh}
+        />
 
-        <InvestorKpiGrid />
+        <main>
+          <InvestorHero
+            isRefreshing={isRefreshing}
+            lastUpdated={lastUpdated}
+          />
 
-        <InvestorGrowthChart />
+          {error && (
+            <section className="px-6 pb-8">
+              <div className="mx-auto max-w-7xl rounded-2xl border border-destructive/20 bg-destructive/5 px-5 py-4 text-sm font-semibold text-destructive">
+                No pudimos actualizar las estadísticas en vivo: {error}
+              </div>
+            </section>
+          )}
 
-        <InvestorRevenueChart />
+          <InvestorKpiGrid stats={data} isLoading={isLoading} />
 
-        <InvestorUsersChart />
+          <InvestorGrowthChart stats={data} isLoading={isLoading} />
 
-        <InvestorRetention />
+          <InvestorRevenueChart stats={data} isLoading={isLoading} />
 
-        <InvestorBusinessMetrics />
+          <InvestorUsersChart stats={data} isLoading={isLoading} />
 
-        <InvestorActivity />
-      </main>
+          <InvestorRetention stats={data} isLoading={isLoading} />
 
-      <InvestorFooter />
+          <InvestorBusinessMetrics stats={data} isLoading={isLoading} />
+
+          <InvestorActivity stats={data} isLoading={isLoading} />
+        </main>
+
+        <CoworkingFooterSection />
+      </div>
     </div>
   );
 }

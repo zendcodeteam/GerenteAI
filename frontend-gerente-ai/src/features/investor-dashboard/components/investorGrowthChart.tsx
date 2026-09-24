@@ -8,9 +8,17 @@ import {
   YAxis,
 } from "recharts";
 
-import { userGrowthData } from "../data/investor.mock";
+import type { InvestorStatsResponse } from "../api/investorApi";
 
-export function InvestorGrowthChart() {
+export function InvestorGrowthChart({
+  stats,
+  isLoading,
+}: {
+  stats: InvestorStatsResponse | null;
+  isLoading: boolean;
+}) {
+  const data = stats?.crecimiento.usuarios ?? [];
+
   return (
     <section
       id="growth"
@@ -40,10 +48,10 @@ export function InvestorGrowthChart() {
           </div>
 
           {/* Chart */}
-          <div className="h-[340px] w-full">
+          <div className={`h-[340px] w-full ${isLoading ? "animate-pulse opacity-60" : ""}`}>
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart
-                data={userGrowthData}
+                data={data}
                 margin={{
                   top: 10,
                   right: 10,
@@ -81,7 +89,7 @@ export function InvestorGrowthChart() {
                 />
 
                 <XAxis
-                  dataKey="month"
+                  dataKey="mes"
                   axisLine={false}
                   tickLine={false}
                   tick={{
@@ -130,7 +138,7 @@ export function InvestorGrowthChart() {
 
                 <Area
                   type="monotone"
-                  dataKey="users"
+                  dataKey="total"
                   stroke="#10b981"
                   strokeWidth={3}
                   fill="url(#usersGradient)"
