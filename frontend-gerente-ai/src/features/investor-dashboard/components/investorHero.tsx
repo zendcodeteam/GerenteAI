@@ -1,4 +1,17 @@
-export function InvestorHero() {
+import { LiveStatusBadge } from "@/shared/components/ui/LiveStatusBadge";
+
+const PERIODO_ACTUAL = new Intl.DateTimeFormat("es-CO", {
+  month: "long",
+  year: "numeric",
+}).format(new Date());
+
+export function InvestorHero({
+  isRefreshing = false,
+  lastUpdated = null,
+}: {
+  isRefreshing?: boolean;
+  lastUpdated?: Date | null;
+}) {
   return (
     <section
       id="overview"
@@ -251,61 +264,11 @@ export function InvestorHero() {
           >
             {/* Real-time status */}
 
-            <div
-              className="
-                flex
-                items-center
-                gap-2.5
-                rounded-full
-                border
-                border-emerald-500/20
-                bg-white/70
-                px-4
-                py-2.5
-                text-sm
-                font-semibold
-                text-slate-700
-                shadow-sm
-                backdrop-blur-md
-                transition-all
-                duration-300
-                hover:border-emerald-500/30
-                hover:bg-white
-                hover:shadow-[0_0_20px_rgba(16,185,129,0.10)]
-                dark:border-emerald-500/20
-                dark:bg-white/5
-                dark:text-slate-200
-                dark:hover:bg-white/10
-              "
-            >
-              <span className="relative flex h-2 w-2">
-                <span
-                  className="
-                    absolute
-                    inline-flex
-                    h-full
-                    w-full
-                    animate-ping
-                    rounded-full
-                    bg-emerald-400
-                    opacity-75
-                  "
-                />
-
-                <span
-                  className="
-                    relative
-                    inline-flex
-                    h-2
-                    w-2
-                    rounded-full
-                    bg-emerald-500
-                  "
-                />
-              </span>
-
-              Datos actualizados en tiempo real
-            </div>
+            <LiveStatusBadge
+              lastUpdated={lastUpdated}
+              isRefreshing={isRefreshing}
+              className="px-4 py-2.5 text-sm"
+            />
 
             {/* Current period */}
 
@@ -332,7 +295,7 @@ export function InvestorHero() {
                 dark:hover:bg-white/10
               "
             >
-              Agosto 2026
+              {PERIODO_ACTUAL.charAt(0).toUpperCase() + PERIODO_ACTUAL.slice(1)}
             </div>
           </div>
 

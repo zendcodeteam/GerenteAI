@@ -8,7 +8,7 @@ import {
   YAxis,
 } from "recharts";
 
-import { revenueGrowthData } from "../data/investor.mock";
+import type { InvestorStatsResponse } from "../api/investorApi";
 
 function formatCurrency(value: number) {
   return new Intl.NumberFormat("es-CO", {
@@ -19,7 +19,15 @@ function formatCurrency(value: number) {
   }).format(value);
 }
 
-export function InvestorRevenueChart() {
+export function InvestorRevenueChart({
+  stats,
+  isLoading,
+}: {
+  stats: InvestorStatsResponse | null;
+  isLoading: boolean;
+}) {
+  const data = stats?.crecimiento.ingresosMensuales ?? [];
+
   return (
     <section
       id="financials"
@@ -39,7 +47,7 @@ export function InvestorRevenueChart() {
               </h2>
 
               <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-                Crecimiento de los ingresos recurrentes mensuales de Luka.
+                Pagos aprobados y cobrados realmente por Luka, mes a mes.
               </p>
             </div>
 
@@ -49,10 +57,10 @@ export function InvestorRevenueChart() {
           </div>
 
           {/* Chart */}
-          <div className="h-[340px] w-full">
+          <div className={`h-[340px] w-full ${isLoading ? "animate-pulse opacity-60" : ""}`}>
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart
-                data={revenueGrowthData}
+                data={data}
                 margin={{
                   top: 10,
                   right: 10,
@@ -90,7 +98,7 @@ export function InvestorRevenueChart() {
                 />
 
                 <XAxis
-                  dataKey="month"
+                  dataKey="mes"
                   axisLine={false}
                   tickLine={false}
                   tick={{
@@ -142,7 +150,7 @@ export function InvestorRevenueChart() {
 
                 <Area
                   type="monotone"
-                  dataKey="revenue"
+                  dataKey="ingresos"
                   stroke="#06b6d4"
                   strokeWidth={3}
                   fill="url(#revenueGradient)"

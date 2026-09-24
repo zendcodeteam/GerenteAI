@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import {
-  Bot,
   Menu,
   X,
 } from "lucide-react";
 
 import { ThemeToggle } from "@/shared/components/layout/ThemeToggle";
+import { LiveStatusBadge } from "@/shared/components/ui/LiveStatusBadge";
 
 // ============================================================
 // Smooth Scroll
@@ -52,7 +52,15 @@ function customSmoothScroll(
 // Component
 // ============================================================
 
-export function InvestorNavbar() {
+export function InvestorNavbar({
+  isRefreshing = false,
+  lastUpdated = null,
+  onRefresh,
+}: {
+  isRefreshing?: boolean;
+  lastUpdated?: Date | null;
+  onRefresh?: () => void;
+}) {
   const [isScrolled, setIsScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -182,38 +190,19 @@ export function InvestorNavbar() {
         >
           {/* Logo icon */}
 
-          <div
+          <img
+            src="/Luka.png"
+            alt="Luka AI"
             className="
-              flex
               h-9
               w-9
-              items-center
-              justify-center
-              rounded-xl
-              border
-              border-emerald-500/20
-              bg-emerald-500/10
-              text-emerald-600
-              dark:text-emerald-400
-              transition-all
+              shrink-0
+              object-contain
+              transition-transform
               duration-300
               group-hover:scale-110
-              group-hover:rotate-6
-              group-hover:border-emerald-500/40
-              group-hover:bg-emerald-500/20
-              shadow-[0_0_15px_rgba(52,211,153,0.15)]
             "
-          >
-            <Bot
-              className="
-                h-5
-                w-5
-                transition-transform
-                duration-300
-                group-hover:scale-110
-              "
-            />
-          </div>
+          />
 
           {/* Brand */}
 
@@ -360,58 +349,11 @@ export function InvestorNavbar() {
 
           {/* Live indicator */}
 
-          <div
-            className="
-              flex
-              items-center
-              gap-2
-              rounded-full
-              border
-              border-emerald-200
-              bg-emerald-50/80
-              px-3
-              py-1.5
-              dark:border-emerald-500/20
-              dark:bg-emerald-500/10
-            "
-          >
-            <span className="relative flex h-2 w-2">
-              <span
-                className="
-                  absolute
-                  inline-flex
-                  h-full
-                  w-full
-                  animate-ping
-                  rounded-full
-                  bg-emerald-400
-                  opacity-75
-                "
-              />
-
-              <span
-                className="
-                  relative
-                  inline-flex
-                  h-2
-                  w-2
-                  rounded-full
-                  bg-emerald-500
-                "
-              />
-            </span>
-
-            <span
-              className="
-                text-xs
-                font-semibold
-                text-emerald-700
-                dark:text-emerald-400
-              "
-            >
-              Live
-            </span>
-          </div>
+          <LiveStatusBadge
+            lastUpdated={lastUpdated}
+            isRefreshing={isRefreshing}
+            onManualRefresh={onRefresh}
+          />
         </div>
 
         {/* ==================================================

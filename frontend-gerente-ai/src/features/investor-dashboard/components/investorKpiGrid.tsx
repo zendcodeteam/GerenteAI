@@ -1,5 +1,5 @@
-import { ArrowUpRight, Building2, Users, WalletCards } from "lucide-react";
-import { investorOverview } from "../data/investor.mock";
+import { Building2, TrendingUp, Users, WalletCards } from "lucide-react";
+import type { InvestorStatsResponse } from "../api/investorApi";
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat("es-CO").format(value);
@@ -13,38 +13,40 @@ function formatCurrency(value: number) {
   }).format(value);
 }
 
-const cards = [
-  {
-    label: "Usuarios registrados",
-    value: formatNumber(investorOverview.users.total),
-    growth: investorOverview.users.monthlyGrowth,
-    description: "usuarios en la plataforma",
-    icon: Users,
-  },
-  {
-    label: "Negocios registrados",
-    value: formatNumber(investorOverview.businesses.total),
-    growth: investorOverview.businesses.monthlyGrowth,
-    description: "negocios utilizando Luka",
-    icon: Building2,
-  },
-  {
-    label: "MRR",
-    value: formatCurrency(investorOverview.revenue.mrr),
-    growth: investorOverview.revenue.monthlyGrowth,
-    description: "ingresos recurrentes mensuales",
-    icon: WalletCards,
-  },
-  {
-    label: "Retención",
-    value: `${investorOverview.retention.rate}%`,
-    growth: 2.1,
-    description: "retención de usuarios",
-    icon: ArrowUpRight,
-  },
-];
+export function InvestorKpiGrid({
+  stats,
+  isLoading,
+}: {
+  stats: InvestorStatsResponse | null;
+  isLoading: boolean;
+}) {
+  const cards = [
+    {
+      label: "Usuarios registrados",
+      value: stats ? formatNumber(stats.usuarios.total) : "—",
+      description: "usuarios en la plataforma",
+      icon: Users,
+    },
+    {
+      label: "Negocios registrados",
+      value: stats ? formatNumber(stats.negocios.total) : "—",
+      description: `${stats ? formatNumber(stats.negocios.activosUltimos30Dias) : "—"} activos en los últimos 30 días`,
+      icon: Building2,
+    },
+    {
+      label: "MRR estimado",
+      value: stats ? formatCurrency(stats.monetizacion.mrrEstimado) : "—",
+      description: "ingresos recurrentes mensuales vigentes",
+      icon: WalletCards,
+    },
+    {
+      label: "Negocios con plan de pago",
+      value: stats ? formatNumber(stats.negocios.conPlanPagoVigente) : "—",
+      description: "suscripciones pagas activas hoy",
+      icon: TrendingUp,
+    },
+  ];
 
-export function InvestorKpiGrid() {
   return (
     <section id="overview" className="px-6 pb-20">
       <div className="mx-auto max-w-7xl">
@@ -102,23 +104,6 @@ export function InvestorKpiGrid() {
                     >
                       <Icon className="h-5 w-5" strokeWidth={2} />
                     </div>
-
-                    {/* Growth */}
-                    <div
-                      className="
-                        flex items-center gap-1
-                        rounded-full
-                        border border-emerald-500/10
-                        bg-emerald-500/10
-                        px-2.5 py-1
-                        text-xs font-semibold
-                        text-emerald-700
-                        dark:text-emerald-400
-                      "
-                    >
-                      <ArrowUpRight className="h-3 w-3" strokeWidth={2.5} />
-                      {card.growth}%
-                    </div>
                   </div>
 
                   <div className="mt-8">
@@ -127,11 +112,12 @@ export function InvestorKpiGrid() {
                     </p>
 
                     <p
-                      className="
+                      className={`
                         mt-2
                         text-3xl font-bold tracking-tight
                         text-foreground
-                      "
+                        ${isLoading ? "animate-pulse opacity-60" : ""}
+                      `}
                     >
                       {card.value}
                     </p>
