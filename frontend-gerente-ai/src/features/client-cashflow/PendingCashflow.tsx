@@ -535,8 +535,8 @@ export function PendingCashflow({
       ========================================================== */}
       <div className="bg-card border border-border rounded-2xl shadow-sm overflow-hidden max-w-5xl">
         {/* Toolbar */}
-        <div className="p-4 border-b border-border flex items-center justify-between bg-muted/20 gap-4">
-          <div className="relative group">
+        <div className="p-4 border-b border-border flex flex-wrap items-center justify-between gap-3 bg-muted/20">
+          <div className="relative group min-w-0 w-full sm:w-auto sm:flex-1 sm:max-w-72">
             <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
 
             <input
@@ -548,11 +548,11 @@ export function PendingCashflow({
                 )
               }
               placeholder="Buscar cliente o teléfono..."
-              className="pl-9 pr-4 py-2 w-72 max-w-full bg-card border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all shadow-sm"
+              className="pl-9 pr-4 py-2 w-full bg-card border border-border rounded-xl text-sm text-foreground placeholder:text-muted-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all shadow-sm"
             />
           </div>
 
-          <div className="text-xs font-semibold text-muted-foreground whitespace-nowrap">
+          <div className="text-xs font-semibold text-muted-foreground whitespace-nowrap shrink-0">
             {filteredRows.length}{" "}
             {filteredRows.length === 1
               ? "deuda"
