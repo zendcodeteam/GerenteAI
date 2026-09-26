@@ -25,11 +25,11 @@ const founders = [
   },
   {
     name: "Jhoan",
-    image: "/Jhoan.png",
+    image: "/Jhoan.jpg",
   },
   {
     name: "Jose",
-    image: "/Jose.png",
+    image: "/Jose.jpg",
   },
 ];
 
@@ -59,6 +59,8 @@ function FounderPhoto({
           alt={founder.name}
           className="h-full w-full object-cover"
           draggable={false}
+          loading="lazy"
+          decoding="async"
         />
       </div>
     </div>
