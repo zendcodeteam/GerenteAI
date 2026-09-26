@@ -1,6 +1,5 @@
 import { createContext, useContext, useState, ReactNode } from "react";
 import { ChatMessage, QuickPrompt } from "../types";
-import { resolveActiveSedeId } from "@/lib/activeBusiness";
 import { assistantApi } from "../api/assistantApi";
 
 interface LukaChatContextType {
@@ -204,25 +203,17 @@ export function LukaChatProvider({ children }: { children: ReactNode }) {
     }
 
     try {
-      // /ai/* identifica al negocio por su SEDE, no por el Negocio: es donde
-      // cuelgan las ventas y los gastos. Con el id del negocio la respuesta
-      // llegaba igual, pero calculada sobre cero movimientos.
-      const sedeId = await resolveActiveSedeId();
-      const tenantId = localStorage.getItem("active_business_id") ?? undefined;
-
-      if (!sedeId) {
-        throw new Error("Todavía no hay una sede asociada a este negocio.");
-      }
-
-      // Historial para contexto de conversación en el LLM
+      // Chat informativo del landing: sin sesión, sin sede, sin datos de
+      // negocio. La memoria vive solo aquí (React state) y se pierde al
+      // recargar la página a propósito: es un chat de bienvenida, no hace
+      // falta persistirlo, y así cada request manda solo lo justo (últimos
+      // 6 mensajes) en vez de un historial que crece sin límite.
       const history = messages.slice(-6).map((m) => ({
         role: (m.sender === "user" ? "user" : "assistant") as "user" | "assistant",
         content: m.text,
       }));
 
-      const result = await assistantApi.ask({
-        businessId: sedeId,
-        ...(tenantId ? { tenantId } : {}),
+      const result = await assistantApi.askLanding({
         question: text.trim(),
         history,
       });

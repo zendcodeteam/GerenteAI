@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
   IsArray,
   IsBoolean,
   IsIn,
@@ -106,6 +107,27 @@ export class AskAssistantDto {
 
   @IsOptional()
   @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => AssistantTurnDto)
+  history?: AssistantTurnDto[];
+}
+
+/**
+ * Chat informativo del landing publico. Sin `businessId`/`tenantId`: quien
+ * pregunta todavia no se ha registrado, no hay negocio que consultar.
+ */
+export class AskLandingDto {
+  @IsString()
+  @Length(1, 500, {
+    message: 'La pregunta debe tener entre 1 y 500 caracteres.',
+  })
+  question!: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(8, {
+    message: 'El historial no puede tener mas de 8 turnos.',
+  })
   @ValidateNested({ each: true })
   @Type(() => AssistantTurnDto)
   history?: AssistantTurnDto[];

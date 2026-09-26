@@ -48,13 +48,44 @@ export interface AiUsageResponse {
   summary: { messages: number };
 }
 
+export interface AskLandingDto {
+  question: string;
+  history?: AssistantHistoryItem[];
+}
+
+export interface LandingAssistantResult {
+  answer: string;
+  meta: {
+    promptVersion: string;
+    provider: string;
+    model: string;
+  };
+}
+
+export interface LandingAssistantApiResponse {
+  success: boolean;
+  data: LandingAssistantResult;
+}
+
 export const assistantApi = {
   /**
-   * Consulta al asistente financiero conversacional
+   * Consulta al asistente financiero conversacional (autenticado, con datos del negocio)
    * POST /ai/assistant/ask
    */
   ask: async (dto: AskAssistantDto): Promise<AssistantResult> => {
     const res = await apiClient<AssistantApiResponse>('/ai/assistant/ask', {
+      method: 'POST',
+      body: JSON.stringify(dto),
+    });
+    return res.data;
+  },
+
+  /**
+   * Chat informativo del landing público (sin sesión, sin datos de negocio)
+   * POST /ai/landing/ask
+   */
+  askLanding: async (dto: AskLandingDto): Promise<LandingAssistantResult> => {
+    const res = await apiClient<LandingAssistantApiResponse>('/ai/landing/ask', {
       method: 'POST',
       body: JSON.stringify(dto),
     });

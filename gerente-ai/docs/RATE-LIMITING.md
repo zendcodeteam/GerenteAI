@@ -12,6 +12,7 @@ la variable. Es lo primero que hay que hacer si algo bloquea a usuarios reales.
 | --- | --- | --- |
 | Todo lo demás | 600/min por IP y por ruta (`RATE_LIMIT_GLOBAL`) | Cada endpoint lleva su propio contador. No es más bajo porque el dashboard se refresca solo cada 8 s (7,5 peticiones/min por pestaña) y varios usuarios comparten IP: con 60 bastaban ocho pestañas para empezar a devolver 429. |
 | `/ai/*` del frontend (`assistant/ask`, `insights`, `whatsapp/message`, `status`…) | 20/min por IP | Cada llamada cuesta una llamada al modelo y hoy estas rutas no piden sesión. |
+| `/ai/landing/ask` (chat informativo del landing público) | 8/min por IP | Es la única ruta de `/ai/*` sin JWT y sin cuota de tenant: la IP es lo único que frena el abuso, por eso va más estricta que el resto. |
 | `login`, `google`, `google/register`, `mfa/*` | 30 cada 15 min por IP | No son 5: en redes móviles (CGNAT) y en el wifi de un negocio varios usuarios comparten IP. La fuerza bruta contra una cuenta la cortan los bloqueos por cuenta. |
 | `register`, `forgot-password`, `reenviar-verificacion`, `cambiar-email` | 5 cada 15 min por IP | Cada petición manda un correo a una dirección que elige quien llama. Protege la reputación del remitente y la cuota de Brevo. |
 | `verificar-email`, `reset-password`, `confirmar-cambio-email` | 10 cada 15 min por IP | Se abren desde el correo y a veces se reintentan. |
