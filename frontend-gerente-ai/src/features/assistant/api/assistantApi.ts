@@ -53,8 +53,17 @@ export interface AskLandingDto {
   history?: AssistantHistoryItem[];
 }
 
+export interface LandingAssistantAction {
+  type: "register" | "whatsapp";
+  label: string;
+  href: string;
+}
+
 export interface LandingAssistantResult {
   answer: string;
+  actions: LandingAssistantAction[];
+  /** true cuando es el aviso de tope diario/IA apagada, no algo generado por el modelo. */
+  limited?: boolean;
   meta: {
     promptVersion: string;
     provider: string;

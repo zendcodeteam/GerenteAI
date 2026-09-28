@@ -179,59 +179,65 @@ export function ChatMessageItem({
           </div>
         )}
 
-        {/* Optional Action Button */}
-        {message.actionButton && (
-          <div className="pt-1">
-            {message.actionButton.href.startsWith("#") ? (
-              <a
-                href={message.actionButton.href}
-                className="
-                  inline-flex
-                  items-center
-                  gap-1.5
-                  rounded-lg
-                  bg-emerald-600
-                  px-3
-                  py-1.5
-                  text-xs
-                  font-bold
-                  text-white
-                  shadow-sm
-                  transition-all
-                  hover:scale-[1.02]
-                  hover:bg-emerald-500
-                  active:scale-[0.98]
-                "
-              >
-                <span>{message.actionButton.label}</span>
+        {/* Optional Action Buttons (registro, WhatsApp, etc.) */}
+        {message.actionButtons && message.actionButtons.length > 0 && (
+          <div className="flex flex-wrap gap-2 pt-1">
+            {message.actionButtons.map((action) =>
+              /^https?:\/\//.test(action.href) ? (
+                <a
+                  key={action.href}
+                  href={action.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="
+                    inline-flex
+                    items-center
+                    gap-1.5
+                    rounded-lg
+                    bg-emerald-600
+                    px-3
+                    py-1.5
+                    text-xs
+                    font-bold
+                    text-white
+                    shadow-sm
+                    transition-all
+                    hover:scale-[1.02]
+                    hover:bg-emerald-500
+                    active:scale-[0.98]
+                  "
+                >
+                  <span>{action.label}</span>
 
-                <ArrowRight className="h-3.5 w-3.5" />
-              </a>
-            ) : (
-              <Link
-                to={message.actionButton.href}
-                className="
-                  inline-flex
-                  items-center
-                  gap-1.5
-                  rounded-lg
-                  bg-emerald-600
-                  px-3
-                  py-1.5
-                  text-xs
-                  font-bold
-                  text-white
-                  shadow-sm
-                  transition-all
-                  hover:scale-[1.02]
-                  hover:bg-emerald-500
-                  active:scale-[0.98]
-                "
-              >
-                <span>{message.actionButton.label}</span>
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </a>
+              ) : (
+                <Link
+                  key={action.href}
+                  to={action.href}
+                  className="
+                    inline-flex
+                    items-center
+                    gap-1.5
+                    rounded-lg
+                    bg-emerald-600
+                    px-3
+                    py-1.5
+                    text-xs
+                    font-bold
+                    text-white
+                    shadow-sm
+                    transition-all
+                    hover:scale-[1.02]
+                    hover:bg-emerald-500
+                    active:scale-[0.98]
+                  "
+                >
+                  <span>{action.label}</span>
 
-                <ArrowRight className="h-3.5 w-3.5" />
-              </Link>
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </Link>
+              ),
             )}
           </div>
         )}

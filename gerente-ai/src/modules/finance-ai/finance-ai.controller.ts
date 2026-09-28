@@ -3,6 +3,7 @@ import {
   Controller,
   ForbiddenException,
   Get,
+  Ip,
   NotFoundException,
   Param,
   Post,
@@ -157,10 +158,11 @@ export class FinanceAiController {
    */
   @Post('landing/ask')
   @Throttle({ default: { limit: 8, ttl: 60_000 } })
-  async askLanding(@Body() dto: AskLandingDto) {
+  async askLanding(@Ip() ip: string, @Body() dto: AskLandingDto) {
     const result = await this.landingAssistant.ask({
       question: dto.question,
       history: dto.history,
+      ip,
     });
 
     return { success: true, data: result };

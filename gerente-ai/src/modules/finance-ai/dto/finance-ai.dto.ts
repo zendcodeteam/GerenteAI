@@ -116,6 +116,22 @@ export class AskAssistantDto {
  * Chat informativo del landing publico. Sin `businessId`/`tenantId`: quien
  * pregunta todavia no se ha registrado, no hay negocio que consultar.
  */
+/**
+ * Turno de historial del chat del landing. Deliberadamente mas corto que
+ * `AssistantTurnDto` (4000 caracteres): ese limite es para el asistente
+ * financiero autenticado, que discute cifras reales; aqui es una charla de
+ * bienvenida, no hace falta tanto margen y cada caracter de mas es tokens
+ * que se le pagan al modelo en cada turno siguiente.
+ */
+export class LandingTurnDto {
+  @IsIn(['user', 'assistant'])
+  role!: 'user' | 'assistant';
+
+  @IsString()
+  @Length(1, 500)
+  content!: string;
+}
+
 export class AskLandingDto {
   @IsString()
   @Length(1, 500, {
@@ -129,6 +145,6 @@ export class AskLandingDto {
     message: 'El historial no puede tener mas de 8 turnos.',
   })
   @ValidateNested({ each: true })
-  @Type(() => AssistantTurnDto)
-  history?: AssistantTurnDto[];
+  @Type(() => LandingTurnDto)
+  history?: LandingTurnDto[];
 }

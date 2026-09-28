@@ -6,13 +6,18 @@
 el de WhatsApp, sin desplegar código. Railway reinicia el contenedor al cambiar
 la variable. Es lo primero que hay que hacer si algo bloquea a usuarios reales.
 
+`LANDING_CHAT_AI_ENABLED=false` apaga solo la IA del chat del landing público
+(`/ai/landing/ask`): deja de llamar al modelo y responde siempre con el aviso
+de "regístrate o escríbenos por WhatsApp". Úsalo si el costo de ese chat se
+dispara, sin afectar WhatsApp ni el resto de `/ai/*`.
+
 ## Qué se limita
 
 | Endpoints | Límite | Por qué |
 | --- | --- | --- |
 | Todo lo demás | 600/min por IP y por ruta (`RATE_LIMIT_GLOBAL`) | Cada endpoint lleva su propio contador. No es más bajo porque el dashboard se refresca solo cada 8 s (7,5 peticiones/min por pestaña) y varios usuarios comparten IP: con 60 bastaban ocho pestañas para empezar a devolver 429. |
 | `/ai/*` del frontend (`assistant/ask`, `insights`, `whatsapp/message`, `status`…) | 20/min por IP | Cada llamada cuesta una llamada al modelo y hoy estas rutas no piden sesión. |
-| `/ai/landing/ask` (chat informativo del landing público) | 8/min por IP | Es la única ruta de `/ai/*` sin JWT y sin cuota de tenant: la IP es lo único que frena el abuso, por eso va más estricta que el resto. |
+| `/ai/landing/ask` (chat informativo del landing público) | 8/min **y** 40/día por IP | Es la única ruta de `/ai/*` sin JWT y sin cuota de tenant. El de 8/min frena ráfagas; el de 40/día (en `LandingRateLimitService`, no en `@Throttle`) evita que una IP se quede justo debajo del minuto las 24 horas. Al llegar al tope diario no se llama al modelo: se responde con el aviso de registrarse o escribir por WhatsApp. |
 | `login`, `google`, `google/register`, `mfa/*` | 30 cada 15 min por IP | No son 5: en redes móviles (CGNAT) y en el wifi de un negocio varios usuarios comparten IP. La fuerza bruta contra una cuenta la cortan los bloqueos por cuenta. |
 | `register`, `forgot-password`, `reenviar-verificacion`, `cambiar-email` | 5 cada 15 min por IP | Cada petición manda un correo a una dirección que elige quien llama. Protege la reputación del remitente y la cuota de Brevo. |
 | `verificar-email`, `reset-password`, `confirmar-cambio-email` | 10 cada 15 min por IP | Se abren desde el correo y a veces se reintentan. |

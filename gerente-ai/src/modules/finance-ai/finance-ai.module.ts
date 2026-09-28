@@ -12,6 +12,7 @@ import { AssistantService } from './services/assistant.service';
 import { ConversationStateService } from './services/conversation-state.service';
 import { InsightsService } from './services/insights.service';
 import { LandingAssistantService } from './services/landing-assistant.service';
+import { LandingRateLimitService } from './services/landing-rate-limit.service';
 import { WhatsAppMessageService } from './services/whatsapp-message.service';
 import { NegociosModule } from '../negocios.module';
 import { PlanesModule } from '../planes.module';
@@ -65,6 +66,7 @@ import { PlanesModule } from '../planes.module';
     InsightsService,
     AssistantService,
     LandingAssistantService,
+    LandingRateLimitService,
   ],
   exports: [
     WhatsAppMessageService,

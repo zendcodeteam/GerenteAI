@@ -4,7 +4,7 @@ export function AssistantQuickPrompts() {
   const { quickPrompts, sendMessage, isTyping } = useLukaChat();
 
   return (
-    <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-2 px-1">
+    <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-thin-luka py-2 px-1">
       {quickPrompts.map((prompt) => (
         <button
           key={prompt.id}
