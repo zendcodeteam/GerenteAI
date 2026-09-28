@@ -1,3 +1,8 @@
+export interface ChatActionButton {
+  label: string;
+  href: string;
+}
+
 export interface ChatMessage {
   id: string;
   sender: "user" | "assistant";
@@ -9,10 +14,8 @@ export interface ChatMessage {
     percentage: string;
     progress: number;
   };
-  actionButton?: {
-    label: string;
-    href: string;
-  };
+  /** Botones dentro del globo del mensaje (ej. "Registrarme", "Escribir por WhatsApp"). */
+  actionButtons?: ChatActionButton[];
 }
 
 export interface QuickPrompt {

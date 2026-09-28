@@ -3,6 +3,7 @@ import {
   Controller,
   ForbiddenException,
   Get,
+  Ip,
   NotFoundException,
   Param,
   Post,
@@ -16,11 +17,13 @@ import { LlmService } from '../../ai/services/llm.service';
 import { AiUsageService } from '../../ai/usage/usage.service';
 import {
   AskAssistantDto,
+  AskLandingDto,
   WhatsAppMessageDto,
   GenerateInsightsDto,
 } from './dto/finance-ai.dto';
 import { AssistantService } from './services/assistant.service';
 import { InsightsService } from './services/insights.service';
+import { LandingAssistantService } from './services/landing-assistant.service';
 import { WhatsAppMessageService } from './services/whatsapp-message.service';
 import { PrismaService } from '../../services/prisma.service';
 import { periodoContableActual } from './domain/periodo-contable';
@@ -54,6 +57,7 @@ export class FinanceAiController {
     private readonly whatsapp: WhatsAppMessageService,
     private readonly insights: InsightsService,
     private readonly assistant: AssistantService,
+    private readonly landingAssistant: LandingAssistantService,
     private readonly llm: LlmService,
     private readonly usage: AiUsageService,
     private readonly prisma: PrismaService,
@@ -139,6 +143,26 @@ export class FinanceAiController {
       question: dto.question,
       history: dto.history,
       plan: contexto.plan,
+    });
+
+    return { success: true, data: result };
+  }
+
+  /**
+   * Chat informativo del landing publico: que es Luka, como funciona, que
+   * planes hay. Sin JWT (quien pregunta todavia no se registro) y sin acceso
+   * a ningun negocio real ni herramientas, a diferencia de `assistant/ask`.
+   *
+   * Limite propio y mas estricto que el resto de `/ai/*`: aqui no hay sesion
+   * ni cuota de tenant deteniendo el abuso, solo la IP.
+   */
+  @Post('landing/ask')
+  @Throttle({ default: { limit: 8, ttl: 60_000 } })
+  async askLanding(@Ip() ip: string, @Body() dto: AskLandingDto) {
+    const result = await this.landingAssistant.ask({
+      question: dto.question,
+      history: dto.history,
+      ip,
     });
 
     return { success: true, data: result };
