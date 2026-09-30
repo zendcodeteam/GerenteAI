@@ -6,18 +6,47 @@ import { useAuth } from "@/features/auth";
 import { GuestRoute } from "./GuestRoute";
 import { ProtectedRoute } from "./ProtectedRoute";
 import { MasterRoute } from "./MasterRoute";
-import {
-  AboutPage,
-  ContactPage,
-  FeaturesPage,
-  HelpCenterPage,
-  LandingPageView,
-  UseCasesPage,
-} from "@/features/landing-page";
-
 // ============================================================
 // LAZY LOADED FEATURE MODULES
 // ============================================================
+
+// Landing / marketing pages (public, highest-traffic routes —
+// code-split so they don't ship bundled with the authenticated app).
+const LandingPageView = lazy(() =>
+  import("@/features/landing-page").then((m) => ({
+    default: m.LandingPageView,
+  }))
+);
+
+const FeaturesPage = lazy(() =>
+  import("@/features/landing-page").then((m) => ({
+    default: m.FeaturesPage,
+  }))
+);
+
+const UseCasesPage = lazy(() =>
+  import("@/features/landing-page").then((m) => ({
+    default: m.UseCasesPage,
+  }))
+);
+
+const HelpCenterPage = lazy(() =>
+  import("@/features/landing-page").then((m) => ({
+    default: m.HelpCenterPage,
+  }))
+);
+
+const ContactPage = lazy(() =>
+  import("@/features/landing-page").then((m) => ({
+    default: m.ContactPage,
+  }))
+);
+
+const AboutPage = lazy(() =>
+  import("@/features/landing-page").then((m) => ({
+    default: m.AboutPage,
+  }))
+);
 
 const DashboardPage = lazy(() =>
   import("@/features/client-dashboard").then((m) => ({
@@ -257,37 +286,61 @@ export function AppRoutes() {
       {/* Home */}
       <Route
         path="/home"
-        element={<LandingPageView />}
+        element={
+          <Suspense fallback={<PageSkeleton />}>
+            <LandingPageView />
+          </Suspense>
+        }
       />
 
       {/* Características */}
       <Route
         path="/caracteristicas"
-        element={<FeaturesPage />}
+        element={
+          <Suspense fallback={<PageSkeleton />}>
+            <FeaturesPage />
+          </Suspense>
+        }
       />
 
       {/* Casos de uso */}
       <Route
         path="/usos"
-        element={<UseCasesPage />}
+        element={
+          <Suspense fallback={<PageSkeleton />}>
+            <UseCasesPage />
+          </Suspense>
+        }
       />
 
       {/* Centro de ayuda */}
       <Route
         path="/ayuda"
-        element={<HelpCenterPage />}
+        element={
+          <Suspense fallback={<PageSkeleton />}>
+            <HelpCenterPage />
+          </Suspense>
+        }
       />
 
       {/* Contacto */}
       <Route
         path="/contacto"
-        element={<ContactPage />}
+        element={
+          <Suspense fallback={<PageSkeleton />}>
+            <ContactPage />
+          </Suspense>
+        }
       />
 
       {/* Sobre nosotros */}
       <Route
         path="/nosotros"
-        element={<AboutPage />}
+        element={
+          <Suspense fallback={<PageSkeleton />}>
+            <AboutPage />
+          </Suspense>
+        }
       />
 
       {/* ======================================================

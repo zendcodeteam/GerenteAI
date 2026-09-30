@@ -369,6 +369,31 @@
     animation: cascade-up 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
     opacity: 0;
   }
+
+  /* Scrollbar delgada y minimalista para el chat de Luka (horizontal de
+     preguntas rápidas y vertical de mensajes). */
+  .scrollbar-thin-luka {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+  }
+
+  .scrollbar-thin-luka::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+
+  .scrollbar-thin-luka::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .scrollbar-thin-luka::-webkit-scrollbar-thumb {
+    background-color: rgba(148, 163, 184, 0.35);
+    border-radius: 9999px;
+  }
+
+  .scrollbar-thin-luka::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(148, 163, 184, 0.55);
+  }
 }
 
 @keyframes cascade-up {

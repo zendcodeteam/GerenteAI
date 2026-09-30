@@ -5,6 +5,7 @@ import { useLukaChat } from "../context/LukaChatContext";
 import { ChatMessageItem } from "./ChatMessageItem";
 import { AssistantQuickPrompts } from "./AssistantQuickPrompts";
 import { ChatInput } from "./ChatInput";
+import { LimitReachedNotice } from "./LimitReachedNotice";
 
 export function LukaFloatingChat() {
   const {
@@ -12,6 +13,7 @@ export function LukaFloatingChat() {
     isFloatingOpen,
     setIsFloatingOpen,
     triggerHeroDockPulse,
+    isLimitReached,
   } = useLukaChat();
 
   const [isVisible, setIsVisible] = useState(false);
@@ -314,6 +316,7 @@ export function LukaFloatingChat() {
                 flex-col
                 gap-3
                 overflow-y-auto
+                scrollbar-thin-luka
                 p-4
               "
             >
@@ -325,28 +328,34 @@ export function LukaFloatingChat() {
               ))}
             </div>
 
-            {/* =================================================
-                QUICK PROMPTS
-                ================================================= */}
+            {isLimitReached ? (
+              <LimitReachedNotice />
+            ) : (
+              <>
+                {/* =================================================
+                    QUICK PROMPTS
+                    ================================================= */}
 
-            <div
-              className="
-                border-t
-                border-gray-100
-                bg-slate-50/30
-                px-3
-                dark:border-white/5
-                dark:bg-slate-900/30
-              "
-            >
-              <AssistantQuickPrompts />
-            </div>
+                <div
+                  className="
+                    border-t
+                    border-gray-100
+                    bg-slate-50/30
+                    px-3
+                    dark:border-white/5
+                    dark:bg-slate-900/30
+                  "
+                >
+                  <AssistantQuickPrompts />
+                </div>
 
-            {/* =================================================
-                CHAT INPUT
-                ================================================= */}
+                {/* =================================================
+                    CHAT INPUT
+                    ================================================= */}
 
-            <ChatInput />
+                <ChatInput />
+              </>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

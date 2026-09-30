@@ -4,9 +4,10 @@ import { useLukaChat } from "../context/LukaChatContext";
 import { ChatMessageItem } from "./ChatMessageItem";
 import { AssistantQuickPrompts } from "./AssistantQuickPrompts";
 import { ChatInput } from "./ChatInput";
+import { LimitReachedNotice } from "./LimitReachedNotice";
 
 export function LukaHeroChat() {
-  const { messages, heroDockPulse } = useLukaChat();
+  const { messages, heroDockPulse, isLimitReached } = useLukaChat();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [isDocking, setIsDocking] = useState(false);
 
@@ -248,6 +249,7 @@ export function LukaHeroChat() {
             flex-col
             gap-3.5
             overflow-y-auto
+            scrollbar-thin-luka
             p-5
           "
         >
@@ -263,24 +265,30 @@ export function LukaHeroChat() {
             QUICK PROMPTS
             ===================================================== */}
 
-        <div
-          className="
-            border-t
-            border-gray-100/60
-            bg-slate-50/30
-            px-4
-            dark:border-white/5
-            dark:bg-slate-900/30
-          "
-        >
-          <AssistantQuickPrompts />
-        </div>
+        {isLimitReached ? (
+          <LimitReachedNotice />
+        ) : (
+          <>
+            <div
+              className="
+                border-t
+                border-gray-100/60
+                bg-slate-50/30
+                px-4
+                dark:border-white/5
+                dark:bg-slate-900/30
+              "
+            >
+              <AssistantQuickPrompts />
+            </div>
 
-        {/* =====================================================
-            INPUT
-            ===================================================== */}
+            {/* =====================================================
+                INPUT
+                ===================================================== */}
 
-        <ChatInput />
+            <ChatInput />
+          </>
+        )}
       </motion.div>
     </div>
   );
