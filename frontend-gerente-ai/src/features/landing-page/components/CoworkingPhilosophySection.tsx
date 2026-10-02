@@ -535,13 +535,11 @@ export function CoworkingPhilosophySection() {
         relative
         mt-6
         overflow-hidden
-        bg-slate-50
         px-6
         pb-24
         pt-0
         text-slate-950
 
-        dark:bg-slate-950
         dark:text-white
 
         md:px-12

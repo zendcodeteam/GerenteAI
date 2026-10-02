@@ -27,6 +27,9 @@ export function LukaDynamicAtmosphere({ contained = false }: { contained?: boole
     const context = canvas?.getContext("2d", { alpha: true });
     if (!canvas || !context) return;
 
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+
     const logo = new Image();
     let width = 0;
     let height = 0;
@@ -35,7 +38,7 @@ export function LukaDynamicAtmosphere({ contained = false }: { contained?: boole
       if (!logo.complete || !logo.naturalWidth) return;
 
       const isDark = document.documentElement.classList.contains("dark");
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = Math.min(Math.max(window.devicePixelRatio || 1, 2), 3);
       context.clearRect(0, 0, width, height);
       context.globalAlpha = 1;
 
@@ -59,7 +62,7 @@ export function LukaDynamicAtmosphere({ contained = false }: { contained?: boole
     };
 
     const resize = () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const dpr = Math.min(Math.max(window.devicePixelRatio || 1, 2), 3);
       const bounds = contained
         ? canvas.parentElement?.getBoundingClientRect()
         : undefined;
