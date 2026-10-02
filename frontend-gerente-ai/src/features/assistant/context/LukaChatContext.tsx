@@ -1,6 +1,5 @@
 import { createContext, useContext, useState, ReactNode } from "react";
 import { ChatActionButton, ChatMessage, QuickPrompt } from "../types";
-import { assistantApi } from "../api/assistantApi";
 
 interface LukaChatContextType {
   messages: ChatMessage[];
@@ -11,9 +10,8 @@ interface LukaChatContextType {
   quickPrompts: QuickPrompt[];
   heroDockPulse: number;
   triggerHeroDockPulse: () => void;
-  /** true cuando el backend avisó que se llegó al tope diario (o la IA del landing está apagada). */
+  /** Chat del landing con respuestas fijas: nunca se llega al tope, se deja en false para no romper los componentes que lo leen. */
   isLimitReached: boolean;
-  /** Botones a mostrar en el aviso de tope (registro / WhatsApp), tal cual los mandó el backend. */
   limitActions: ChatActionButton[];
 }
 
@@ -122,8 +120,8 @@ export function LukaChatProvider({ children }: { children: ReactNode }) {
   const [isTyping, setIsTyping] = useState(false);
   const [isFloatingOpen, setIsFloatingOpen] = useState(false);
   const [heroDockPulse, setHeroDockPulse] = useState(0);
-  const [isLimitReached, setIsLimitReached] = useState(false);
-  const [limitActions, setLimitActions] = useState<ChatActionButton[]>([]);
+  const [isLimitReached] = useState(false);
+  const [limitActions] = useState<ChatActionButton[]>([]);
 
   const triggerHeroDockPulse = () => {
     setHeroDockPulse((prev) => prev + 1);
@@ -204,67 +202,20 @@ export function LukaChatProvider({ children }: { children: ReactNode }) {
     setMessages((prev) => [...prev, userMsg]);
     setIsTyping(true);
 
-    if (!isWithinLukaScope(text)) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: (Date.now() + 1).toString(),
-          sender: "assistant",
-          text: OUT_OF_SCOPE_RESPONSE,
-          timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-        },
-      ]);
-      setIsTyping(false);
-      return;
-    }
+    // Chat informativo del landing: respuestas fijas, sin llamar a ningún
+    // modelo de IA. Así siempre se mantiene dentro de tema y siempre
+    // termina invitando a registrarse.
+    const assistantMsg: ChatMessage = {
+      id: (Date.now() + 1).toString(),
+      sender: "assistant",
+      ...(isWithinLukaScope(text)
+        ? getFallbackResponse(text)
+        : { text: OUT_OF_SCOPE_RESPONSE }),
+      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    };
 
-    try {
-      // Chat informativo del landing: sin sesión, sin sede, sin datos de
-      // negocio. La memoria vive solo aquí (React state) y se pierde al
-      // recargar la página a propósito: es un chat de bienvenida, no hace
-      // falta persistirlo, y así cada request manda solo lo justo (últimos
-      // 6 mensajes) en vez de un historial que crece sin límite.
-      const history = messages.slice(-6).map((m) => ({
-        role: (m.sender === "user" ? "user" : "assistant") as "user" | "assistant",
-        content: m.text,
-      }));
-
-      const result = await assistantApi.askLanding({
-        question: text.trim(),
-        history,
-      });
-
-      const actionButtons = result.actions?.length
-        ? result.actions.map(({ label, href }) => ({ label, href }))
-        : undefined;
-
-      const assistantMsg: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        sender: "assistant",
-        ...(result.answer
-          ? { text: result.answer, ...(actionButtons ? { actionButtons } : {}) }
-          : getFallbackResponse(text)),
-        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-      };
-
-      setMessages((prev) => [...prev, assistantMsg]);
-
-      if (result.limited) {
-        setIsLimitReached(true);
-        setLimitActions(actionButtons ?? []);
-      }
-    } catch (err) {
-      console.warn("Luka AI offline o respondiendo con heurísticas locales:", err);
-      const assistantMsg: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        sender: "assistant",
-        ...getFallbackResponse(text),
-        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-      };
-      setMessages((prev) => [...prev, assistantMsg]);
-    } finally {
-      setIsTyping(false);
-    }
+    setMessages((prev) => [...prev, assistantMsg]);
+    setIsTyping(false);
   };
 
   return (

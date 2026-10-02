@@ -15,6 +15,7 @@ import { Link } from "react-router";
 
 import { CoworkingFooterSection } from "./components/CoworkingFooterSection";
 import { CoworkingNavbar } from "./components/CoworkingNavbar";
+import { LukaDynamicAtmosphere } from "./components/LukaDynamicAtmosphere";
 
 const values = [
   {
@@ -36,7 +37,11 @@ const values = [
 
 export function AboutPage() {
   return (
-    <div className="min-h-screen w-full overflow-hidden bg-slate-50 font-sans text-slate-900 dark:bg-[#070B12] dark:text-slate-50">
+    <div className="relative min-h-screen w-full overflow-hidden bg-slate-50 font-sans text-slate-900 transition-colors duration-500 selection:bg-emerald-500/30 dark:bg-[#070B12] dark:text-slate-50 luka-surface-pattern">
+      <LukaDynamicAtmosphere />
+      <div className="luka-home-gradient" aria-hidden="true" />
+
+      <div className="relative z-30">
       <CoworkingNavbar />
 
       <main>
@@ -128,6 +133,7 @@ export function AboutPage() {
       </main>
 
       <CoworkingFooterSection />
+      </div>
     </div>
   );
 }
