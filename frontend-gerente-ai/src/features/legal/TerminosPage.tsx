@@ -7,20 +7,18 @@ import {
 import { Link } from 'react-router';
 
 import { CoworkingNavbar } from '@/features/landing-page/components/CoworkingNavbar';
+import { LukaDynamicAtmosphere } from '@/features/landing-page/components/LukaDynamicAtmosphere';
 
 const EFFECTIVE_DATE = '16 de septiembre de 2026';
 const VERSION = '1.0';
 
 export default function TerminosPage() {
   return (
-    <div className="min-h-screen bg-background text-foreground transition-colors duration-300">
-      {/* Background */}
-      <div className="pointer-events-none fixed inset-0 overflow-hidden">
-        <div className="absolute left-1/2 top-[-300px] h-[600px] w-[900px] -translate-x-1/2 rounded-full bg-emerald-500/[0.07] blur-[140px]" />
+    <div className="relative min-h-screen w-full overflow-hidden bg-slate-50 font-sans text-slate-900 transition-colors duration-500 selection:bg-emerald-500/30 dark:bg-[#070B12] dark:text-slate-50 luka-surface-pattern">
+      <LukaDynamicAtmosphere />
+      <div className="luka-home-gradient" aria-hidden="true" />
 
-        <div className="absolute bottom-[-250px] right-[-150px] h-[500px] w-[500px] rounded-full bg-emerald-400/[0.04] blur-[130px]" />
-      </div>
-
+      <div className="relative z-30">
       <CoworkingNavbar />
 
       {/* Main */}
@@ -627,6 +625,7 @@ export default function TerminosPage() {
           </p>
         </footer>
       </main>
+      </div>
     </div>
   );
 }
