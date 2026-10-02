@@ -137,6 +137,27 @@ export function LukaChatProvider({ children }: { children: ReactNode }) {
       };
     }
 
+    if (q.includes("funciona") || q.includes("paso a paso")) {
+      return {
+        text: "Luka funciona por WhatsApp: le cuentas lo que pasa en tu negocio (ventas, gastos, fiados, inventario) con un mensaje, audio o foto, y Luka lo organiza automáticamente para que luego puedas consultar reportes y recomendaciones. Regístrate para conectar tu negocio y empezar a usarlo.",
+        actionButtons: [REGISTER_ACTION],
+      };
+    }
+
+    if (q.includes("plan") || q.includes("suscrip") || q.includes("cuesta") || q.includes("precio") || q.includes("gratis")) {
+      return {
+        text: "Luka tiene planes para distintos tamaños de negocio, incluyendo una opción gratuita para empezar. Regístrate para ver el detalle de cada plan y elegir el que mejor se ajuste a tu negocio.",
+        actionButtons: [REGISTER_ACTION],
+      };
+    }
+
+    if (q.includes("contabilidad")) {
+      return {
+        text: "No necesitas saber de contabilidad para usar Luka. Le hablas en lenguaje cotidiano (por ejemplo, 'vendí 80.000 hoy') y Luka se encarga de organizar y traducir esa información en reportes claros. Regístrate para comenzar sin complicaciones.",
+        actionButtons: [REGISTER_ACTION],
+      };
+    }
+
     if (q.includes("inventario") || q.includes("stock") || q.includes("producto") || q.includes("existencia")) {
       return {
         text: "Si necesitas controlar tu inventario, Luka puede consultar existencias, detectar productos con poco stock y ayudarte a revisar qué artículos se mueven más. Puedes hacerle estas preguntas por WhatsApp después de registrar tu negocio.",
