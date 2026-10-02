@@ -23,6 +23,7 @@ import { ReportesModule } from './modules/reportes.module';
 import { PlanesModule } from './modules/planes.module';
 import { PagosModule } from './modules/pagos.module';
 import { RecordatoriosModule } from './modules/recordatorios.module';
+import { RetencionMensajesModule } from './modules/retencion-mensajes.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { AuthModule } from './auth/auth.module';
 import { DashboardConfigModule } from './modules/dashboard-config.module';
@@ -57,6 +58,7 @@ import { EstadisticasPublicasModule } from './modules/estadisticas-publicas.modu
     PlanesModule,
     PagosModule,
     RecordatoriosModule,
+    RetencionMensajesModule,
     ScheduleModule.forRoot(),
     /**
      * Límite global: 600 peticiones por minuto, por IP y por ruta (cada
