@@ -954,22 +954,30 @@ export class WhatsAppMessageService {
         // Dio un identificador que no cuadra con la lista: esta hablando de
         // otra cosa. Se cierra la pregunta y se busca de cero.
         this.state.olvidar(request.businessId);
-        candidatos = await this.buscarParaCorregir(request, correccion);
+        candidatos = await this.buscarParaCorregir(
+          request,
+          correccion,
+          intent.queryPeriod,
+        );
       }
     } else {
-      candidatos = await this.buscarParaCorregir(request, correccion);
+      candidatos = await this.buscarParaCorregir(
+        request,
+        correccion,
+        intent.queryPeriod,
+      );
     }
 
     if (candidatos.length === 0) {
       // Se deja traza de lo que se busco: cuando alguien reporta un "no
       // encontre" que no deberia serlo, esto es lo unico que dice por que.
       this.logger.warn(
-        `Correccion sin resultados en sede ${request.businessId}: ${describirBusqueda(correccion)}`,
+        `Correccion sin resultados en sede ${request.businessId}: ${describirBusqueda(correccion, intent.queryPeriod)}`,
       );
 
       return this.plainResult(
         intent,
-        renderCorrectionNotFound(correccion, currency),
+        renderCorrectionNotFound(correccion, currency, intent.queryPeriod),
         meta,
       );
     }
@@ -1116,7 +1124,7 @@ export class WhatsAppMessageService {
     if (!movimientos.length) {
       return this.plainResult(
         intent,
-        `No tienes movimientos registrados ${PERIOD_LABELS[period]} para borrar.`,
+        `No tienes movimientos registrados ${etiquetaPeriodo(period)} para borrar.`,
         meta,
       );
     }
@@ -1248,13 +1256,22 @@ export class WhatsAppMessageService {
   private async buscarParaCorregir(
     request: WhatsAppMessageRequest,
     correccion: CorrectionRequest,
+    periodo: QueryPeriod | null,
   ): Promise<Transaction[]> {
-    const hoy = todayIso();
+    const { from, to } = rangoParaCorregir(
+      correccion,
+      periodo,
+      new Date(),
+      diaInicioDe(request),
+    );
     const todo = await this.financeData.listTransactions({
       businessId: request.businessId,
-      from: sumarDias(hoy, -CORRECTION_WINDOW_DAYS),
-      to: hoy,
-      limit: 200,
+      from,
+      to,
+      // Mismo tope que el resto de consultas. Con 200 se traian solo los mas
+      // recientes y, en un negocio con movimiento, lo de hace dos o tres
+      // semanas —lo del mes anterior— ya no entraba al filtro.
+      limit: 1_000,
     });
 
     // Los abonos quedan fuera: no son movimientos que se corrijan, son el
@@ -1514,10 +1531,16 @@ export class WhatsAppMessageService {
         type === 'query'
           ? normalizeQueryKind(output?.queryKind, concept)
           : null,
+      // En una correccion el periodo es opcional y acota donde buscar ("el de
+      // transporte de la semana pasada"), y es el que dice que borrar con
+      // "borra todo lo de esta semana". Antes se descartaba aqui y ese borrado
+      // caia siempre en "hoy".
       queryPeriod:
         type === 'query' || type === 'profit_share'
           ? normalizePeriod(output?.queryPeriod)
-          : null,
+          : type === 'correction'
+            ? periodoValido(output?.queryPeriod)
+            : null,
       confidence: normalizeConfidence(output?.confidence, {
         type,
         amount,
@@ -1991,9 +2014,13 @@ function normalizePositions(value: unknown): number[] {
  * Cuando alguien reporta que Luka "no encontro" algo que si existe, esto es lo
  * unico que dice si el problema fue el identificador, la fecha o el texto.
  */
-function describirBusqueda(correccion: CorrectionRequest): string {
+function describirBusqueda(
+  correccion: CorrectionRequest,
+  periodo: QueryPeriod | null = null,
+): string {
   const partes = [
     correccion.reference ? `texto="${correccion.reference}"` : null,
+    periodo ? `periodo=${periodo}` : null,
     correccion.referenceAmount !== null
       ? `monto=${correccion.referenceAmount}`
       : null,
@@ -2214,9 +2241,18 @@ function normalizeConfidence(
 }
 
 function normalizePeriod(value: unknown): QueryPeriod {
-  return value === 'day' || value === 'week' || value === 'month'
-    ? value
-    : 'month';
+  return periodoValido(value) ?? 'month';
+}
+
+/** El periodo si es uno que se sabe calcular; null si no vino o no sirve. */
+function periodoValido(value: unknown): QueryPeriod | null {
+  if (typeof value !== 'string') return null;
+  if (Object.hasOwn(PERIOD_LABELS, value)) return value as QueryPeriod;
+
+  const dias = diasDelPeriodo(value as QueryPeriod);
+  return dias !== null && dias >= 1 && dias <= MAX_DIAS_ATRAS
+    ? `last_${dias}_days`
+    : null;
 }
 
 function cleanText(value: unknown): string | null {
@@ -2280,7 +2316,13 @@ function todayIso(): string {
   return fechaColombiana(new Date());
 }
 
-/** Rangos de fecha para las consultas: hoy, semana en curso, mes en curso. */
+/**
+ * Rango de fechas real de un periodo, en dias colombianos, ambos inclusive.
+ *
+ * Se arma siempre restando dias a la fecha de hoy, nunca fijando el mes o el
+ * año: asi "la semana pasada" del 4 de noviembre va del 26 de octubre al 1 de
+ * noviembre, y la del 3 de enero arranca en diciembre del año anterior.
+ */
 export function periodRange(
   period: QueryPeriod,
   now: Date = new Date(),
@@ -2288,26 +2330,82 @@ export function periodRange(
 ): { from: string; to: string } {
   // Todo se calcula sobre el dia colombiano, no sobre la hora del contenedor:
   // asi el periodo es el mismo corra donde corra el proceso.
-  const { fecha: to, diaDeLaSemana } = partesDelDia(now);
+  const { fecha: hoy, diaDeLaSemana } = partesDelDia(now);
+  // 0 = domingo. La semana laboral arranca el lunes.
+  const lunes = sumarDias(hoy, -(diaDeLaSemana === 0 ? 6 : diaDeLaSemana - 1));
 
-  if (period === 'day') return { from: to, to };
+  const dias = diasDelPeriodo(period);
+  if (dias !== null) return { from: sumarDias(hoy, -(dias - 1)), to: hoy };
 
-  if (period === 'week') {
-    // 0 = domingo. La semana laboral arranca el lunes.
-    const desdeElLunes = diaDeLaSemana === 0 ? 6 : diaDeLaSemana - 1;
-    return { from: sumarDias(to, -desdeElLunes), to };
+  switch (period) {
+    case 'day':
+      return { from: hoy, to: hoy };
+    case 'yesterday': {
+      const ayer = sumarDias(hoy, -1);
+      return { from: ayer, to: ayer };
+    }
+    case 'week':
+      return { from: lunes, to: hoy };
+    case 'last_week':
+      // Lunes a domingo completos de la semana anterior.
+      return { from: sumarDias(lunes, -7), to: sumarDias(lunes, -1) };
+    case 'last_month': {
+      // El periodo contable anterior completo: el que termina el dia antes de
+      // que arranque el actual. Con corte el 21 es del 21 al 20, no del 1 al 30.
+      const actual = periodoContableDe(hoy, diaInicioPeriodo);
+      const anterior = periodoContableDe(
+        sumarDias(actual.desde, -1),
+        diaInicioPeriodo,
+      );
+      return { from: anterior.desde, to: anterior.hasta };
+    }
+    default: {
+      // "Este mes" es el periodo contable del negocio, que no siempre arranca
+      // el 1.
+      const periodo = periodoContableDe(hoy, diaInicioPeriodo);
+      return { from: periodo.desde, to: hoy };
+    }
   }
-
-  // "Este mes" es el periodo contable del negocio, que no siempre arranca el 1.
-  const periodo = periodoContableDe(to, diaInicioPeriodo);
-  return { from: periodo.desde, to };
 }
 
-const PERIOD_LABELS: Record<QueryPeriod, string> = {
+/** Tope de "ultimos N dias": un año cubre cualquier pregunta razonable. */
+const MAX_DIAS_ATRAS = 366;
+
+/** N de "last_N_days", o null si el periodo no es de ese tipo. */
+function diasDelPeriodo(period: QueryPeriod): number | null {
+  const encontrado = /^last_(\d+)_days$/.exec(period);
+  return encontrado ? Number(encontrado[1]) : null;
+}
+
+type PeriodoConNombre = Exclude<QueryPeriod, `last_${number}_days`>;
+
+const PERIOD_LABELS: Record<PeriodoConNombre, string> = {
   day: 'hoy',
+  yesterday: 'ayer',
   week: 'esta semana',
+  last_week: 'la semana pasada',
   month: 'este mes',
+  last_month: 'el mes pasado',
 };
+
+/** Como se nombra el periodo en una frase: "tus movimientos de ayer". */
+function etiquetaPeriodo(period: QueryPeriod): string {
+  const dias = diasDelPeriodo(period);
+  return dias !== null
+    ? `en los últimos ${dias} días`
+    : PERIOD_LABELS[period as PeriodoConNombre];
+}
+
+/** El periodo como complemento del titulo: "Resumen del mes pasado". */
+function tituloPeriodo(period: QueryPeriod): string {
+  const dias = diasDelPeriodo(period);
+  if (dias !== null) return `de los últimos ${dias} días`;
+
+  const etiqueta = PERIOD_LABELS[period as PeriodoConNombre];
+  return etiqueta.startsWith('el ')
+    ? `del ${etiqueta.slice(3)}`
+    : `de ${etiqueta}`;
+}
 
 /**
  * Arma la respuesta de una consulta con cifras reales.
@@ -2319,11 +2417,11 @@ export function renderSummary(summary: PeriodSummary): string {
   const money = (value: number) => formatMoney(value, summary.currency);
 
   if (summary.transactionCount === 0) {
-    return `Todavía no tienes movimientos registrados ${PERIOD_LABELS[summary.period]}.`;
+    return `Todavía no tienes movimientos registrados ${etiquetaPeriodo(summary.period)}.`;
   }
 
   const lines = [
-    `📊 Resumen de ${PERIOD_LABELS[summary.period]}:`,
+    `📊 Resumen ${tituloPeriodo(summary.period)}:`,
     `Ingresos: ${money(summary.income)}`,
     `Gastos: ${money(summary.expense)}`,
   ];
@@ -2424,10 +2522,36 @@ const BREAKDOWN_WINDOW_DAYS = 2;
 const LIST_MAX_RESULTS = 20;
 
 /**
- * Cuanto se mira hacia atras para encontrar el movimiento a corregir.
- * Un mes cubre de sobra: nadie corrige por WhatsApp algo de hace un trimestre.
+ * Cuanto se mira hacia atras para encontrar el movimiento a corregir cuando
+ * el usuario no dice de cuando es. Con fecha o periodo se busca ahi, sea de
+ * hace una semana o de hace tres meses.
  */
 const CORRECTION_WINDOW_DAYS = 31;
+
+/**
+ * Donde buscar el movimiento a corregir.
+ *
+ * Lo mas concreto manda: una fecha exacta ("el del 28 de octubre") se busca
+ * en ese dia aunque quede fuera de la ventana; un periodo ("el de la semana
+ * pasada") en su rango; y sin ninguno de los dos, los ultimos 31 dias. Antes
+ * siempre era la ventana, asi que una fecha de hace mas de un mes nunca se
+ * encontraba.
+ */
+export function rangoParaCorregir(
+  correccion: CorrectionRequest,
+  periodo: QueryPeriod | null,
+  now: Date = new Date(),
+  diaInicioPeriodo: number = DIA_INICIO_POR_DEFECTO,
+): { from: string; to: string } {
+  if (correccion.referenceDate) {
+    return { from: correccion.referenceDate, to: correccion.referenceDate };
+  }
+
+  if (periodo) return periodRange(periodo, now, diaInicioPeriodo);
+
+  const hoy = fechaColombiana(now);
+  return { from: sumarDias(hoy, -CORRECTION_WINDOW_DAYS), to: hoy };
+}
 
 /** Mas candidatos que esto no se listan: la pregunta se vuelve ilegible. */
 /**
@@ -2742,7 +2866,7 @@ export function renderDeleteConfirmation(
   );
 
   const encabezado = period
-    ? `⚠️ Voy a borrar TODOS tus movimientos ${PERIOD_LABELS[period]} (${objetivos.length}):`
+    ? `⚠️ Voy a borrar TODOS tus movimientos ${etiquetaPeriodo(period)} (${objetivos.length}):`
     : `⚠️ Voy a borrar estos ${objetivos.length} movimientos:`;
 
   const resto =
@@ -2820,12 +2944,17 @@ export function renderQuotedMessage(quoted: {
 export function renderCorrectionNotFound(
   correccion: CorrectionRequest,
   currency: string,
+  periodo: QueryPeriod | null = null,
 ): string {
   // Se nombran TODOS los criterios, no solo el primero: buscar por fecha Y por
   // texto a la vez y no encontrar nada se explicaba antes como si solo hubiera
   // fallado la fecha, y el usuario no entendia por que.
   const criterios = [
-    correccion.referenceDate ? `del ${correccion.referenceDate}` : null,
+    correccion.referenceDate
+      ? `del ${correccion.referenceDate}`
+      : periodo
+        ? etiquetaPeriodo(periodo)
+        : null,
     correccion.referenceAmount !== null
       ? `por ${formatMoney(correccion.referenceAmount, currency)}`
       : null,
@@ -3107,15 +3236,15 @@ export function renderMovementList(
   currency: string,
 ): string {
   if (movimientos.length === 0) {
-    return `No tienes movimientos registrados ${PERIOD_LABELS[period]}.`;
+    return `No tienes movimientos registrados ${etiquetaPeriodo(period)}.`;
   }
 
   const mostrados = movimientos.slice(0, LIST_MAX_RESULTS);
   const lineas = mostrados.map((row) => movementLine(row, currency));
   const encabezado =
     movimientos.length === 1
-      ? `📋 Tienes 1 movimiento ${PERIOD_LABELS[period]}:`
-      : `📋 Tus ${movimientos.length} movimientos ${PERIOD_LABELS[period]}:`;
+      ? `📋 Tienes 1 movimiento ${etiquetaPeriodo(period)}:`
+      : `📋 Tus ${movimientos.length} movimientos ${etiquetaPeriodo(period)}:`;
 
   const pie =
     movimientos.length > mostrados.length

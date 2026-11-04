@@ -21,6 +21,15 @@ import {
  * API, asi se puede saber que version produjo cada registro.
  *
  * ---------------------------------------------------------------------------
+ * v19: periodos hacia atras que cruzan el cambio de mes.
+ *
+ * Solo existian hoy, esta semana y este mes, todos contados hasta hoy. El 4 de
+ * noviembre, "¿como me fue la semana pasada?" terminaba en "week" o "month"
+ * y los registros de finales de octubre no aparecian. Ahora hay periodos para
+ * ayer, la semana pasada, el mes pasado y los ultimos N dias, y una correccion
+ * puede decir de cuando es el movimiento. El rango lo calcula el backend.
+ *
+ * ---------------------------------------------------------------------------
  * v18: una posicion nombrada nunca significa "todo".
  *
  * Tras un "borra todo lo de hoy", el usuario contestaba "el 1" y Luka volvia
@@ -104,7 +113,7 @@ import {
  * ---------------------------------------------------------------------------
  */
 
-export const WHATSAPP_ASSISTANT_PROMPT_VERSION = 'asistente-whatsapp/v18';
+export const WHATSAPP_ASSISTANT_PROMPT_VERSION = 'asistente-whatsapp/v19';
 
 /**
  * Forma CRUDA de la respuesta del modelo.
@@ -219,7 +228,7 @@ código, sin markdown. El JSON debe tener esta estructura exacta:
   } | null,
   "concept": string | null,
   "queryKind": "summary" | "list" | "search" | "receivables" | null,
-  "queryPeriod": "day" | "week" | "month" | null,
+  "queryPeriod": "day" | "yesterday" | "week" | "last_week" | "month" | "last_month" | "last_7_days" | "last_15_days" | "last_30_days" | null,
   "confirmed": boolean | null,
   "confirmedCount": number | null,
   "responseText": "texto de respuesta para el usuario",
@@ -370,7 +379,21 @@ REGLAS DE INTERPRETACIÓN:
 
    a) "summary" -> totales del periodo. concept: null
       - "¿Cómo voy?", "¿Cuánto llevo?", "¿Cuánto he gastado este mes?"
-      - Indica el periodo en queryPeriod: day, week o month.
+      - Indica el periodo en queryPeriod:
+          "hoy"                               -> "day"
+          "ayer"                              -> "yesterday"
+          "esta semana"                       -> "week" (del lunes a hoy)
+          "la semana pasada"                  -> "last_week" (lunes a domingo)
+          "este mes"                          -> "month"
+          "el mes pasado"                     -> "last_month"
+          "los últimos 7 / 15 / 30 días"      -> "last_7_days" / "last_15_days" / "last_30_days"
+          "la última semana", "estos 8 días"  -> "last_7_days"
+          "la última quincena"                -> "last_15_days"
+      - "La semana pasada" NO es "week" ni "month": si hoy es 4 de noviembre,
+        la semana pasada va del 26 de octubre al 1 de noviembre, y usar "week"
+        o "month" dejaría fuera los días de octubre. El sistema calcula las
+        fechas exactas aunque crucen el cambio de mes o de año; tú solo nombra
+        el periodo.
 
    b) "list" -> el detalle de los movimientos, uno por uno. concept: null
       - "¿Cuáles son esos movimientos?", "muéstrame la lista",
@@ -473,6 +496,16 @@ REGLAS DE INTERPRETACIÓN:
    - "reference": una palabra del concepto ("transporte", "jabones", "Meza").
    - "referenceAmount": el monto que sirve para NOMBRARLO ("la de 1.530.000").
    - "referenceDate": la fecha que lo nombra, en YYYY-MM-DD ("la del 3 de sept").
+     Puede ser de un mes anterior: "el del 28" dicho el 4 de noviembre es
+     "2026-10-28", porque el 28 de noviembre todavía no ha llegado.
+   - "queryPeriod": CUÁNDO fue, si lo dice sin una fecha exacta. Usa los mismos
+     valores de las consultas ("yesterday", "last_week", "last_month"...):
+         "corrige el transporte de la semana pasada a 60.000"
+             -> reference "transporte", newAmount 60000, queryPeriod "last_week"
+         "borra la venta de ayer de 20.000"
+             -> referenceAmount 20000, queryPeriod "yesterday"
+     Si no dice cuándo, queryPeriod va null (salvo en un "borra todo" de la
+     regla d). Si da una fecha exacta, usa referenceDate y deja queryPeriod null.
    - "referenceIndexes": las posiciones de la lista que TÚ acabas de mostrar.
      Es una LISTA, y tienes que meter TODAS las que el usuario nombre:
          "la primera"                  -> [1]
@@ -694,6 +727,8 @@ FECHAS DE LOS MOVIMIENTOS:
       "el 23 de agosto vendí..."      -> "2026-08-23"
       "ayer pagué..."                 -> "2026-09-01"
       "el lunes compré..."            -> el lunes MÁS RECIENTE ya pasado
+      "el 28 vendí..." (hoy 2026-11-04) -> "2026-10-28": el 28 de este mes
+                                         aún no llega, así que es el del mes pasado
       "la semana pasada gasté..."     -> deja null: no es una fecha concreta
 - Si el usuario da una fecha sin año, asume el año que haga que la fecha ya haya
   ocurrido. "23 de agosto" dicho en septiembre de 2026 es 2026-08-23, no 2027.
@@ -802,6 +837,12 @@ Respuesta: {"type":"unclear","movements":[],"declaredTotal":null,"profitShares":
 Mensaje: "¿Cómo voy esta semana?"
 Respuesta: {"type":"query","movements":[],"declaredTotal":null,"profitShares":[],"concept":null,"queryKind":"summary","queryPeriod":"week","responseText":"Dame un momento, voy a consultar tu resumen de la semana.","confidence":0.95}
 
+Mensaje: "¿Cómo me fue la semana pasada?"
+Respuesta: {"type":"query","movements":[],"declaredTotal":null,"profitShares":[],"concept":null,"queryKind":"summary","queryPeriod":"last_week","responseText":"Dame un momento, reviso la semana pasada.","confidence":0.95}
+
+Mensaje: "Corrige el gasto de transporte de la semana pasada, eran 60.000"
+Respuesta: {"type":"correction","movements":[],"declaredTotal":null,"profitShares":[],"correction":{"action":"update","reference":"transporte","referenceAmount":null,"referenceDate":null,"referenceIndexes":[],"newAmount":60000,"newConcept":null,"deleteAll":false,"matchAll":false},"payment":null,"concept":null,"queryKind":null,"queryPeriod":"last_week","responseText":"Voy a corregirlo.","confidence":0.9}
+
 Mensaje: "¿Cuáles son esos 8 movimientos?"
 Respuesta: {"type":"query","movements":[],"declaredTotal":null,"profitShares":[],"concept":null,"queryKind":"list","queryPeriod":"month","responseText":"Claro, te los detallo.","confidence":0.95}
 
@@ -885,7 +926,7 @@ CONTEXTO DE ESTA CONVERSACIÓN:
 - Negocio: ${context.businessName}
 - Moneda: ${context.currency}
 - Fecha de hoy: ${context.referenceDate}
-- Usa esta fecha para resolver "hoy", "ayer", "esta semana" y "este mes".
+- Usa esta fecha para resolver "hoy", "ayer", "esta semana", "la semana pasada", "este mes" y "el mes pasado". Los periodos hacia atrás pueden caer en el mes o el año anterior: es normal y se nombran igual.
 - Cuando te presentes, nombra el negocio tal como aparece arriba.
 - Plan contratado: ${context.planName ?? 'Asistente'}${
     context.planIsFree === false
@@ -1184,8 +1225,19 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
     },
     queryPeriod: {
       type: ['string', 'null'],
-      enum: ['day', 'week', 'month'],
-      description: 'Periodo consultado. Solo para type "query".',
+      enum: [
+        'day',
+        'yesterday',
+        'week',
+        'last_week',
+        'month',
+        'last_month',
+        'last_7_days',
+        'last_15_days',
+        'last_30_days',
+      ],
+      description:
+        'Periodo consultado en type "query", o de cuándo es el movimiento en type "correction". El sistema calcula las fechas.',
     },
     confirmedCount: {
       type: ['number', 'null'],
