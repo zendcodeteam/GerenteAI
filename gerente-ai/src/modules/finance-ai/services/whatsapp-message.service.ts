@@ -1397,10 +1397,16 @@ export class WhatsAppMessageService {
         request.businessId,
         intent.concept,
         diaInicio,
+        intent.queryPeriod,
       );
       return {
         ...this.plainResult(intent, '', meta),
-        replyText: renderSearch(intent.concept, encontrados, currency),
+        replyText: renderSearch(
+          intent.concept,
+          encontrados,
+          currency,
+          intent.queryPeriod,
+        ),
       };
     }
 
@@ -1511,6 +1517,9 @@ export class WhatsAppMessageService {
     const conceptoEfectivo =
       movements.length === 1 ? (movements[0].concept ?? concept) : concept;
 
+    const queryKind =
+      type === 'query' ? normalizeQueryKind(output?.queryKind, concept) : null;
+
     return {
       type,
       movements,
@@ -1527,19 +1536,18 @@ export class WhatsAppMessageService {
       responseText:
         cleanText(output?.responseText) ??
         'Recibí tu mensaje, pero no logré interpretarlo. ¿Me lo repites?',
-      queryKind:
-        type === 'query'
-          ? normalizeQueryKind(output?.queryKind, concept)
-          : null,
-      // En una correccion el periodo es opcional y acota donde buscar ("el de
-      // transporte de la semana pasada"), y es el que dice que borrar con
-      // "borra todo lo de esta semana". Antes se descartaba aqui y ese borrado
-      // caia siempre en "hoy".
+      queryKind,
+      // En una correccion o una busqueda el periodo es opcional: acota donde
+      // buscar ("el transporte de la semana pasada") y, si no viene, se busca
+      // en la ventana amplia de siempre. Por eso aqui no se le pone "month"
+      // por defecto, que convertiria "¿que dia compre jabones?" en "este mes".
+      // En la correccion es tambien lo que dice que borrar con "borra todo lo
+      // de esta semana"; antes se descartaba y ese borrado caia en "hoy".
       queryPeriod:
-        type === 'query' || type === 'profit_share'
-          ? normalizePeriod(output?.queryPeriod)
-          : type === 'correction'
-            ? periodoValido(output?.queryPeriod)
+        type === 'correction' || queryKind === 'search'
+          ? periodoValido(output?.queryPeriod)
+          : type === 'query' || type === 'profit_share'
+            ? normalizePeriod(output?.queryPeriod)
             : null,
       confidence: normalizeConfidence(output?.confidence, {
         type,
@@ -1611,12 +1619,13 @@ export class WhatsAppMessageService {
     businessId: string,
     termino: string,
     diaInicioPeriodo: number,
+    periodo: QueryPeriod | null,
   ): Promise<Transaction[]> {
-    const { from, to } = periodRange('month', new Date(), diaInicioPeriodo);
+    const { from, to } = rangoDeBusqueda(periodo, new Date(), diaInicioPeriodo);
 
     const rows = await this.financeData.listTransactions({
       businessId,
-      from: sumarDias(from, -SEARCH_WINDOW_DAYS),
+      from,
       to,
       limit: 1_000,
     });
@@ -1624,9 +1633,12 @@ export class WhatsAppMessageService {
     const buscado = normalizeText(termino);
     if (!buscado) return [];
 
-    return rows
-      .filter((row) => normalizeText(row.description).includes(buscado))
-      .slice(0, SEARCH_MAX_RESULTS);
+    // Se devuelven TODAS las que coinciden y el renderizador recorta la
+    // lista: "¿cuanto gaste en transporte?" pide el total, y sumar solo las
+    // que caben en el mensaje daba una cifra menor a la real.
+    return rows.filter((row) =>
+      normalizeText(row.description).includes(buscado),
+    );
   }
 
   /**
@@ -2575,6 +2587,24 @@ const QUOTED_WINDOW_DAYS = 400;
 const CORRECTION_MAX_CANDIDATES = 5;
 
 const SEARCH_WINDOW_DAYS = 120;
+
+/**
+ * Donde se busca por concepto.
+ *
+ * Con periodo ("¿cuanto gaste en transporte la semana pasada?"), en ese rango
+ * aunque cruce de mes. Sin el, la ventana amplia: quien pregunta "¿que dia
+ * compre jabones?" busca un hecho, no un periodo, y suele ser de hace semanas.
+ */
+export function rangoDeBusqueda(
+  periodo: QueryPeriod | null,
+  now: Date = new Date(),
+  diaInicioPeriodo: number = DIA_INICIO_POR_DEFECTO,
+): { from: string; to: string } {
+  if (periodo) return periodRange(periodo, now, diaInicioPeriodo);
+
+  const { from, to } = periodRange('month', now, diaInicioPeriodo);
+  return { from: sumarDias(from, -SEARCH_WINDOW_DAYS), to };
+}
 /** Mas de esto no se lee comodo en un WhatsApp. */
 const SEARCH_MAX_RESULTS = 8;
 
@@ -2655,26 +2685,40 @@ export function renderSearch(
   termino: string,
   encontrados: Transaction[],
   currency: string,
+  periodo: QueryPeriod | null = null,
 ): string {
+  const cuando = periodo ? etiquetaPeriodo(periodo) : 'en los últimos 4 meses';
+
   if (encontrados.length === 0) {
-    return `No encontré movimientos que mencionen "${termino}" en los últimos 4 meses. Si lo registraste con otro nombre, dime cuál y lo busco.`;
+    return `No encontré movimientos que mencionen "${termino}" ${cuando}. Si lo registraste con otro nombre, dime cuál y lo busco.`;
   }
 
+  // El total es de todas las que coinciden, no solo de las que se muestran.
   const total = encontrados.reduce((suma, row) => suma + row.amount, 0);
-  const lineas = encontrados.map((row) => {
+  const mostrados = encontrados.slice(0, SEARCH_MAX_RESULTS);
+  const lineas = mostrados.map((row) => {
     const signo = row.type === 'income' ? '+' : '-';
     const fecha = FECHA_CORTA.format(new Date(`${row.date}T12:00:00.000Z`));
     return `• ${fecha} · ${row.description} · ${signo}${formatMoney(row.amount, currency)}`;
   });
 
+  const enElPeriodo = periodo ? ` ${cuando}` : '';
   const encabezado =
     encontrados.length === 1
-      ? `🔎 Encontré 1 movimiento con "${termino}":`
-      : `🔎 Encontré ${encontrados.length} movimientos con "${termino}":`;
+      ? `🔎 Encontré 1 movimiento con "${termino}"${enElPeriodo}:`
+      : `🔎 Encontré ${encontrados.length} movimientos con "${termino}"${enElPeriodo}:`;
 
-  return [encabezado, ...lineas, `Total: ${formatMoney(total, currency)}`].join(
-    '\n',
-  );
+  const resto =
+    encontrados.length > mostrados.length
+      ? [`...y ${encontrados.length - mostrados.length} más.`]
+      : [];
+
+  return [
+    encabezado,
+    ...lineas,
+    ...resto,
+    `Total: ${formatMoney(total, currency)}`,
+  ].join('\n');
 }
 
 // ----------------------------------------------- respuestas de correcciones

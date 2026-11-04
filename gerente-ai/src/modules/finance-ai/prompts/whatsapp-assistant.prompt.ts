@@ -27,7 +27,9 @@ import {
  * noviembre, "¿como me fue la semana pasada?" terminaba en "week" o "month"
  * y los registros de finales de octubre no aparecian. Ahora hay periodos para
  * ayer, la semana pasada, el mes pasado y los ultimos N dias, y una correccion
- * puede decir de cuando es el movimiento. El rango lo calcula el backend.
+ * puede decir de cuando es el movimiento. Una busqueda por concepto tambien
+ * ("¿cuanto gaste en transporte la semana pasada?"). El rango lo calcula el
+ * backend.
  *
  * ---------------------------------------------------------------------------
  * v18: una posicion nombrada nunca significa "todo".
@@ -411,6 +413,13 @@ REGLAS DE INTERPRETACIÓN:
       - Funciona igual para gastos y para ingresos: si preguntan cuánto ganaron
         en algo, es una búsqueda, no un resumen.
       - Pon en concept SOLO la palabra clave, sin "cuánto" ni "qué día".
+      - Si dice CUÁNDO, pon el periodo en queryPeriod con los mismos valores
+        del resumen; si no lo dice, queryPeriod va null y se busca en los
+        últimos meses:
+          "¿Cuánto gasté en transporte la semana pasada?"
+              -> concept "transporte", queryPeriod "last_week"
+          "¿Cuánto vendí de pan ayer?"   -> concept "pan", queryPeriod "yesterday"
+          "¿Qué día compré jabones?"     -> concept "jabones", queryPeriod null
 
    d) "receivables" -> la cartera completa: quiénes le deben. concept: null
       - "¿Quién me debe?", "¿quiénes me deben?", "reporte de fiados",
@@ -1237,7 +1246,7 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
         'last_30_days',
       ],
       description:
-        'Periodo consultado en type "query", o de cuándo es el movimiento en type "correction". El sistema calcula las fechas.',
+        'Periodo consultado en type "query" (en "search", null si no dice cuándo), o de cuándo es el movimiento en type "correction". El sistema calcula las fechas.',
     },
     confirmedCount: {
       type: ['number', 'null'],

@@ -12,6 +12,7 @@ import { ConversationStateService } from './conversation-state.service';
 import {
   WhatsAppMessageService,
   periodRange,
+  rangoDeBusqueda,
   rangoParaCorregir,
   renderSummary,
 } from './whatsapp-message.service';
@@ -502,6 +503,112 @@ describe('SCRUM-32 · corregir registros de un mes anterior', () => {
   });
 });
 
+describe('SCRUM-32 · buscar por concepto en un periodo', () => {
+  const transporte = (date: string, amount: number) =>
+    fila(date, amount, {
+      type: 'expense',
+      category: 'transporte',
+      description: 'Transporte',
+    });
+
+  it('"¿cuánto gasté en transporte la semana pasada?" suma octubre y noviembre', async () => {
+    jest.useFakeTimers().setSystemTime(enBogota('2026-11-04'));
+
+    const { service } = await servicio(
+      {
+        type: 'query',
+        queryKind: 'search',
+        concept: 'transporte',
+        queryPeriod: 'last_week',
+      },
+      [
+        transporte('2026-10-20', 900_000), // semana anterior: fuera
+        transporte('2026-10-29', 30_000),
+        transporte('2026-11-01', 20_000),
+        transporte('2026-11-03', 700_000), // esta semana: fuera
+      ],
+    );
+
+    const result = await service.handleMessage(REQUEST);
+
+    expect(result.replyText).toContain(
+      'Encontré 2 movimientos con "transporte" la semana pasada',
+    );
+    expect(result.replyText).toContain('Total: $50.000');
+  });
+
+  it('sin periodo sigue buscando en los ultimos meses, como antes', async () => {
+    jest.useFakeTimers().setSystemTime(enBogota('2026-11-04'));
+
+    const { service } = await servicio(
+      // El modelo no dijo cuando: "¿que dia compre jabones?".
+      { type: 'query', queryKind: 'search', concept: 'transporte' },
+      [transporte('2026-08-10', 30_000), transporte('2026-11-03', 20_000)],
+    );
+
+    const result = await service.handleMessage(REQUEST);
+
+    expect(result.replyText).toContain('Encontré 2 movimientos');
+    expect(result.replyText).toContain('Total: $50.000');
+  });
+
+  it('el total suma todas las coincidencias, no solo las que se muestran', async () => {
+    jest.useFakeTimers().setSystemTime(enBogota('2026-11-04'));
+
+    const doce = Array.from({ length: 12 }, (_, i) =>
+      transporte(`2026-10-${String(26 + (i % 6)).padStart(2, '0')}`, 10_000),
+    );
+    const { service } = await servicio(
+      {
+        type: 'query',
+        queryKind: 'search',
+        concept: 'transporte',
+        queryPeriod: 'last_week',
+      },
+      doce,
+    );
+
+    const result = await service.handleMessage(REQUEST);
+
+    expect(result.replyText).toContain('Encontré 12 movimientos');
+    expect(result.replyText).toContain('...y 4 más.');
+    expect(result.replyText).toContain('Total: $120.000');
+  });
+
+  it('si no encuentra nada dice en que periodo busco', async () => {
+    jest.useFakeTimers().setSystemTime(enBogota('2026-11-04'));
+
+    const { service } = await servicio(
+      {
+        type: 'query',
+        queryKind: 'search',
+        concept: 'arriendo',
+        queryPeriod: 'yesterday',
+      },
+      [],
+    );
+
+    const result = await service.handleMessage(REQUEST);
+    expect(result.replyText).toContain(
+      'No encontré movimientos que mencionen "arriendo" ayer',
+    );
+  });
+
+  it('el rango de busqueda: con periodo el periodo, sin el la ventana amplia', () => {
+    const hoy = enBogota('2026-11-04');
+
+    expect(rangoDeBusqueda('last_week', hoy)).toEqual({
+      from: '2026-10-26',
+      to: '2026-11-01',
+    });
+    // 120 dias antes del 1 de noviembre.
+    expect(rangoDeBusqueda(null, hoy)).toEqual({
+      from: '2026-07-04',
+      to: '2026-11-04',
+    });
+  });
+});
+
 describe('SCRUM-32 · zona horaria America/Bogota en el borde del mes', () => {
   // 31 de octubre a las 11:30 p.m. en Colombia. En UTC ya es 1 de noviembre.
   const ONCE_Y_MEDIA = enBogota('2026-10-31', '23:30');
@@ -614,6 +721,8 @@ describe('SCRUM-32 · lo que devuelve el modelo', () => {
         pendingCollection: 0,
         transactionCount: 1,
         byCategory: [],
+        byPaymentMethod: {},
+        unspecifiedIncome: 0,
       }).split('\n')[0];
 
     expect(titulo('day')).toBe('📊 Resumen de hoy:');
