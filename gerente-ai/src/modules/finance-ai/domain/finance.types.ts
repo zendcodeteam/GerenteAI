@@ -19,6 +19,8 @@ export type MessageIntentType =
   | 'breakdown'
   /** Reparto de utilidades entre el dueno y los trabajadores. */
   | 'profit_share'
+  /** Pago de nomina a un trabajador: nombre, porcentaje y monto. */
+  | 'payroll'
   /** Un suministro que queda a deber al proveedor, con su plan de pagos. */
   | 'supply_debt'
   /** Le pidieron algo que no son las finanzas del negocio (codigo, poemas...). */
@@ -209,6 +211,15 @@ export interface MovementDraft {
   /** A quien se le fio, cuando se menciona. */
   customerName: string | null;
   /**
+   * Fecha maxima de pago acordada para un fiado, en YYYY-MM-DD.
+   *
+   * Solo aplica cuando `isCredit` es true, y entonces es obligatoria: sin
+   * plazo no hay deuda vencida, nadie sabe cuando cobrar y el recordatorio de
+   * fiados no tiene contra que comparar. null = el usuario no la dijo todavia
+   * y el sistema se la pregunta antes de guardar.
+   */
+  dueDate: string | null;
+  /**
    * Cuantas unidades, cuando el mensaje o la factura lo dicen.
    *
    * No cambia el monto (ese ya viene total), pero se conserva en la
@@ -232,6 +243,25 @@ export interface MovementDraft {
  * El monto puede faltar: "Rosa ya me pago" no dice cuanto, y lo correcto es
  * saldar toda su deuda, no adivinar una cifra.
  */
+/**
+ * Un pago de nomina a medio armar.
+ *
+ * Los tres datos se piden de a uno, asi que el borrador viaja incompleto entre
+ * turnos: cada respuesta del usuario rellena un hueco y el resto se conserva.
+ * Pedirlos todos juntos en un solo mensaje de WhatsApp termina en que la gente
+ * contesta solo el primero.
+ */
+export interface PayrollDraft {
+  /** A quien se le paga. */
+  workerName: string | null;
+  /** Porcentaje acordado, de 0 a 100. */
+  percentage: number | null;
+  /** Lo que se le paga de verdad, en la moneda del negocio. */
+  amount: number | null;
+  /** Fecha del pago en YYYY-MM-DD. null = hoy. */
+  date: string | null;
+}
+
 /**
  * Una deuda con proveedor a medio armar.
  *
@@ -386,6 +416,8 @@ export interface MessageIntent {
   correction: CorrectionRequest | null;
   /** El abono, cuando el mensaje avisa que le pagaron un fiado. */
   payment: PaymentDraft | null;
+  /** Pago de nomina detectado. null en todo lo demas. */
+  payroll: PayrollDraft | null;
   /** Suministro que queda pendiente de pago. null en todo lo demas. */
   supplyDebt: SupplyDebtDraft | null;
   /**
@@ -458,6 +490,11 @@ export interface Transaction {
   pendingAmount?: number | null;
   /** Cliente al que se le fio. */
   customerName?: string | null;
+  /**
+   * Fecha maxima de pago del fiado, en YYYY-MM-DD. La acuerda el usuario con
+   * su cliente y se la pregunta Luka al registrar. null en lo que no es fiado.
+   */
+  dueDate?: string | null;
   productName?: string | null;
   productId?: string | null;
   quantity?: number | null;

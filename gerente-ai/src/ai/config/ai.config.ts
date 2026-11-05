@@ -19,6 +19,15 @@ export interface AiConfig {
   /** Proveedor de respaldo. Se usa si el principal falla de forma reintentable. */
   fallback?: ProviderRuntimeConfig;
   timeoutMs: number;
+  /**
+   * Tope para las llamadas con alguien esperando del otro lado (WhatsApp, el
+   * chat de la landing).
+   *
+   * Mas corto que el general a proposito: en un informe que corre de noche dar
+   * 45 segundos es razonable, pero quien escribio por WhatsApp ya se fue a
+   * otra cosa. Y con reintentos encima, el tope general se multiplica.
+   */
+  interactiveTimeoutMs: number;
   maxRetries: number;
   maxOutputTokens: number;
   temperature: number;
@@ -60,6 +69,13 @@ export function loadAiConfig(env: Env = process.env): AiConfig {
     primary,
     fallback,
     timeoutMs: readInt(env, 'AI_TIMEOUT_MS', 45_000, 1_000, 600_000),
+    interactiveTimeoutMs: readInt(
+      env,
+      'AI_TIMEOUT_INTERACTIVE_MS',
+      20_000,
+      1_000,
+      600_000,
+    ),
     maxRetries: readInt(env, 'AI_MAX_RETRIES', 3, 1, 10),
     maxOutputTokens: readInt(env, 'AI_MAX_OUTPUT_TOKENS', 2_048, 128, 128_000),
     temperature: readFloat(env, 'AI_TEMPERATURE', 0.2, 0, 2),

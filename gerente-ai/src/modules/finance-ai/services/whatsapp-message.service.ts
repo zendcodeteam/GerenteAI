@@ -29,6 +29,7 @@ import {
   type MovementDraft,
   type PaymentDraft,
   type PaymentMethod,
+  type PayrollDraft,
   type SupplyDebtDraft,
   type PeriodSummary,
   type ProfitBeneficiary,
@@ -44,6 +45,7 @@ import {
   FINANCE_DATA_PORT,
   type FinanceDataPort,
   type PaymentResult,
+  type PayrollPayment,
   type SupplyDebt,
 } from '../ports/finance-data.port';
 import {
@@ -55,12 +57,14 @@ import {
   type PendingAction,
   type PendingCorrection,
   type PendingDeletion,
+  type PendingPayroll,
   type PendingRegistration,
   type PendingSupplyDebt,
 } from './conversation-state.service';
 import {
   WHATSAPP_ASSISTANT_PROMPT_VERSION,
   WHATSAPP_INTENT_SCHEMA,
+  WHATSAPP_ASSISTANT_SYSTEM_PROMPT,
   buildWhatsAppAssistantSystemPrompt,
   type WhatsAppIntentOutput,
 } from '../prompts/whatsapp-assistant.prompt';
@@ -234,6 +238,11 @@ export class WhatsAppMessageService {
     const { data, response } =
       await this.llm.completeJson<WhatsAppIntentOutput>(
         {
+          // Los ~14.500 tokens del prompt viajan identicos en cada mensaje;
+          // solo cambia el bloque de contexto que va al final. Marcandolos
+          // como prefijo cacheable, el proveedor los cobra al 10% y responde
+          // antes. El texto que lee el modelo no cambia.
+          cacheableSystemPrefix: WHATSAPP_ASSISTANT_SYSTEM_PROMPT,
           system: buildWhatsAppAssistantSystemPrompt({
             businessName: request.businessName ?? 'el negocio',
             currency,
@@ -302,13 +311,15 @@ export class WhatsAppMessageService {
     // Cambiar de tema cierra la pregunta abierta. Dejarla viva haria que una
     // correccion de dentro de un rato se resolviera contra una lista que ya no
     // tiene nada que ver con lo que se esta hablando.
-    // "supply_debt" tambien conserva: la deuda se arma en varios turnos y
-    // cada respuesta llega como un supply_debt nuevo con un solo dato. Si se
-    // olvidara aqui, el borrador moriria entre mensajes.
+    // "payroll" tambien conserva: una nomina se arma en varios turnos y cada
+    // respuesta del usuario llega como un payroll nuevo con un solo dato. Si
+    // se olvidara aqui, el borrador moriria entre mensaje y mensaje y Luka
+    // volveria a preguntar el nombre despues de que se lo dijeron.
     if (
       intent.type !== 'correction' &&
       intent.type !== 'confirmation' &&
       intent.type !== 'unclear' &&
+      intent.type !== 'payroll' &&
       intent.type !== 'supply_debt'
     ) {
       this.state.olvidar(request.businessId);
@@ -337,7 +348,22 @@ export class WhatsAppMessageService {
         );
 
       case 'confirmation':
-        return this.handleConfirmation(intent, request, currency, meta);
+        return this.handleConfirmation(
+          intent,
+          request,
+          currency,
+          referenceDate,
+          meta,
+        );
+
+      case 'payroll':
+        return this.handlePayroll(
+          intent,
+          request,
+          currency,
+          referenceDate,
+          meta,
+        );
 
       case 'supply_debt':
         return this.handleSupplyDebt(intent, request, currency, meta);
@@ -416,6 +442,22 @@ export class WhatsAppMessageService {
       return this.needsClarification(
         intent,
         '¿A quién le fiaste? Necesito el nombre para saber después quién te debe.',
+        meta,
+      );
+    }
+
+    // Un fiado sin plazo es una deuda sin fecha de cobro: el recordatorio no
+    // tiene contra que comparar y el dueno nunca sabe cuando reclamar. Antes
+    // el sistema le inventaba unos dias fijos; ahora se pregunta, porque el
+    // plazo lo acuerdan el y su cliente, no el software.
+    const fiadoSinPlazo = intent.movements.find(
+      (movimiento) => movimiento.isCredit && !movimiento.dueDate,
+    );
+
+    if (fiadoSinPlazo) {
+      return this.needsClarification(
+        intent,
+        `¿Para cuándo quedó de pagarte ${fiadoSinPlazo.customerName}? Puedes decirme "el viernes", "el 15" o "fin de mes".`,
         meta,
       );
     }
@@ -520,10 +562,12 @@ export class WhatsAppMessageService {
       summary: null,
       // Con un solo movimiento se respeta el texto del modelo, que suena
       // natural. Con varios lo arma el backend: son cifras, y las cifras las
-      // pone quien tiene los datos.
+      // pone quien tiene los datos. El plazo del fiado se agrega aparte por lo
+      // mismo: que salga o no en la confirmacion no puede depender de que al
+      // modelo se le ocurra mencionarlo.
       replyText:
         transactions.length === 1 && !intent.discount
-          ? intent.responseText
+          ? intent.responseText + lineaDePlazo(transactions[0])
           : renderMovementsRegistered(transactions, currency, intent.discount),
       meta,
     };
@@ -544,6 +588,7 @@ export class WhatsAppMessageService {
         profitShares: [],
         correction: null,
         payment: null,
+        payroll: null,
         supplyDebt: null,
         confirmed: null,
         confirmedCount: null,
@@ -572,6 +617,7 @@ export class WhatsAppMessageService {
     intent: MessageIntent,
     request: WhatsAppMessageRequest,
     currency: string,
+    referenceDate: string,
     meta: WhatsAppMessageResult['meta'],
   ): Promise<WhatsAppMessageResult> {
     const deuda = this.state.deudaProveedorPendiente(request.businessId);
@@ -582,6 +628,19 @@ export class WhatsAppMessageService {
         intent,
         request,
         currency,
+        meta,
+      );
+    }
+
+    const nomina = this.state.nominaPendiente(request.businessId);
+
+    if (nomina?.stage === 'confirmacion') {
+      return this.confirmarNomina(
+        nomina,
+        intent,
+        request,
+        currency,
+        referenceDate,
         meta,
       );
     }
@@ -1469,6 +1528,99 @@ export class WhatsAppMessageService {
     };
   }
 
+  // ------------------------------------------------------------------ nomina
+
+  /**
+   * Registra el pago de nomina de un trabajador.
+   *
+   * Son tres datos —a quien, que porcentaje y cuanto— y se piden de a uno: un
+   * mensaje de WhatsApp que pregunta tres cosas a la vez se contesta a medias,
+   * y el usuario termina repitiendose. El borrador se guarda entre turnos, asi
+   * que cada respuesta rellena un hueco sin perder lo ya dicho.
+   *
+   * Nada se guarda sin visto bueno. Una nomina mal registrada no se nota en el
+   * momento: aparece a fin de mes, cuando las cuentas del trabajador no
+   * cuadran con las del dueno.
+   */
+  private handlePayroll(
+    intent: MessageIntent,
+    request: WhatsAppMessageRequest,
+    currency: string,
+    referenceDate: string,
+    meta: WhatsAppMessageResult['meta'],
+  ): Promise<WhatsAppMessageResult> {
+    const abierta = this.state.nominaPendiente(request.businessId);
+    const borrador = mezclarNomina(abierta?.draft, intent.payroll);
+
+    const falta = primerDatoQueFalta(borrador);
+
+    if (falta) {
+      this.state.recordarNomina(request.businessId, {
+        draft: borrador,
+        stage: 'datos',
+      });
+
+      return Promise.resolve(
+        this.plainResult(intent, preguntaDeNomina(falta, borrador), meta),
+      );
+    }
+
+    // Completo: se le ensena y se espera el si. El borrador queda guardado tal
+    // cual, para que la confirmacion registre exactamente lo que se mostro.
+    this.state.recordarNomina(request.businessId, {
+      draft: borrador,
+      stage: 'confirmacion',
+    });
+
+    return Promise.resolve(
+      this.plainResult(
+        intent,
+        renderPayrollSummary(borrador, currency, referenceDate),
+        meta,
+      ),
+    );
+  }
+
+  /** Guarda la nomina que el usuario acaba de confirmar. */
+  private async confirmarNomina(
+    pendiente: PendingPayroll,
+    intent: MessageIntent,
+    request: WhatsAppMessageRequest,
+    currency: string,
+    referenceDate: string,
+    meta: WhatsAppMessageResult['meta'],
+  ): Promise<WhatsAppMessageResult> {
+    this.state.olvidar(request.businessId);
+
+    if (intent.confirmed !== true) {
+      return this.plainResult(
+        intent,
+        'Listo, no registré ese pago. Si quieres lo hacemos de nuevo 😊',
+        meta,
+      );
+    }
+
+    const pago: PayrollPayment = {
+      id: randomUUID(),
+      businessId: request.businessId,
+      workerName: pendiente.draft.workerName ?? '',
+      percentage: pendiente.draft.percentage ?? 0,
+      amount: pendiente.draft.amount ?? 0,
+      date: pendiente.draft.date ?? referenceDate,
+      currency,
+    };
+
+    if (request.persist) {
+      await this.financeData.savePayroll(pago);
+    }
+
+    return this.plainResult(
+      intent,
+      renderPayrollRegistered(pago, currency),
+      meta,
+    );
+  }
+
   // ------------------------------------------------- suministros a credito
 
   /**
@@ -1637,6 +1789,7 @@ export class WhatsAppMessageService {
       profitShares: normalizeProfitShares(output?.profitShares),
       correction: normalizeCorrection(output?.correction),
       payment,
+      payroll: normalizePayroll(output?.payroll),
       supplyDebt: normalizeSupplyDebt(output?.supplyDebt),
       confirmed: normalizeConfirmed(output?.confirmed),
       confirmedCount: normalizePosition(output?.confirmedCount),
@@ -1706,6 +1859,7 @@ export class WhatsAppMessageService {
       paymentMethod: movement.paymentMethod,
       isCredit: movement.isCredit,
       customerName: movement.customerName,
+      dueDate: movement.dueDate,
       productName: movement.productName,
       quantity: movement.quantity,
       supplierName: movement.supplierName,
@@ -1866,6 +2020,7 @@ const INTENT_TYPES: MessageIntentType[] = [
   'investment',
   'breakdown',
   'profit_share',
+  'payroll',
   'supply_debt',
   'query',
   'correction',
@@ -1942,6 +2097,38 @@ function normalizeMovementDate(value: unknown): string | null {
 
 const DIA_MS = 24 * 60 * 60 * 1000;
 
+/** Mas alla de esto no es un fiado, es otra cosa: se descarta y se repregunta. */
+const MAX_DIAS_DE_PLAZO = 366;
+
+/**
+ * Fecha maxima de pago de un fiado.
+ *
+ * Es el espejo de `normalizeMovementDate`: aquella rechaza el futuro porque
+ * nadie registra lo que no ha pasado; esta rechaza el pasado porque un plazo
+ * que ya vencio no es un plazo. Devolver null no pierde nada: el servicio lo
+ * lee como "no la dijo" y se la vuelve a preguntar, que es mejor que guardar
+ * una fecha que el modelo resolvio mal.
+ */
+function normalizeDueDate(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+
+  const texto = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(texto)) return null;
+
+  const fecha = new Date(`${texto}T12:00:00.000Z`);
+  if (Number.isNaN(fecha.getTime())) return null;
+  // "2026-11-31" pasa el regex pero se desborda a diciembre.
+  if (fecha.toISOString().slice(0, 10) !== texto) return null;
+
+  // Se compara contra el dia colombiano, no contra el del contenedor: a las
+  // 8 p.m. en Colombia ya es manana en UTC, y "me paga manana" se habria
+  // leido como una fecha de hoy.
+  if (texto <= todayIso()) return null;
+  if (texto > sumarDias(todayIso(), MAX_DIAS_DE_PLAZO)) return null;
+
+  return texto;
+}
+
 function normalizeMovements(value: unknown): MovementDraft[] {
   if (!Array.isArray(value)) return [];
 
@@ -1965,6 +2152,7 @@ function normalizeMovements(value: unknown): MovementDraft[] {
         paymentMethod: normalizePaymentMethod(row.paymentMethod),
         isCredit: row.isCredit === true,
         customerName: cleanText(row.customerName),
+        dueDate: normalizeDueDate(row.dueDate),
         quantity: normalizeQuantity(row.quantity),
         date: normalizeMovementDate(row.date),
       };
@@ -1973,6 +2161,136 @@ function normalizeMovements(value: unknown): MovementDraft[] {
     .slice(0, MAX_MOVEMENTS_PER_MESSAGE);
 }
 
+// --------------------------------------------------------------------- nomina
+
+/** Los tres datos de una nomina, en el orden en que se preguntan. */
+type DatoDeNomina = 'workerName' | 'percentage' | 'amount';
+
+/**
+ * Funde lo que ya se sabia con lo que acaba de decir el usuario.
+ *
+ * Lo nuevo manda, pero solo cuando viene: si el modelo devuelve el porcentaje
+ * en null porque este turno el usuario solo dijo el monto, el porcentaje de
+ * antes se conserva. Sin esto, cada respuesta borraria la anterior y la
+ * conversacion no avanzaria nunca.
+ */
+function mezclarNomina(
+  previo: PayrollDraft | undefined,
+  nuevo: PayrollDraft | null,
+): PayrollDraft {
+  return {
+    workerName: nuevo?.workerName ?? previo?.workerName ?? null,
+    percentage: nuevo?.percentage ?? previo?.percentage ?? null,
+    amount: nuevo?.amount ?? previo?.amount ?? null,
+    date: nuevo?.date ?? previo?.date ?? null,
+  };
+}
+
+/** El primer dato que falta, o null si ya esta completa. */
+function primerDatoQueFalta(draft: PayrollDraft): DatoDeNomina | null {
+  if (!draft.workerName) return 'workerName';
+  if (draft.percentage === null) return 'percentage';
+  if (draft.amount === null) return 'amount';
+  return null;
+}
+
+/**
+ * La pregunta por el dato que falta.
+ *
+ * Nombra al trabajador en cuanto se sabe quien es: "¿Qué porcentaje?" a secas,
+ * tres mensajes despues de haberlo dicho, obliga al usuario a acordarse de
+ * que estaba haciendo.
+ */
+function preguntaDeNomina(falta: DatoDeNomina, draft: PayrollDraft): string {
+  if (falta === 'workerName') {
+    return '¿A quién le vas a pagar? Dime el nombre del trabajador.';
+  }
+
+  const quien = draft.workerName ?? 'esta persona';
+
+  if (falta === 'percentage') {
+    return `¿Qué porcentaje le corresponde a ${quien}? Dímelo en números, por ejemplo 40%.`;
+  }
+
+  return `¿Cuánto le vas a pagar a ${quien} en total?`;
+}
+
+/**
+ * El resumen que se le ensena antes de guardar.
+ *
+ * Lleva los tres datos juntos aunque los haya dicho de a uno: es la unica
+ * oportunidad de ver si lo que entendio Luka es lo que el acordo.
+ */
+export function renderPayrollSummary(
+  draft: PayrollDraft,
+  currency: string,
+  referenceDate: string,
+): string {
+  const fecha = FECHA_CORTA.format(
+    new Date(`${draft.date ?? referenceDate}T12:00:00.000Z`),
+  );
+
+  return [
+    'Voy a registrar este pago de nómina:',
+    `• Trabajador: ${draft.workerName}`,
+    `• Porcentaje: ${formatPercentage(draft.percentage ?? 0)}`,
+    `• Monto: ${formatMoney(draft.amount ?? 0, currency)}`,
+    `• Fecha: ${fecha}`,
+    '',
+    '¿Lo registro así? Responde sí o no.',
+  ].join('\n');
+}
+
+/** Confirmacion de la nomina ya guardada. */
+export function renderPayrollRegistered(
+  pago: PayrollPayment,
+  currency: string,
+): string {
+  const fecha = FECHA_CORTA.format(new Date(`${pago.date}T12:00:00.000Z`));
+
+  return [
+    `✅ Registré el pago de nómina de ${pago.workerName}:`,
+    `${formatMoney(pago.amount, currency)} (${formatPercentage(pago.percentage)}) · ${fecha}`,
+  ].join('\n');
+}
+
+/** "40%" y "12,5%": sin decimales cuando son redondos, que es lo normal. */
+function formatPercentage(valor: number): string {
+  return `${Number.isInteger(valor) ? valor : valor.toFixed(2).replace('.', ',')}%`;
+}
+
+/**
+ * El borrador de nomina tal como lo devolvio el modelo.
+ *
+ * Los tres datos pueden venir sueltos o de a uno: el usuario dice "pagale a
+ * Carlos" y el porcentaje llega dos mensajes despues. Lo que no se entienda
+ * va en null y el servicio lo pregunta.
+ */
+function normalizePayroll(value: unknown): PayrollDraft | null {
+  if (!value || typeof value !== 'object') return null;
+
+  const crudo = value as Record<string, unknown>;
+
+  return {
+    workerName: cleanText(crudo.workerName),
+    percentage: normalizePercentage(crudo.percentage),
+    amount: normalizeAmount(crudo.amount),
+    date: normalizeMovementDate(crudo.date),
+  };
+}
+
+/**
+ * Un porcentaje de 0 a 100.
+ *
+ * El 0 se descarta junto con lo que no es numero: "le pago el 0%" no es un
+ * pago de nomina, es un error de dictado, y preguntar de nuevo cuesta menos
+ * que guardar un porcentaje que nadie quiso decir.
+ */
+function normalizePercentage(value: unknown): number | null {
+  const numero = Number(value);
+  if (!Number.isFinite(numero) || numero <= 0 || numero > 100) return null;
+  return round2(numero);
+}
 
 // ------------------------------------------------- suministros a credito
 
@@ -2142,11 +2460,6 @@ function planDeLaDeuda(deuda: SupplyDebt): PlanDeDeuda {
   });
 }
 
-/** "12%" y "1,5%": sin decimales cuando son redondos, que es lo normal. */
-function formatPercentage(valor: number): string {
-  return `${Number.isInteger(valor) ? valor : valor.toFixed(2).replace('.', ',')}%`;
-}
-
 function formatearFechaCorta(fecha: string): string {
   return FECHA_CORTA.format(new Date(`${fecha}T12:00:00.000Z`));
 }
@@ -2171,7 +2484,7 @@ function normalizeSupplyDebt(value: unknown): SupplyDebtDraft | null {
     supplierName: cleanText(crudo.supplierName),
     supply: cleanText(crudo.supply),
     amount: normalizeAmount(crudo.amount),
-    dueDate: normalizeDueDate(crudo.dueDate),
+    dueDate: normalizeSupplyDueDate(crudo.dueDate),
     mode: mode === 'cuotas' || mode === 'unico' ? mode : null,
     installments: normalizeInstallments(crudo.installments),
     interestRate: normalizeInterestRate(crudo.interestRate),
@@ -2179,13 +2492,17 @@ function normalizeSupplyDebt(value: unknown): SupplyDebtDraft | null {
 }
 
 /**
- * Fecha limite de pago: tiene que ser futura.
+ * Fecha limite de pago al proveedor: tiene que ser futura.
  *
  * Es el espejo de `normalizeMovementDate`, que rechaza el futuro porque nadie
  * registra lo que no ha pasado. Aqui se rechaza el pasado: una fecha limite
  * vencida no es un plazo, y el plan de cuotas que saldria de ella nace mal.
+ *
+ * Separada de `normalizeDueDate`, la de los fiados, porque el tope no es el
+ * mismo: un fiado a mas de un año es un error de dictado, pero una deuda con
+ * proveedor en cuotas puede pasar de ahi con toda normalidad.
  */
-function normalizeDueDate(value: unknown): string | null {
+function normalizeSupplyDueDate(value: unknown): string | null {
   if (typeof value !== 'string') return null;
 
   const texto = value.trim();
@@ -2815,12 +3132,12 @@ export function renderSummary(summary: PeriodSummary): string {
     );
   }
 
-  const paymentLines = PAYMENT_METHODS
-    .filter((method) => (summary.byPaymentMethod?.[method] ?? 0) > 0)
-    .map(
-      (method) =>
-        `${PAYMENT_METHOD_LABELS[method]}: ${money(summary.byPaymentMethod?.[method] ?? 0)}`,
-    );
+  const paymentLines = PAYMENT_METHODS.filter(
+    (method) => (summary.byPaymentMethod?.[method] ?? 0) > 0,
+  ).map(
+    (method) =>
+      `${PAYMENT_METHOD_LABELS[method]}: ${money(summary.byPaymentMethod?.[method] ?? 0)}`,
+  );
 
   if (paymentLines.length > 0) {
     lines.push('Ingresos por forma de pago:', ...paymentLines);
@@ -3394,11 +3711,58 @@ export function renderPendingQuestion(
     return renderPendingRegistration(pendiente, currency);
   }
 
+  if (pendiente.kind === 'payroll') {
+    return renderPendingPayroll(pendiente, currency);
+  }
+
   if (pendiente.kind === 'supply-debt') {
     return renderPendingSupplyDebt(pendiente, currency);
   }
 
   return renderPendingCorrection(pendiente, currency);
+}
+
+/**
+ * La nomina a medio armar, contada para el modelo.
+ *
+ * Es la pieza que hace que la conversacion funcione: sin esto, el usuario
+ * contesta "Carlos" y el modelo no tiene forma de saber que eso es el nombre
+ * del trabajador de un pago que se esta armando, asi que lo lee como un
+ * mensaje suelto y vuelve a empezar.
+ */
+function renderPendingPayroll(
+  pendiente: PendingPayroll,
+  currency: string,
+): string {
+  const { workerName, percentage, amount } = pendiente.draft;
+
+  const sabido = [
+    `- trabajador: ${workerName ?? 'todavia no lo dijo'}`,
+    `- porcentaje: ${percentage === null ? 'todavia no lo dijo' : `${percentage}%`}`,
+    `- monto: ${amount === null ? 'todavia no lo dijo' : formatMoney(amount, currency)}`,
+  ];
+
+  if (pendiente.stage === 'confirmacion') {
+    return [
+      'PREGUNTA ABIERTA (lo mas importante de este turno):',
+      'Le acabas de enseñar este pago de nomina y le preguntaste si lo registras:',
+      ...sabido,
+      'Si dice que si, devuelve type "confirmation" con confirmed true.',
+      'Si dice que no, confirmed false.',
+      'Si te CORRIGE un dato ("no, son 900.000"), no es una confirmacion:',
+      'devuelve type "payroll" con ese dato ya corregido.',
+    ].join('\n');
+  }
+
+  return [
+    'PREGUNTA ABIERTA (lo mas importante de este turno):',
+    'Estas armando un pago de nomina y le preguntaste por el dato que falta.',
+    'Esto es lo que ya sabes:',
+    ...sabido,
+    'Lo que conteste es ese dato: devuelve type "payroll" con el puesto donde',
+    'corresponde. NO vuelvas a pedir lo que ya esta arriba y NO lo trates como',
+    'un gasto ni como una venta.',
+  ].join('\n');
 }
 
 /**
@@ -3551,6 +3915,22 @@ function renderPendingCorrection(
 // ------------------------------------------------- respuestas de movimientos
 
 /** Una linea por movimiento: "• 15 ago · Transporte · -$50.000 COP". */
+/**
+ * El recordatorio del plazo, para pegarlo al texto que escribio el modelo.
+ *
+ * Vacio en todo lo que no sea un fiado con fecha: no hay nada que recordar.
+ */
+function lineaDePlazo(transaction: Transaction | undefined): string {
+  if (!transaction?.isCredit || !transaction.dueDate) return '';
+
+  const fecha = FECHA_CORTA.format(
+    new Date(`${transaction.dueDate}T12:00:00.000Z`),
+  );
+
+  return `
+📅 Te paga el ${fecha}.`;
+}
+
 function movementLine(
   row: Transaction,
   currency: string,
@@ -3560,7 +3940,13 @@ function movementLine(
   const fecha = FECHA_CORTA.format(new Date(`${row.date}T12:00:00.000Z`));
   const extras = [
     row.paymentMethod ? PAYMENT_METHOD_LABELS[row.paymentMethod] : null,
-    row.isCredit ? 'fiado' : null,
+    // El plazo va pegado al "fiado" y no en una linea aparte: es lo que el
+    // dueno necesita ver para saber si lo que entendio Luka es lo que acordo.
+    row.isCredit
+      ? row.dueDate
+        ? `fiado, paga el ${FECHA_CORTA.format(new Date(`${row.dueDate}T12:00:00.000Z`))}`
+        : 'fiado'
+      : null,
   ].filter(Boolean);
 
   return (

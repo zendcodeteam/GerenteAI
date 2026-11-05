@@ -32,12 +32,30 @@ import {
  * backend.
  *
  * ---------------------------------------------------------------------------
- * v20: un suministro que queda a deber tiene plan de pagos.
+ * v22: un suministro que queda a deber tiene plan de pagos.
  *
  * "La harina de Molinos quedo a deber" no es un gasto cualquiera: es una
  * deuda con proveedor, con fecha limite, modalidad, cuotas e interes. Se
  * extrae lo que venga y el backend pregunta lo que falte, de a un dato por
  * mensaje, y ensena el plan de cuotas antes de guardar.
+ *
+ * ---------------------------------------------------------------------------
+ * v21: pagos de nomina por conversacion.
+ *
+ * "Pagale el 40% a Carlos" no es un reparto de utilidades ni un gasto
+ * cualquiera: es un pago de nomina, con su trabajador, su porcentaje y su
+ * monto. Se extrae lo que venga y el backend pregunta lo que falte, de a un
+ * dato por mensaje, y ensena un resumen antes de guardar.
+ *
+ * ---------------------------------------------------------------------------
+ * v20: todo fiado nace con fecha maxima de pago.
+ *
+ * Antes el plazo se inventaba: el sistema le sumaba unos dias fijos a la
+ * fecha de la venta. Como nadie habia acordado ese plazo, el recordatorio de
+ * cobro salia cuando no tocaba y el dueno no se fiaba de el. Ahora el modelo
+ * extrae la fecha que el usuario diga, en el lenguaje en que la diga ("el
+ * viernes", "fin de mes", "el 15"), y si no dice ninguna el sistema la
+ * pregunta antes de guardar.
  *
  * ---------------------------------------------------------------------------
  * v18: una posicion nombrada nunca significa "todo".
@@ -123,7 +141,7 @@ import {
  * ---------------------------------------------------------------------------
  */
 
-export const WHATSAPP_ASSISTANT_PROMPT_VERSION = 'asistente-whatsapp/v20';
+export const WHATSAPP_ASSISTANT_PROMPT_VERSION = 'asistente-whatsapp/v22';
 
 /**
  * Forma CRUDA de la respuesta del modelo.
@@ -134,6 +152,12 @@ export const WHATSAPP_ASSISTANT_PROMPT_VERSION = 'asistente-whatsapp/v20';
  */
 export interface WhatsAppIntentOutput {
   type?: string;
+  payroll?: {
+    workerName?: string | null;
+    percentage?: number | string | null;
+    amount?: number | string | null;
+    date?: string | null;
+  } | null;
   supplyDebt?: {
     supplierName?: string | null;
     supply?: string | null;
@@ -154,6 +178,7 @@ export interface WhatsAppIntentOutput {
     isSupplierCredit?: boolean | null;
     paymentMethod?: string | null;
     isCredit?: boolean | null;
+    dueDate?: string | null;
     customerName?: string | null;
     quantity?: number | string | null;
     date?: string | null;
@@ -358,6 +383,26 @@ REGLAS DE INTERPRETACIÓN:
      a quién, usa type "unclear" y pregunta el nombre: un fiado sin dueño es una
      deuda que después nadie puede cobrar ni descontar cuando le paguen.
 
+   FECHA MÁXIMA DE PAGO (dueDate), obligatoria en todo fiado:
+
+   - Es el día en que el cliente quedó de pagar. Va en "dueDate", formato
+     YYYY-MM-DD, resuelta contra la fecha de hoy que tienes en el contexto.
+   - Entiéndela en el idioma en que la diga, no le pidas un formato:
+         "el viernes"        -> el próximo viernes
+         "el 15"             -> el 15 de este mes; si ya pasó, el del mes que viene
+         "fin de mes"        -> el último día de este mes
+         "en 15 días"        -> hoy + 15 días
+         "la otra semana"    -> hoy + 7 días
+         "el 30 de noviembre"-> ese día
+   - SIEMPRE tiene que ser futura. Si lo que dice ya pasó ("el lunes" cuando
+     hoy es miércoles y se refería al lunes anterior), interprétalo como la
+     próxima vez que caiga ese día.
+   - Si NO dijo ninguna fecha, deja dueDate en null. NO la inventes y NO uses
+     type "unclear" por eso: el sistema se la pregunta él mismo y conserva el
+     resto del movimiento. Inventar un plazo que nadie acordó es lo que se
+     está corrigiendo.
+   - En lo que no es fiado, dueDate va null siempre.
+
 6B. LE PAGARON UN FIADO (type: "payment"):
    Esto es lo contrario de fiar: el cliente que debia viene y paga.
 
@@ -393,6 +438,34 @@ REGLAS DE INTERPRETACIÓN:
      inventes: usa type "unclear" y pregunta qué porcentaje le toca a cada uno.
    - Los montos los calcula el sistema: tú solo entregas los porcentajes.
 
+7B. PAGO DE NOMINA (type: "payroll"):
+   El dueño le paga a un trabajador lo que le corresponde.
+
+   - "Págale el 40% a Carlos, son 800.000"  -> payroll completo
+   - "Voy a pagarle a María"                -> payroll con solo workerName
+   - "Registra el pago de nómina"           -> payroll con todo en null
+   - "A Carlos le toca el 30%"              -> payroll con nombre y porcentaje
+
+   REGLAS:
+   - Pon en "payroll" lo que el mensaje diga y deja en null lo que no diga. NO
+     inventes el porcentaje ni el monto, y NO uses type "unclear" porque
+     falten: el sistema pregunta lo que haga falta, de a un dato por mensaje,
+     y se acuerda de lo que ya le dijeron.
+   - "movements" va SIEMPRE vacío: []. Un pago de nómina no es un gasto más;
+     si lo registras como expense queda contado dos veces.
+   - El porcentaje va de 0 a 100: "el 40%" es 40, no 0.4.
+   - Cuando el usuario viene contestando una pregunta tuya, devuelve otra vez
+     type "payroll" con el dato que acaba de dar. Si contesta "Carlos" a
+     "¿a quién le vas a pagar?", eso es payroll con workerName "Carlos", no un
+     mensaje sin sentido.
+   - El resumen y la confirmación los arma el sistema. En responseText escribe
+     algo breve: se reemplaza.
+
+   NO lo confundas con el reparto de utilidades (regla 7):
+     "De las ganancias, 60% mío y 40% de los trabajadores" -> profit_share
+       (se reparte una bolsa entre varios, el sistema calcula los montos)
+     "Págale el 40% a Carlos, son 800.000"                 -> payroll
+       (un pago concreto a una persona, con su monto)
 7C. SUMINISTRO QUE QUEDA A DEBER (type: "supply_debt"):
    El negocio recibe mercancía de un proveedor y queda debiéndola.
 
@@ -835,7 +908,13 @@ Mensaje: "Vendí $2.000.000: $1.500.000 en efectivo y $200.000 en transferencia"
 Respuesta: {"type":"income","movements":[{"type":"income","amount":1500000,"category":"ventas","concept":"Ventas en efectivo","paymentMethod":"efectivo","isCredit":false,"customerName":null},{"type":"income","amount":200000,"category":"ventas","concept":"Ventas por transferencia","paymentMethod":"transferencia","isCredit":false,"customerName":null}],"declaredTotal":2000000,"profitShares":[],"concept":null,"queryKind":null,"queryPeriod":null,"responseText":"Déjame revisar esos números.","confidence":0.9}
 
 Mensaje: "Le fié $50.000 a doña Rosa"
-Respuesta: {"type":"income","movements":[{"type":"income","amount":50000,"category":"ventas","concept":"Venta fiada a doña Rosa","paymentMethod":null,"isCredit":true,"customerName":"Doña Rosa"}],"declaredTotal":null,"profitShares":[],"concept":null,"queryKind":null,"queryPeriod":null,"responseText":"✅ Registré el fiado de $50.000 a doña Rosa.","confidence":0.95}
+Respuesta: {"type":"income","movements":[{"type":"income","amount":50000,"category":"ventas","concept":"Venta fiada a doña Rosa","paymentMethod":null,"isCredit":true,"customerName":"Doña Rosa","dueDate":null}],"declaredTotal":null,"profitShares":[],"concept":null,"queryKind":null,"queryPeriod":null,"responseText":"Registro el fiado de doña Rosa.","confidence":0.95}
+
+Mensaje: "Le fié 50.000 a doña Rosa, me paga el viernes"  (hoy es miércoles 4 de noviembre de 2026)
+Respuesta: {"type":"income","movements":[{"type":"income","amount":50000,"category":"ventas","concept":"Venta fiada a doña Rosa","paymentMethod":null,"isCredit":true,"customerName":"Doña Rosa","dueDate":"2026-11-06"}],"declaredTotal":null,"profitShares":[],"concept":null,"queryKind":null,"queryPeriod":null,"responseText":"✅ Registré el fiado de $50.000 a doña Rosa.","confidence":0.95}
+
+Mensaje: "el 15"  (venías de preguntarle para cuándo quedó de pagar el fiado; hoy es 4 de noviembre de 2026)
+Respuesta: {"type":"income","movements":[{"type":"income","amount":50000,"category":"ventas","concept":"Venta fiada a doña Rosa","paymentMethod":null,"isCredit":true,"customerName":"Doña Rosa","dueDate":"2026-11-15"}],"declaredTotal":null,"profitShares":[],"concept":null,"queryKind":null,"queryPeriod":null,"responseText":"Listo, queda anotado.","confidence":0.95}
 
 Mensaje: "Doña Rosa me abonó $20.000"
 Respuesta: {"type":"payment","movements":[],"declaredTotal":null,"profitShares":[],"correction":null,"payment":{"customerName":"Doña Rosa","amount":20000,"settlesDebt":false,"date":null},"concept":null,"queryKind":null,"queryPeriod":null,"responseText":"Listo, registro el abono de doña Rosa.","confidence":0.95}
@@ -1037,6 +1116,7 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
     'profitShares',
     'correction',
     'payment',
+    'payroll',
     'supplyDebt',
     'confirmed',
     'confirmedCount',
@@ -1056,6 +1136,7 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
         'payment',
         'breakdown',
         'profit_share',
+        'payroll',
         'supply_debt',
         'query',
         'correction',
@@ -1081,6 +1162,7 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
           'paymentMethod',
           'isCredit',
           'date',
+          'dueDate',
           'customerName',
           'quantity',
           'productName',
@@ -1139,16 +1221,23 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
           },
           supplierCreditDays: {
             type: ['number', 'null'],
-            description: 'Días hasta pagar al proveedor, si la compra es a crédito.',
+            description:
+              'Días hasta pagar al proveedor, si la compra es a crédito.',
           },
           isSupplierCredit: {
             type: 'boolean',
-            description: 'true si la compra quedó pendiente de pago al proveedor.',
+            description:
+              'true si la compra quedó pendiente de pago al proveedor.',
           },
           date: {
             type: ['string', 'null'],
             description:
               'Fecha del movimiento en YYYY-MM-DD si el usuario la dijo. null si no la menciono.',
+          },
+          dueDate: {
+            type: ['string', 'null'],
+            description:
+              'Solo en fiados (isCredit true): fecha maxima de pago acordada, en YYYY-MM-DD y siempre futura. null si el usuario no la dijo.',
           },
         },
       },
@@ -1270,6 +1359,33 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
         settlesDebt: {
           type: 'boolean',
           description: 'true si el mensaje dice que quedo al dia.',
+        },
+        date: {
+          type: ['string', 'null'],
+          description: 'Fecha del pago en YYYY-MM-DD. null = hoy.',
+        },
+      },
+    },
+    payroll: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      required: ['workerName', 'percentage', 'amount', 'date'],
+      description:
+        'Pago de nomina a un trabajador. null si el mensaje no habla de nomina.',
+      properties: {
+        workerName: {
+          type: ['string', 'null'],
+          description: 'A quien se le paga. null si no lo dijo todavia.',
+        },
+        percentage: {
+          type: ['number', 'null'],
+          description:
+            'Porcentaje acordado, de 0 a 100. null si no lo dijo todavia.',
+        },
+        amount: {
+          type: ['number', 'null'],
+          description:
+            'Lo que se le paga, en pesos. null si no lo dijo todavia.',
         },
         date: {
           type: ['string', 'null'],

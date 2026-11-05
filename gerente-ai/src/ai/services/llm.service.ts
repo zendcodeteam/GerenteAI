@@ -27,6 +27,20 @@ import { AiUsageService, type AiCallContext } from '../usage/usage.service';
  * consumo y trazas. El dominio nunca inyecta un proveedor directamente.
  */
 
+/**
+ * Llamadas con un humano esperando la respuesta.
+ *
+ * Son las que llevan el tope corto. El resto —informes, recomendaciones del
+ * panel, lo que corre por la noche— se queda con el general, donde esperar
+ * mas no le molesta a nadie.
+ */
+const INTERACTIVE_FEATURES = new Set([
+  'whatsapp.request',
+  'whatsapp.internal',
+  'landing.chat',
+  'assistant.chat',
+]);
+
 /** Ejecuta una herramienta pedida por el modelo y devuelve el texto del resultado. */
 export type ToolExecutor = (
   name: string,
@@ -76,14 +90,14 @@ export class LlmService {
     if (context) await this.usage.assertWithinQuota(context);
 
     const startedAt = Date.now();
-    const prepared = this.applyDefaults(request);
+    const prepared = this.applyDefaults(request, context);
 
     try {
       const response = await this.callWithResilience(prepared, context);
       if (context) await this.usage.recordSuccess(context, response);
 
       this.logger.log(
-        `IA ok · ${response.providerId}/${response.model} · ${response.usage.inputTokens}→${response.usage.outputTokens} tok · ${response.latencyMs} ms · ${formatCost(response.costUsd)}${context ? ` · ${context.feature}` : ''}`,
+        `IA ok · ${response.providerId}/${response.model} · ${response.usage.inputTokens}→${response.usage.outputTokens} tok${formatCacheHit(response.usage.cachedInputTokens)} · ${response.latencyMs} ms · ${formatCost(response.costUsd)}${context ? ` · ${context.feature}` : ''}`,
       );
 
       if (this.config.logPrompts) {
@@ -283,13 +297,30 @@ export class LlmService {
 
   // ----------------------------------------------------------------- interno
 
-  private applyDefaults(request: LlmRequest): LlmRequest {
+  private applyDefaults(
+    request: LlmRequest,
+    context?: AiCallContext,
+  ): LlmRequest {
     return {
       ...request,
       temperature: request.temperature ?? this.config.temperature,
       maxOutputTokens: request.maxOutputTokens ?? this.config.maxOutputTokens,
-      timeoutMs: request.timeoutMs ?? this.config.timeoutMs,
+      timeoutMs: request.timeoutMs ?? this.timeoutFor(context),
     };
+  }
+
+  /**
+   * Cuanto se espera a esta llamada.
+   *
+   * Depende de si hay alguien mirando la pantalla. El tope general esta
+   * pensado para lo que corre solo; aplicarselo a un mensaje de WhatsApp
+   * significa que el usuario espera 45 segundos —por reintento— una respuesta
+   * que, cuando llega, ya no le sirve.
+   */
+  private timeoutFor(context?: AiCallContext): number {
+    return context && INTERACTIVE_FEATURES.has(context.feature)
+      ? this.config.interactiveTimeoutMs
+      : this.config.timeoutMs;
   }
 
   /** Reintentos sobre el proveedor principal y, si se agotan, el de respaldo. */
@@ -336,6 +367,17 @@ function accumulate(
   totals.inputTokens += response.usage.inputTokens;
   totals.outputTokens += response.usage.outputTokens;
   totals.costUsd += response.costUsd;
+}
+
+/**
+ * Cuantos tokens de entrada salieron de la cache del proveedor.
+ *
+ * Va en el log de cada llamada porque es la unica forma de saber si la cache
+ * esta funcionando: si este numero es siempre 0, algo esta moviendo el prefijo
+ * y el ahorro no existe, aunque el codigo diga que si.
+ */
+function formatCacheHit(cachedInputTokens: number | undefined): string {
+  return cachedInputTokens ? ` (${cachedInputTokens} de cache)` : '';
 }
 
 function formatCost(costUsd: number): string {

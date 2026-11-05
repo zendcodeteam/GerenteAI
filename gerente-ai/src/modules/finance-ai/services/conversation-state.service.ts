@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 
 import type {
+  PayrollDraft,
   QueryPeriod,
   SupplyDebtDraft,
   Transaction,
@@ -82,6 +83,26 @@ export interface PendingRegistration {
 }
 
 /**
+ * Un pago de nomina a medio armar, esperando el dato que falta o el visto
+ * bueno final.
+ *
+ * Es la unica pregunta abierta que sobrevive a varios turnos seguidos: nombre,
+ * porcentaje y monto se piden de a uno. Sin guardar el borrador, cada
+ * respuesta llegaria suelta ("Carlos") y el modelo tendria que reconstruir de
+ * la nada lo que ya se habia dicho.
+ */
+export interface PendingPayroll {
+  kind: 'payroll';
+  draft: PayrollDraft;
+  /**
+   * `datos` = todavia falta algo y se esta preguntando.
+   * `confirmacion` = ya esta completo, se le enseno el resumen y se espera el si.
+   */
+  stage: 'datos' | 'confirmacion';
+  at: number;
+}
+
+/**
  * Un suministro que queda a deber, a medio armar.
  *
  * Los datos se piden de a uno y el borrador sobrevive entre turnos. Aqui son
@@ -97,7 +118,11 @@ export interface PendingSupplyDebt {
 }
 
 export type PendingAction =
-  PendingCorrection | PendingDeletion | PendingRegistration | PendingSupplyDebt;
+  | PendingCorrection
+  | PendingDeletion
+  | PendingRegistration
+  | PendingPayroll
+  | PendingSupplyDebt;
 
 @Injectable()
 export class ConversationStateService {
@@ -159,6 +184,17 @@ export class ConversationStateService {
     });
   }
 
+  recordarNomina(
+    businessId: string,
+    pendiente: Omit<PendingPayroll, 'at' | 'kind'>,
+  ): void {
+    this.recordar(businessId, {
+      ...pendiente,
+      kind: 'payroll',
+      at: Date.now(),
+    });
+  }
+
   recordarDeudaProveedor(
     businessId: string,
     pendiente: Omit<PendingSupplyDebt, 'at' | 'kind'>,
@@ -196,6 +232,11 @@ export class ConversationStateService {
   registroPendiente(businessId: string): PendingRegistration | null {
     const abierta = this.pendiente(businessId);
     return abierta?.kind === 'registration' ? abierta : null;
+  }
+
+  nominaPendiente(businessId: string): PendingPayroll | null {
+    const abierta = this.pendiente(businessId);
+    return abierta?.kind === 'payroll' ? abierta : null;
   }
 
   deudaProveedorPendiente(businessId: string): PendingSupplyDebt | null {

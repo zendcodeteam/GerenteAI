@@ -15,6 +15,7 @@ import type {
   FinanceDataPort,
   PaymentRequest,
   PaymentResult,
+  PayrollPayment,
   ProfitDistribution,
   SupplyDebt,
   TransactionChanges,
@@ -36,6 +37,7 @@ export class InMemoryFinanceDataAdapter implements FinanceDataPort {
 
   private readonly transactions: Transaction[] = seedTransactions();
   private readonly profitDistributions: ProfitDistribution[] = [];
+  readonly payrolls: PayrollPayment[] = [];
   readonly supplyDebts: SupplyDebt[] = [];
 
   getSnapshot(businessId: string): Promise<BusinessSnapshot> {
@@ -256,6 +258,11 @@ export class InMemoryFinanceDataAdapter implements FinanceDataPort {
         ),
       ),
     };
+  }
+
+  savePayroll(payment: PayrollPayment): Promise<PayrollPayment> {
+    this.payrolls.push(payment);
+    return Promise.resolve(payment);
   }
 
   saveSupplyDebt(debt: SupplyDebt): Promise<SupplyDebt> {
