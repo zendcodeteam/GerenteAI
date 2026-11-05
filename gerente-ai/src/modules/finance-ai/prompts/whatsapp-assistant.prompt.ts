@@ -32,6 +32,14 @@ import {
  * backend.
  *
  * ---------------------------------------------------------------------------
+ * v21: pagos de nomina por conversacion.
+ *
+ * "Pagale el 40% a Carlos" no es un reparto de utilidades ni un gasto
+ * cualquiera: es un pago de nomina, con su trabajador, su porcentaje y su
+ * monto. Se extrae lo que venga y el backend pregunta lo que falte, de a un
+ * dato por mensaje, y ensena un resumen antes de guardar.
+ *
+ * ---------------------------------------------------------------------------
  * v20: todo fiado nace con fecha maxima de pago.
  *
  * Antes el plazo se inventaba: el sistema le sumaba unos dias fijos a la
@@ -125,7 +133,7 @@ import {
  * ---------------------------------------------------------------------------
  */
 
-export const WHATSAPP_ASSISTANT_PROMPT_VERSION = 'asistente-whatsapp/v20';
+export const WHATSAPP_ASSISTANT_PROMPT_VERSION = 'asistente-whatsapp/v21';
 
 /**
  * Forma CRUDA de la respuesta del modelo.
@@ -136,6 +144,12 @@ export const WHATSAPP_ASSISTANT_PROMPT_VERSION = 'asistente-whatsapp/v20';
  */
 export interface WhatsAppIntentOutput {
   type?: string;
+  payroll?: {
+    workerName?: string | null;
+    percentage?: number | string | null;
+    amount?: number | string | null;
+    date?: string | null;
+  } | null;
   movements?: {
     type?: string;
     amount?: number | string | null;
@@ -406,6 +420,35 @@ REGLAS DE INTERPRETACIÓN:
    - SI NO DICE LOS PORCENTAJES ("hay que repartir las ganancias"), NO los
      inventes: usa type "unclear" y pregunta qué porcentaje le toca a cada uno.
    - Los montos los calcula el sistema: tú solo entregas los porcentajes.
+
+7B. PAGO DE NOMINA (type: "payroll"):
+   El dueño le paga a un trabajador lo que le corresponde.
+
+   - "Págale el 40% a Carlos, son 800.000"  -> payroll completo
+   - "Voy a pagarle a María"                -> payroll con solo workerName
+   - "Registra el pago de nómina"           -> payroll con todo en null
+   - "A Carlos le toca el 30%"              -> payroll con nombre y porcentaje
+
+   REGLAS:
+   - Pon en "payroll" lo que el mensaje diga y deja en null lo que no diga. NO
+     inventes el porcentaje ni el monto, y NO uses type "unclear" porque
+     falten: el sistema pregunta lo que haga falta, de a un dato por mensaje,
+     y se acuerda de lo que ya le dijeron.
+   - "movements" va SIEMPRE vacío: []. Un pago de nómina no es un gasto más;
+     si lo registras como expense queda contado dos veces.
+   - El porcentaje va de 0 a 100: "el 40%" es 40, no 0.4.
+   - Cuando el usuario viene contestando una pregunta tuya, devuelve otra vez
+     type "payroll" con el dato que acaba de dar. Si contesta "Carlos" a
+     "¿a quién le vas a pagar?", eso es payroll con workerName "Carlos", no un
+     mensaje sin sentido.
+   - El resumen y la confirmación los arma el sistema. En responseText escribe
+     algo breve: se reemplaza.
+
+   NO lo confundas con el reparto de utilidades (regla 7):
+     "De las ganancias, 60% mío y 40% de los trabajadores" -> profit_share
+       (se reparte una bolsa entre varios, el sistema calcula los montos)
+     "Págale el 40% a Carlos, son 800.000"                 -> payroll
+       (un pago concreto a una persona, con su monto)
 
 8. CONSULTAS (type: "query"):
    Elige el "queryKind" según lo que pidió:
@@ -1020,6 +1063,7 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
     'profitShares',
     'correction',
     'payment',
+    'payroll',
     'confirmed',
     'confirmedCount',
     'concept',
@@ -1038,6 +1082,7 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
         'payment',
         'breakdown',
         'profit_share',
+        'payroll',
         'query',
         'correction',
         'confirmation',
@@ -1259,6 +1304,33 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
         settlesDebt: {
           type: 'boolean',
           description: 'true si el mensaje dice que quedo al dia.',
+        },
+        date: {
+          type: ['string', 'null'],
+          description: 'Fecha del pago en YYYY-MM-DD. null = hoy.',
+        },
+      },
+    },
+    payroll: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      required: ['workerName', 'percentage', 'amount', 'date'],
+      description:
+        'Pago de nomina a un trabajador. null si el mensaje no habla de nomina.',
+      properties: {
+        workerName: {
+          type: ['string', 'null'],
+          description: 'A quien se le paga. null si no lo dijo todavia.',
+        },
+        percentage: {
+          type: ['number', 'null'],
+          description:
+            'Porcentaje acordado, de 0 a 100. null si no lo dijo todavia.',
+        },
+        amount: {
+          type: ['number', 'null'],
+          description:
+            'Lo que se le paga, en pesos. null si no lo dijo todavia.',
         },
         date: {
           type: ['string', 'null'],

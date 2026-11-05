@@ -1,6 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 
-import type { QueryPeriod, Transaction } from '../domain/finance.types';
+import type {
+  PayrollDraft,
+  QueryPeriod,
+  Transaction,
+} from '../domain/finance.types';
 
 /**
  * Lo que quedo a medias en la conversacion y hay que recordar para el proximo
@@ -77,8 +81,28 @@ export interface PendingRegistration {
   at: number;
 }
 
+/**
+ * Un pago de nomina a medio armar, esperando el dato que falta o el visto
+ * bueno final.
+ *
+ * Es la unica pregunta abierta que sobrevive a varios turnos seguidos: nombre,
+ * porcentaje y monto se piden de a uno. Sin guardar el borrador, cada
+ * respuesta llegaria suelta ("Carlos") y el modelo tendria que reconstruir de
+ * la nada lo que ya se habia dicho.
+ */
+export interface PendingPayroll {
+  kind: 'payroll';
+  draft: PayrollDraft;
+  /**
+   * `datos` = todavia falta algo y se esta preguntando.
+   * `confirmacion` = ya esta completo, se le enseno el resumen y se espera el si.
+   */
+  stage: 'datos' | 'confirmacion';
+  at: number;
+}
+
 export type PendingAction =
-  PendingCorrection | PendingDeletion | PendingRegistration;
+  PendingCorrection | PendingDeletion | PendingRegistration | PendingPayroll;
 
 @Injectable()
 export class ConversationStateService {
@@ -140,6 +164,17 @@ export class ConversationStateService {
     });
   }
 
+  recordarNomina(
+    businessId: string,
+    pendiente: Omit<PendingPayroll, 'at' | 'kind'>,
+  ): void {
+    this.recordar(businessId, {
+      ...pendiente,
+      kind: 'payroll',
+      at: Date.now(),
+    });
+  }
+
   /** La pregunta abierta de esa sede, si sigue vigente. */
   pendiente(businessId: string): PendingAction | null {
     const abierta = this.pendientes.get(businessId);
@@ -166,6 +201,11 @@ export class ConversationStateService {
   registroPendiente(businessId: string): PendingRegistration | null {
     const abierta = this.pendiente(businessId);
     return abierta?.kind === 'registration' ? abierta : null;
+  }
+
+  nominaPendiente(businessId: string): PendingPayroll | null {
+    const abierta = this.pendiente(businessId);
+    return abierta?.kind === 'payroll' ? abierta : null;
   }
 
   /** Se resolvio (o el usuario cambio de tema): deja de haber pregunta abierta. */

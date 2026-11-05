@@ -52,6 +52,26 @@ export interface PaymentRequest {
 }
 
 /** Como quedo la deuda despues de aplicar un pago. */
+/**
+ * Un pago de nomina ya confirmado y listo para guardar.
+ *
+ * `percentage` y `amount` viajan juntos a proposito: el porcentaje es lo que
+ * se pacto y el monto lo que de verdad se entrego, y no siempre coinciden
+ * (una quincena, un adelanto). Guardar solo uno de los dos deja la nomina sin
+ * poder explicarse despues.
+ */
+export interface PayrollPayment {
+  id: string;
+  businessId: string;
+  workerName: string;
+  /** De 0 a 100. */
+  percentage: number;
+  amount: number;
+  /** Fecha del pago en YYYY-MM-DD. */
+  date: string;
+  currency: string;
+}
+
 export interface PaymentResult {
   /** false = no habia a que aplicarlo; nada se guardo. */
   applied: boolean;
@@ -123,6 +143,16 @@ export interface FinanceDataPort {
   saveProfitDistribution(
     distribution: ProfitDistribution,
   ): Promise<ProfitDistribution>;
+
+  /**
+   * Guarda un pago de nomina.
+   *
+   * No pasa por `NominaService`: aquel pide `userId` y `rolGlobal` para
+   * comprobar permisos, y por WhatsApp no hay usuario autenticado sino una
+   * sede ya resuelta a partir del telefono. La autorizacion ocurrio antes, al
+   * enrutar el mensaje.
+   */
+  savePayroll(payment: PayrollPayment): Promise<PayrollPayment>;
 
   /**
    * Corrige un movimiento ya registrado.
