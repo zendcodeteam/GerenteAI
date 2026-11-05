@@ -54,6 +54,7 @@ import {
 import {
   WHATSAPP_ASSISTANT_PROMPT_VERSION,
   WHATSAPP_INTENT_SCHEMA,
+  WHATSAPP_ASSISTANT_SYSTEM_PROMPT,
   buildWhatsAppAssistantSystemPrompt,
   type WhatsAppIntentOutput,
 } from '../prompts/whatsapp-assistant.prompt';
@@ -227,6 +228,11 @@ export class WhatsAppMessageService {
     const { data, response } =
       await this.llm.completeJson<WhatsAppIntentOutput>(
         {
+          // Los ~14.500 tokens del prompt viajan identicos en cada mensaje;
+          // solo cambia el bloque de contexto que va al final. Marcandolos
+          // como prefijo cacheable, el proveedor los cobra al 10% y responde
+          // antes. El texto que lee el modelo no cambia.
+          cacheableSystemPrefix: WHATSAPP_ASSISTANT_SYSTEM_PROMPT,
           system: buildWhatsAppAssistantSystemPrompt({
             businessName: request.businessName ?? 'el negocio',
             currency,
