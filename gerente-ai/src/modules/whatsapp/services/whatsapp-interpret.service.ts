@@ -49,6 +49,8 @@ export type PublicIntentType =
   | 'inversion'
   | 'desglose'
   | 'reparto_utilidades'
+  /** Suministro que queda pendiente de pago al proveedor. */
+  | 'deuda_proveedor'
   /** Le pagaron un fiado: baja la deuda, no crea un movimiento. */
   | 'abono'
   /** Contesto si o no a una pregunta de Luka. */
@@ -124,6 +126,7 @@ const TYPE_LABELS: Record<MessageIntentType, PublicIntentType> = {
   investment: 'inversion',
   breakdown: 'desglose',
   profit_share: 'reparto_utilidades',
+  supply_debt: 'deuda_proveedor',
   payment: 'abono',
   confirmation: 'confirmacion',
   query: 'consulta',

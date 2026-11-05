@@ -52,6 +52,27 @@ export interface PaymentRequest {
 }
 
 /** Como quedo la deuda despues de aplicar un pago. */
+/**
+ * Una deuda con proveedor lista para guardar.
+ *
+ * El proveedor viaja por NOMBRE, no por id: quien escribe por WhatsApp dice
+ * "Molinos del Valle", no un uuid. El adaptador lo busca en la sede y lo crea
+ * si no existe, igual que hace con los clientes de los fiados.
+ */
+export interface SupplyDebt {
+  businessId: string;
+  supplierName: string;
+  supply: string;
+  amount: number;
+  /** Fecha limite en YYYY-MM-DD. Con cuotas, la de la ULTIMA. */
+  dueDate: string;
+  mode: 'unico' | 'cuotas';
+  /** Numero de cuotas; 1 en el pago unico. */
+  installments: number;
+  /** Interes mensual en porcentaje. 0 = sin interes. */
+  interestRate: number;
+}
+
 export interface PaymentResult {
   /** false = no habia a que aplicarlo; nada se guardo. */
   applied: boolean;
@@ -118,6 +139,15 @@ export interface FinanceDataPort {
     parts: Transaction[],
     actor?: string,
   ): Promise<Transaction[]>;
+
+  /**
+   * Guarda un suministro que queda a deber.
+   *
+   * No pasa por `DeudasProveedoresService`: aquel pide `userId` y `rolGlobal`
+   * para comprobar permisos, y por WhatsApp no hay usuario autenticado sino
+   * una sede ya resuelta desde el telefono.
+   */
+  saveSupplyDebt(debt: SupplyDebt): Promise<SupplyDebt>;
 
   /** Guarda un reparto de utilidades. */
   saveProfitDistribution(

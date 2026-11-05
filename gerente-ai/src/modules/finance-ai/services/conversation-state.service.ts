@@ -1,6 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 
-import type { QueryPeriod, Transaction } from '../domain/finance.types';
+import type {
+  QueryPeriod,
+  SupplyDebtDraft,
+  Transaction,
+} from '../domain/finance.types';
 
 /**
  * Lo que quedo a medias en la conversacion y hay que recordar para el proximo
@@ -77,8 +81,23 @@ export interface PendingRegistration {
   at: number;
 }
 
+/**
+ * Un suministro que queda a deber, a medio armar.
+ *
+ * Los datos se piden de a uno y el borrador sobrevive entre turnos. Aqui son
+ * siete —proveedor, suministro, monto, fecha, modalidad, cuotas e interes—,
+ * asi que perder lo ya dicho seria especialmente caro.
+ */
+export interface PendingSupplyDebt {
+  kind: 'supply-debt';
+  draft: SupplyDebtDraft;
+  /** `datos` = falta algo. `confirmacion` = ya vio el plan y falta el si. */
+  stage: 'datos' | 'confirmacion';
+  at: number;
+}
+
 export type PendingAction =
-  PendingCorrection | PendingDeletion | PendingRegistration;
+  PendingCorrection | PendingDeletion | PendingRegistration | PendingSupplyDebt;
 
 @Injectable()
 export class ConversationStateService {
@@ -140,6 +159,17 @@ export class ConversationStateService {
     });
   }
 
+  recordarDeudaProveedor(
+    businessId: string,
+    pendiente: Omit<PendingSupplyDebt, 'at' | 'kind'>,
+  ): void {
+    this.recordar(businessId, {
+      ...pendiente,
+      kind: 'supply-debt',
+      at: Date.now(),
+    });
+  }
+
   /** La pregunta abierta de esa sede, si sigue vigente. */
   pendiente(businessId: string): PendingAction | null {
     const abierta = this.pendientes.get(businessId);
@@ -166,6 +196,11 @@ export class ConversationStateService {
   registroPendiente(businessId: string): PendingRegistration | null {
     const abierta = this.pendiente(businessId);
     return abierta?.kind === 'registration' ? abierta : null;
+  }
+
+  deudaProveedorPendiente(businessId: string): PendingSupplyDebt | null {
+    const abierta = this.pendiente(businessId);
+    return abierta?.kind === 'supply-debt' ? abierta : null;
   }
 
   /** Se resolvio (o el usuario cambio de tema): deja de haber pregunta abierta. */

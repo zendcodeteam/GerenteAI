@@ -11,10 +11,11 @@ import type {
   ProfitDistribution,
   PaymentRequest,
   PaymentResult,
+  SupplyDebt,
   TransactionChanges,
 } from '../ports/finance-data.port';
 import type { WhatsAppIntentOutput } from '../prompts/whatsapp-assistant.prompt';
-import { fechaColombiana } from '../domain/dia-colombia';
+import { fechaColombiana, sumarDias } from '../domain/dia-colombia';
 import {
   WhatsAppMessageService,
   checkBreakdown,
@@ -112,6 +113,8 @@ interface FakeFinanceData extends FinanceDataPort {
   saved: Transaction[];
   replaced: { id: string; parts: Transaction[] }[];
   distributions: ProfitDistribution[];
+  /** Deudas con proveedor guardadas, para comprobar cuando se registran. */
+  supplyDebts: SupplyDebt[];
   updated: { id: string; changes: TransactionChanges }[];
   deleted: string[];
   /** Abonos que se pidieron aplicar, para comprobar que llegan bien. */
@@ -127,6 +130,7 @@ function fakeFinanceData(rows: Transaction[] = SEED): FakeFinanceData {
   const saved: Transaction[] = [];
   const replaced: { id: string; parts: Transaction[] }[] = [];
   const distributions: ProfitDistribution[] = [];
+  const supplyDebts: SupplyDebt[] = [];
   const updated: { id: string; changes: TransactionChanges }[] = [];
   const deleted: string[] = [];
 
@@ -167,6 +171,11 @@ function fakeFinanceData(rows: Transaction[] = SEED): FakeFinanceData {
     saveProfitDistribution: (distribution: ProfitDistribution) => {
       distributions.push(distribution);
       return Promise.resolve(distribution);
+    },
+    supplyDebts,
+    saveSupplyDebt: (debt: SupplyDebt) => {
+      supplyDebts.push(debt);
+      return Promise.resolve(debt);
     },
     updated,
     deleted,
@@ -3987,5 +3996,253 @@ describe('SCRUM-22 · los registros se numeran', () => {
     });
 
     expect(result.replyText).not.toContain('1)');
+  });
+});
+
+// ===========================================================================
+// SCRUM-37 · marcar un suministro como pendiente de pago
+// ===========================================================================
+
+/**
+ * Siete datos —proveedor, suministro, monto, fecha limite, modalidad, cuotas
+ * e interes— que por WhatsApp nunca llegan juntos. Se piden de a uno, el
+ * borrador sobrevive entre turnos, y antes de guardar se ensena el plan de
+ * cuotas ya calculado: el interes mensual sobre saldo no se adivina de
+ * cabeza, y descubrir en la tercera cuota que el total era otro es justo lo
+ * que hay que evitar.
+ */
+function conversacionDeDeuda() {
+  const financeData = fakeFinanceData([]);
+  const state = new ConversationStateService();
+
+  const turno = (
+    intent: Partial<WhatsAppIntentOutput>,
+    request: Record<string, unknown> = {},
+  ) =>
+    new WhatsAppMessageService(
+      fakeLlm(intent),
+      financeData,
+      state,
+    ).handleMessage({ ...BASE_REQUEST, persist: true, ...request });
+
+  return { financeData, turno };
+}
+
+/** Una fecha limite valida: tiene que ser futura. */
+const LIMITE = sumarDias(fechaColombiana(new Date()), 60);
+
+const deuda = (parcial: Record<string, unknown>) => ({
+  type: 'supply_debt' as const,
+  movements: [],
+  supplyDebt: {
+    supplierName: null,
+    supply: null,
+    amount: null,
+    dueDate: null,
+    mode: null,
+    installments: null,
+    interestRate: null,
+    ...parcial,
+  },
+  responseText: 'ok',
+});
+
+const COMPLETA = {
+  supplierName: 'Molinos del Valle',
+  supply: 'Harina y levadura',
+  amount: 1_200_000,
+  dueDate: LIMITE,
+  mode: 'unico',
+  interestRate: 0,
+};
+
+describe('WhatsAppMessageService · suministro pendiente de pago', () => {
+  it('pregunta el proveedor cuando el mensaje no lo dice', async () => {
+    const { turno, financeData } = conversacionDeDeuda();
+
+    const result = await turno(deuda({}));
+
+    expect(result.replyText).toContain(
+      '¿A qué proveedor le quedaste debiendo?',
+    );
+    expect(financeData.supplyDebts).toHaveLength(0);
+  });
+
+  it('va pidiendo de a un dato, nombrando al proveedor', async () => {
+    const { turno } = conversacionDeDeuda();
+
+    const conProveedor = await turno(
+      deuda({ supplierName: 'Molinos del Valle' }),
+    );
+    expect(conProveedor.replyText).toContain('¿Qué le compraste a Molinos');
+
+    const conSuministro = await turno(deuda({ supply: 'Harina' }));
+    expect(conSuministro.replyText).toContain('¿Cuánto le quedaste debiendo');
+
+    const conMonto = await turno(deuda({ amount: 1_200_000 }));
+    expect(conMonto.replyText).toContain('¿Para cuándo tienes que pagarle?');
+  });
+
+  it('sugiere como decir la fecha, en lenguaje de persona', async () => {
+    const { turno } = conversacionDeDeuda();
+
+    const result = await turno(
+      deuda({
+        supplierName: 'Molinos',
+        supply: 'Harina',
+        amount: 1_200_000,
+      }),
+    );
+
+    expect(result.replyText).toContain('el 30 de noviembre');
+    expect(result.replyText).toContain('en 15 días');
+  });
+
+  it('no pregunta cuantas cuotas si el pago es unico', async () => {
+    // Preguntar "¿en cuántas cuotas?" a quien acaba de decir que paga de una
+    // sola vez es un turno regalado.
+    const { turno } = conversacionDeDeuda();
+
+    const result = await turno(
+      deuda({ ...COMPLETA, interestRate: null, mode: 'unico' }),
+    );
+
+    expect(result.replyText).toContain('interés');
+    expect(result.replyText).not.toContain('cuántas cuotas');
+  });
+
+  it('en cuotas si la pregunta', async () => {
+    const { turno } = conversacionDeDeuda();
+
+    const result = await turno(
+      deuda({ ...COMPLETA, mode: 'cuotas', interestRate: null }),
+    );
+
+    expect(result.replyText).toContain('¿En cuántas cuotas?');
+  });
+
+  it('"sin interés" es una respuesta, no un dato que falte', async () => {
+    // interestRate 0 significa "ya contestó que no le cobran"; null significa
+    // "todavía no se lo he preguntado". Si no se distinguieran, quien compra
+    // sin recargo se quedaria atascado en la misma pregunta para siempre.
+    const { turno } = conversacionDeDeuda();
+
+    const result = await turno(deuda({ ...COMPLETA, interestRate: 0 }));
+
+    expect(result.replyText).toContain('¿Lo registro así?');
+    expect(result.replyText).toContain('sin interés');
+  });
+
+  it('muestra el resumen con el plan de cuotas y pide confirmacion', async () => {
+    const { turno, financeData } = conversacionDeDeuda();
+
+    const result = await turno(
+      deuda({
+        ...COMPLETA,
+        amount: 1_200_000,
+        mode: 'cuotas',
+        installments: 3,
+        interestRate: 0,
+      }),
+    );
+
+    expect(result.replyText).toContain('Plan de cuotas:');
+    expect(result.replyText).toContain('3 cuotas mensuales');
+    // Sin interes, tres cuotas iguales de 400.000.
+    expect(result.replyText).toContain('$400.000');
+    expect(result.replyText).toContain('¿Lo registro así?');
+    expect(financeData.supplyDebts).toHaveLength(0);
+  });
+
+  it('el resumen dice cuanto suma el interes', async () => {
+    const { turno } = conversacionDeDeuda();
+
+    const result = await turno(
+      deuda({
+        ...COMPLETA,
+        amount: 1_000_000,
+        mode: 'cuotas',
+        installments: 4,
+        interestRate: 2,
+      }),
+    );
+
+    expect(result.replyText).toContain('2% mensual');
+    expect(result.replyText).toContain('de interés)');
+  });
+
+  it('guarda solo despues del si', async () => {
+    const { turno, financeData } = conversacionDeDeuda();
+
+    await turno(deuda({ ...COMPLETA, mode: 'cuotas', installments: 3 }));
+    const result = await turno({
+      type: 'confirmation',
+      confirmed: true,
+      responseText: 'ok',
+    });
+
+    expect(financeData.supplyDebts).toHaveLength(1);
+    expect(financeData.supplyDebts[0]).toMatchObject({
+      businessId: 'b1',
+      supplierName: 'Molinos del Valle',
+      supply: 'Harina y levadura',
+      amount: 1_200_000,
+      dueDate: LIMITE,
+      mode: 'cuotas',
+      installments: 3,
+    });
+    expect(result.replyText).toContain('le debes');
+    expect(result.replyText).toContain('Molinos del Valle');
+  });
+
+  it('un no la descarta sin guardar nada', async () => {
+    const { turno, financeData } = conversacionDeDeuda();
+
+    await turno(deuda(COMPLETA));
+    const result = await turno({
+      type: 'confirmation',
+      confirmed: false,
+      responseText: 'ok',
+    });
+
+    expect(financeData.supplyDebts).toHaveLength(0);
+    expect(result.replyText).toContain('no registré esa deuda');
+  });
+
+  it('una fecha limite ya vencida se trata como si no la hubiera dicho', async () => {
+    // Un plazo que ya paso no es un plazo, y el plan de cuotas que saldria de
+    // el nace mal.
+    const { turno } = conversacionDeDeuda();
+
+    const result = await turno(
+      deuda({
+        ...COMPLETA,
+        dueDate: sumarDias(fechaColombiana(new Date()), -3),
+      }),
+    );
+
+    expect(result.replyText).toContain('¿Para cuándo tienes que pagarle?');
+  });
+
+  it('no la registra ademas como gasto: la plata sale cuando se pague', async () => {
+    const { turno, financeData } = conversacionDeDeuda();
+
+    await turno(deuda(COMPLETA));
+    await turno({ type: 'confirmation', confirmed: true, responseText: 'ok' });
+
+    expect(financeData.saved).toHaveLength(0);
+  });
+
+  it('con persist en false responde igual pero no toca la base', async () => {
+    const { turno, financeData } = conversacionDeDeuda();
+
+    await turno(deuda(COMPLETA), { persist: false });
+    const result = await turno(
+      { type: 'confirmation', confirmed: true, responseText: 'ok' },
+      { persist: false },
+    );
+
+    expect(financeData.supplyDebts).toHaveLength(0);
+    expect(result.replyText).toContain('le debes');
   });
 });

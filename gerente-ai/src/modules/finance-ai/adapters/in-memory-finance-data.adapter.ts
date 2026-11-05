@@ -16,6 +16,7 @@ import type {
   PaymentRequest,
   PaymentResult,
   ProfitDistribution,
+  SupplyDebt,
   TransactionChanges,
   TransactionQuery,
 } from '../ports/finance-data.port';
@@ -35,6 +36,7 @@ export class InMemoryFinanceDataAdapter implements FinanceDataPort {
 
   private readonly transactions: Transaction[] = seedTransactions();
   private readonly profitDistributions: ProfitDistribution[] = [];
+  readonly supplyDebts: SupplyDebt[] = [];
 
   getSnapshot(businessId: string): Promise<BusinessSnapshot> {
     const rows = this.transactions.filter(
@@ -254,6 +256,11 @@ export class InMemoryFinanceDataAdapter implements FinanceDataPort {
         ),
       ),
     };
+  }
+
+  saveSupplyDebt(debt: SupplyDebt): Promise<SupplyDebt> {
+    this.supplyDebts.push(debt);
+    return Promise.resolve(debt);
   }
 
   saveProfitDistribution(

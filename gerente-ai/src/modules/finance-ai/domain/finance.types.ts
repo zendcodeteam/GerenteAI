@@ -19,6 +19,8 @@ export type MessageIntentType =
   | 'breakdown'
   /** Reparto de utilidades entre el dueno y los trabajadores. */
   | 'profit_share'
+  /** Un suministro que queda a deber al proveedor, con su plan de pagos. */
+  | 'supply_debt'
   /** Le pidieron algo que no son las finanzas del negocio (codigo, poemas...). */
   | 'out_of_scope'
   /** Pidio una funcion que solo existe en los planes pagos. */
@@ -230,6 +232,36 @@ export interface MovementDraft {
  * El monto puede faltar: "Rosa ya me pago" no dice cuanto, y lo correcto es
  * saldar toda su deuda, no adivinar una cifra.
  */
+/**
+ * Una deuda con proveedor a medio armar.
+ *
+ * Son seis datos y casi nunca llegan juntos: el mensaje suele traer el
+ * proveedor y poco mas ("la harina de Molinos quedo a deber"). El borrador
+ * viaja entre turnos y cada respuesta rellena un hueco.
+ */
+export interface SupplyDebtDraft {
+  /** A quien se le debe. Sin proveedor no hay a quien pagarle. */
+  supplierName: string | null;
+  /** Que se compro: "harina y levadura". */
+  supply: string | null;
+  /** Lo que se debe en total, antes de intereses. */
+  amount: number | null;
+  /** Fecha limite de pago en YYYY-MM-DD. Con cuotas, la de la ULTIMA. */
+  dueDate: string | null;
+  /** 'unico' = un solo pago; 'cuotas' = varias mensuales. */
+  mode: 'unico' | 'cuotas' | null;
+  /** Cuantas cuotas, cuando la modalidad es 'cuotas'. */
+  installments: number | null;
+  /**
+   * Interes mensual en porcentaje. 0 = sin interes.
+   *
+   * Se distingue de null a proposito: null es "no lo ha dicho" y 0 es "dijo
+   * que no cobra interes". Sin esa diferencia, quien compra sin recargo se
+   * queda atascado en la misma pregunta.
+   */
+  interestRate: number | null;
+}
+
 export interface PaymentDraft {
   /** A quien se le cobro. Sin nombre no hay a que deuda aplicarlo. */
   customerName: string | null;
@@ -354,6 +386,8 @@ export interface MessageIntent {
   correction: CorrectionRequest | null;
   /** El abono, cuando el mensaje avisa que le pagaron un fiado. */
   payment: PaymentDraft | null;
+  /** Suministro que queda pendiente de pago. null en todo lo demas. */
+  supplyDebt: SupplyDebtDraft | null;
   /**
    * Respuesta a una pregunta de si o no. null cuando el mensaje no contesta
    * ninguna, o cuando contesto algo que no es ni si ni no.

@@ -29,6 +29,7 @@ import {
   type MovementDraft,
   type PaymentDraft,
   type PaymentMethod,
+  type SupplyDebtDraft,
   type PeriodSummary,
   type ProfitBeneficiary,
   type ProfitShare,
@@ -43,13 +44,19 @@ import {
   FINANCE_DATA_PORT,
   type FinanceDataPort,
   type PaymentResult,
+  type SupplyDebt,
 } from '../ports/finance-data.port';
+import {
+  planDeDeudaProveedor,
+  type PlanDeDeuda,
+} from '../../../services/plan-deuda-proveedor';
 import {
   ConversationStateService,
   type PendingAction,
   type PendingCorrection,
   type PendingDeletion,
   type PendingRegistration,
+  type PendingSupplyDebt,
 } from './conversation-state.service';
 import {
   WHATSAPP_ASSISTANT_PROMPT_VERSION,
@@ -295,10 +302,14 @@ export class WhatsAppMessageService {
     // Cambiar de tema cierra la pregunta abierta. Dejarla viva haria que una
     // correccion de dentro de un rato se resolviera contra una lista que ya no
     // tiene nada que ver con lo que se esta hablando.
+    // "supply_debt" tambien conserva: la deuda se arma en varios turnos y
+    // cada respuesta llega como un supply_debt nuevo con un solo dato. Si se
+    // olvidara aqui, el borrador moriria entre mensajes.
     if (
       intent.type !== 'correction' &&
       intent.type !== 'confirmation' &&
-      intent.type !== 'unclear'
+      intent.type !== 'unclear' &&
+      intent.type !== 'supply_debt'
     ) {
       this.state.olvidar(request.businessId);
     }
@@ -327,6 +338,9 @@ export class WhatsAppMessageService {
 
       case 'confirmation':
         return this.handleConfirmation(intent, request, currency, meta);
+
+      case 'supply_debt':
+        return this.handleSupplyDebt(intent, request, currency, meta);
 
       case 'income':
       case 'expense':
@@ -530,6 +544,7 @@ export class WhatsAppMessageService {
         profitShares: [],
         correction: null,
         payment: null,
+        supplyDebt: null,
         confirmed: null,
         confirmedCount: null,
         discount: null,
@@ -559,6 +574,18 @@ export class WhatsAppMessageService {
     currency: string,
     meta: WhatsAppMessageResult['meta'],
   ): Promise<WhatsAppMessageResult> {
+    const deuda = this.state.deudaProveedorPendiente(request.businessId);
+
+    if (deuda?.stage === 'confirmacion') {
+      return this.confirmarDeudaProveedor(
+        deuda,
+        intent,
+        request,
+        currency,
+        meta,
+      );
+    }
+
     const registro = this.state.registroPendiente(request.businessId);
 
     // Un descuadre no se resuelve con un si: lo que se pidio ahi fue la cifra
@@ -1442,6 +1469,88 @@ export class WhatsAppMessageService {
     };
   }
 
+  // ------------------------------------------------- suministros a credito
+
+  /**
+   * Marca un suministro como pendiente de pago al proveedor.
+   *
+   * Son siete datos y por WhatsApp nunca llegan juntos: el mensaje tipico es
+   * "la harina de Molinos quedo a deber" y ahi acaba la informacion. Se piden
+   * de a uno, en el orden en que una persona los piensa —a quien, que, cuanto,
+   * para cuando, como— y el borrador se conserva entre mensajes.
+   *
+   * Antes de guardar se le ensena el plan de cuotas ya calculado. Es el unico
+   * momento en que puede ver lo que de verdad va a pagar: el interes mensual
+   * sobre saldo no se adivina de cabeza, y descubrir en la tercera cuota que
+   * el total era otro es exactamente lo que hay que evitar.
+   */
+  private handleSupplyDebt(
+    intent: MessageIntent,
+    request: WhatsAppMessageRequest,
+    currency: string,
+    meta: WhatsAppMessageResult['meta'],
+  ): Promise<WhatsAppMessageResult> {
+    const abierta = this.state.deudaProveedorPendiente(request.businessId);
+    const borrador = mezclarDeuda(abierta?.draft, intent.supplyDebt);
+
+    const falta = primerDatoDeDeudaQueFalta(borrador);
+
+    if (falta) {
+      this.state.recordarDeudaProveedor(request.businessId, {
+        draft: borrador,
+        stage: 'datos',
+      });
+
+      return Promise.resolve(
+        this.plainResult(intent, preguntaDeDeuda(falta, borrador), meta),
+      );
+    }
+
+    this.state.recordarDeudaProveedor(request.businessId, {
+      draft: borrador,
+      stage: 'confirmacion',
+    });
+
+    return Promise.resolve(
+      this.plainResult(
+        intent,
+        renderSupplyDebtSummary(borrador, currency),
+        meta,
+      ),
+    );
+  }
+
+  /** Guarda la deuda con proveedor que el usuario acaba de confirmar. */
+  private async confirmarDeudaProveedor(
+    pendiente: PendingSupplyDebt,
+    intent: MessageIntent,
+    request: WhatsAppMessageRequest,
+    currency: string,
+    meta: WhatsAppMessageResult['meta'],
+  ): Promise<WhatsAppMessageResult> {
+    this.state.olvidar(request.businessId);
+
+    if (intent.confirmed !== true) {
+      return this.plainResult(
+        intent,
+        'Listo, no registré esa deuda. Si quieres lo hacemos de nuevo 😊',
+        meta,
+      );
+    }
+
+    const deuda = aDeudaDeProveedor(pendiente.draft, request.businessId);
+
+    if (request.persist) {
+      await this.financeData.saveSupplyDebt(deuda);
+    }
+
+    return this.plainResult(
+      intent,
+      renderSupplyDebtRegistered(deuda, currency),
+      meta,
+    );
+  }
+
   // -------------------------------------------------------------- resultados
 
   /** Resultado sin movimientos ni reparto: solo texto. */
@@ -1528,6 +1637,7 @@ export class WhatsAppMessageService {
       profitShares: normalizeProfitShares(output?.profitShares),
       correction: normalizeCorrection(output?.correction),
       payment,
+      supplyDebt: normalizeSupplyDebt(output?.supplyDebt),
       confirmed: normalizeConfirmed(output?.confirmed),
       confirmedCount: normalizePosition(output?.confirmedCount),
       amount,
@@ -1756,6 +1866,7 @@ const INTENT_TYPES: MessageIntentType[] = [
   'investment',
   'breakdown',
   'profit_share',
+  'supply_debt',
   'query',
   'correction',
   'unclear',
@@ -1860,6 +1971,259 @@ function normalizeMovements(value: unknown): MovementDraft[] {
     })
     .filter((movement): movement is MovementDraft => movement !== null)
     .slice(0, MAX_MOVEMENTS_PER_MESSAGE);
+}
+
+
+// ------------------------------------------------- suministros a credito
+
+/** Los datos de una deuda, en el orden en que se preguntan. */
+type DatoDeDeuda =
+  | 'supplierName'
+  | 'supply'
+  | 'amount'
+  | 'dueDate'
+  | 'mode'
+  | 'installments'
+  | 'interestRate';
+
+/**
+ * Funde lo que ya se sabia con lo que acaba de decir el usuario.
+ *
+ * Lo nuevo manda, pero solo cuando viene: el modelo devuelve en null lo que
+ * este mensaje no menciona, y eso no puede borrar lo de antes.
+ */
+function mezclarDeuda(
+  previo: SupplyDebtDraft | undefined,
+  nuevo: SupplyDebtDraft | null,
+): SupplyDebtDraft {
+  return {
+    supplierName: nuevo?.supplierName ?? previo?.supplierName ?? null,
+    supply: nuevo?.supply ?? previo?.supply ?? null,
+    amount: nuevo?.amount ?? previo?.amount ?? null,
+    dueDate: nuevo?.dueDate ?? previo?.dueDate ?? null,
+    mode: nuevo?.mode ?? previo?.mode ?? null,
+    installments: nuevo?.installments ?? previo?.installments ?? null,
+    interestRate: nuevo?.interestRate ?? previo?.interestRate ?? null,
+  };
+}
+
+/** El primer dato que falta, o null si la deuda ya se puede guardar. */
+function primerDatoDeDeudaQueFalta(
+  draft: SupplyDebtDraft,
+): DatoDeDeuda | null {
+  if (!draft.supplierName) return 'supplierName';
+  if (!draft.supply) return 'supply';
+  if (draft.amount === null) return 'amount';
+  if (!draft.dueDate) return 'dueDate';
+  if (!draft.mode) return 'mode';
+  // Las cuotas solo se preguntan si va a pagar en cuotas; en el pago unico la
+  // pregunta no tiene sentido y seria un turno regalado.
+  if (draft.mode === 'cuotas' && draft.installments === null) {
+    return 'installments';
+  }
+  if (draft.interestRate === null) return 'interestRate';
+  return null;
+}
+
+/** La pregunta por el dato que falta, nombrando lo que ya se sabe. */
+function preguntaDeDeuda(falta: DatoDeDeuda, draft: SupplyDebtDraft): string {
+  const quien = draft.supplierName ?? 'ese proveedor';
+
+  switch (falta) {
+    case 'supplierName':
+      return '¿A qué proveedor le quedaste debiendo?';
+    case 'supply':
+      return `¿Qué le compraste a ${quien}?`;
+    case 'amount':
+      return `¿Cuánto le quedaste debiendo a ${quien} en total?`;
+    case 'dueDate':
+      return `¿Para cuándo tienes que pagarle? Puedes decirme "el 30 de noviembre", "en 15 días" o "fin de mes".`;
+    case 'mode':
+      return '¿Lo vas a pagar de una sola vez o en cuotas?';
+    case 'installments':
+      return '¿En cuántas cuotas?';
+    default:
+      return '¿Te cobra interés? Dime el porcentaje mensual, o "sin interés" si no te cobra.';
+  }
+}
+
+/** El borrador, ya completo, como deuda lista para guardar. */
+function aDeudaDeProveedor(
+  draft: SupplyDebtDraft,
+  businessId: string,
+): SupplyDebt {
+  const mode = draft.mode ?? 'unico';
+
+  return {
+    businessId,
+    supplierName: draft.supplierName ?? '',
+    supply: draft.supply ?? '',
+    amount: draft.amount ?? 0,
+    dueDate: draft.dueDate ?? '',
+    mode,
+    installments: mode === 'cuotas' ? (draft.installments ?? 1) : 1,
+    interestRate: draft.interestRate ?? 0,
+  };
+}
+
+/**
+ * El resumen con el plan de cuotas, antes de guardar nada.
+ *
+ * El plan lo calcula `planDeDeudaProveedor`, el mismo que usa el panel: si
+ * aqui se recalculara aparte, WhatsApp y la pantalla acabarian diciendo
+ * cifras distintas de la misma deuda.
+ */
+export function renderSupplyDebtSummary(
+  draft: SupplyDebtDraft,
+  currency: string,
+): string {
+  const deuda = aDeudaDeProveedor(draft, '');
+  const plan = planDeLaDeuda(deuda);
+
+  const lineas = [
+    'Voy a registrar este suministro como pendiente de pago:',
+    `• Proveedor: ${deuda.supplierName}`,
+    `• Suministro: ${deuda.supply}`,
+    `• Monto: ${formatMoney(deuda.amount, currency)}`,
+    `• Fecha límite: ${formatearFechaCorta(deuda.dueDate)}`,
+    deuda.mode === 'cuotas'
+      ? `• Modalidad: ${deuda.installments} cuotas mensuales`
+      : '• Modalidad: un solo pago',
+    deuda.interestRate > 0
+      ? `• Interés: ${formatPercentage(deuda.interestRate)} mensual`
+      : '• Interés: sin interés',
+  ];
+
+  if (deuda.interestRate > 0) {
+    lineas.push(
+      `• Total con interés: ${formatMoney(plan.total, currency)} (${formatMoney(plan.interesTotal, currency)} de interés)`,
+    );
+  }
+
+  if (deuda.mode === 'cuotas') {
+    lineas.push('', 'Plan de cuotas:');
+    for (const cuota of plan.cuotas) {
+      lineas.push(
+        `${cuota.numero}) ${formatearFecha(cuota.fechaVencimiento)} · ${formatMoney(cuota.monto, currency)}`,
+      );
+    }
+  }
+
+  lineas.push('', '¿Lo registro así? Responde sí o no.');
+  return lineas.join('\n');
+}
+
+/** Confirmacion de la deuda ya guardada. */
+export function renderSupplyDebtRegistered(
+  deuda: SupplyDebt,
+  currency: string,
+): string {
+  const plan = planDeLaDeuda(deuda);
+  const cierre =
+    deuda.mode === 'cuotas'
+      ? `${deuda.installments} cuotas de ${formatMoney(plan.cuotas[0]?.monto ?? 0, currency)}`
+      : `un pago de ${formatMoney(plan.total, currency)}`;
+
+  return [
+    `✅ Anoté que le debes ${formatMoney(deuda.amount, currency)} a ${deuda.supplierName} por ${deuda.supply}.`,
+    `${cierre} · última fecha ${formatearFechaCorta(deuda.dueDate)}`,
+  ].join('\n');
+}
+
+/** El plan de pagos, calculado por el mismo motor que usa el panel. */
+function planDeLaDeuda(deuda: SupplyDebt): PlanDeDeuda {
+  return planDeDeudaProveedor({
+    montoTotal: deuda.amount,
+    fechaLimite: new Date(`${deuda.dueDate}T12:00:00.000Z`),
+    modalidad: deuda.mode === 'cuotas' ? 'CUOTAS' : 'UNICO',
+    numeroCuotas: deuda.mode === 'cuotas' ? deuda.installments : null,
+    aplicaInteres: deuda.interestRate > 0,
+    porcentajeInteres: deuda.interestRate,
+  });
+}
+
+/** "12%" y "1,5%": sin decimales cuando son redondos, que es lo normal. */
+function formatPercentage(valor: number): string {
+  return `${Number.isInteger(valor) ? valor : valor.toFixed(2).replace('.', ',')}%`;
+}
+
+function formatearFechaCorta(fecha: string): string {
+  return FECHA_CORTA.format(new Date(`${fecha}T12:00:00.000Z`));
+}
+
+function formatearFecha(fecha: Date): string {
+  return FECHA_CORTA.format(fecha);
+}
+
+/**
+ * El borrador de deuda tal como lo devolvio el modelo.
+ *
+ * Todo puede venir en null: el usuario va contestando de a uno y el servicio
+ * pregunta lo que falte.
+ */
+function normalizeSupplyDebt(value: unknown): SupplyDebtDraft | null {
+  if (!value || typeof value !== 'object') return null;
+
+  const crudo = value as Record<string, unknown>;
+  const mode = crudo.mode;
+
+  return {
+    supplierName: cleanText(crudo.supplierName),
+    supply: cleanText(crudo.supply),
+    amount: normalizeAmount(crudo.amount),
+    dueDate: normalizeDueDate(crudo.dueDate),
+    mode: mode === 'cuotas' || mode === 'unico' ? mode : null,
+    installments: normalizeInstallments(crudo.installments),
+    interestRate: normalizeInterestRate(crudo.interestRate),
+  };
+}
+
+/**
+ * Fecha limite de pago: tiene que ser futura.
+ *
+ * Es el espejo de `normalizeMovementDate`, que rechaza el futuro porque nadie
+ * registra lo que no ha pasado. Aqui se rechaza el pasado: una fecha limite
+ * vencida no es un plazo, y el plan de cuotas que saldria de ella nace mal.
+ */
+function normalizeDueDate(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+
+  const texto = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(texto)) return null;
+
+  const fecha = new Date(`${texto}T12:00:00.000Z`);
+  if (Number.isNaN(fecha.getTime())) return null;
+  // "2026-11-31" pasa el regex pero se desborda a diciembre.
+  if (fecha.toISOString().slice(0, 10) !== texto) return null;
+
+  // Se compara contra el dia colombiano, no el del contenedor.
+  if (texto <= todayIso()) return null;
+  if (texto > sumarDias(todayIso(), MAX_DIAS_DE_PLAZO_PROVEEDOR)) return null;
+
+  return texto;
+}
+
+/** Mas de tres años no es un plazo de proveedor, es un error de dictado. */
+const MAX_DIAS_DE_PLAZO_PROVEEDOR = 1_096;
+
+/** Entre 2 y 60 cuotas. Una sola cuota es un pago unico, no un plan. */
+function normalizeInstallments(value: unknown): number | null {
+  const numero = Number(value);
+  if (!Number.isFinite(numero) || numero < 2 || numero > 60) return null;
+  return Math.round(numero);
+}
+
+/**
+ * Interes mensual en porcentaje.
+ *
+ * El 0 SI es valido y significa "no me cobra interes": es la unica forma de
+ * que quien compra sin recargo salga de la pregunta. Lo que se descarta es lo
+ * que no es numero o no cabe en un interes mensual.
+ */
+function normalizeInterestRate(value: unknown): number | null {
+  const numero = Number(value);
+  if (!Number.isFinite(numero) || numero < 0 || numero > 100) return null;
+  return round2(numero);
 }
 
 /** Unidades: un entero positivo, o nada. */
@@ -3030,7 +3394,57 @@ export function renderPendingQuestion(
     return renderPendingRegistration(pendiente, currency);
   }
 
+  if (pendiente.kind === 'supply-debt') {
+    return renderPendingSupplyDebt(pendiente, currency);
+  }
+
   return renderPendingCorrection(pendiente, currency);
+}
+
+/**
+ * La deuda a medio armar, contada para el modelo.
+ *
+ * Sin esto, el usuario contesta "en 6 cuotas" y el modelo no tiene forma de
+ * saber que eso pertenece a una deuda que se esta armando: lo lee como un
+ * mensaje suelto y la conversacion vuelve a empezar.
+ */
+function renderPendingSupplyDebt(
+  pendiente: PendingSupplyDebt,
+  currency: string,
+): string {
+  const d = pendiente.draft;
+  const sabido = [
+    `- proveedor: ${d.supplierName ?? 'todavia no lo dijo'}`,
+    `- suministro: ${d.supply ?? 'todavia no lo dijo'}`,
+    `- monto: ${d.amount === null ? 'todavia no lo dijo' : formatMoney(d.amount, currency)}`,
+    `- fecha limite: ${d.dueDate ?? 'todavia no la dijo'}`,
+    `- modalidad: ${d.mode ?? 'todavia no lo dijo'}`,
+    `- cuotas: ${d.installments ?? 'todavia no lo dijo'}`,
+    `- interes mensual: ${d.interestRate === null ? 'todavia no lo dijo' : `${d.interestRate}%`}`,
+  ];
+
+  if (pendiente.stage === 'confirmacion') {
+    return [
+      'PREGUNTA ABIERTA (lo mas importante de este turno):',
+      'Le acabas de enseñar esta deuda con su plan de cuotas y le preguntaste',
+      'si la registras:',
+      ...sabido,
+      'Si dice que si, devuelve type "confirmation" con confirmed true.',
+      'Si dice que no, confirmed false.',
+      'Si te CORRIGE un dato ("no, son 8 cuotas"), no es una confirmacion:',
+      'devuelve type "supply_debt" con ese dato ya corregido.',
+    ].join('\n');
+  }
+
+  return [
+    'PREGUNTA ABIERTA (lo mas importante de este turno):',
+    'Estas armando una deuda con un proveedor y le preguntaste por el dato',
+    'que falta. Esto es lo que ya sabes:',
+    ...sabido,
+    'Lo que conteste es ese dato: devuelve type "supply_debt" con el puesto',
+    'donde corresponde. NO vuelvas a pedir lo que ya esta arriba y NO lo',
+    'trates como un gasto nuevo.',
+  ].join('\n');
 }
 
 /** Espera un si, un no, o directamente la correccion. */
