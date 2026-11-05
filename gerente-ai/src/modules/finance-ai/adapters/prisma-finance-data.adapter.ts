@@ -35,6 +35,7 @@ import type {
   PaymentResult,
   PayrollPayment,
   ProfitDistribution,
+  SupplyDebt,
   TransactionChanges,
   TransactionQuery,
 } from '../ports/finance-data.port';
@@ -406,6 +407,53 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
     );
 
     return payment;
+  }
+
+  async saveSupplyDebt(debt: SupplyDebt): Promise<SupplyDebt> {
+    const proveedorId = await this.ensureProveedor(
+      debt.businessId,
+      debt.supplierName,
+    );
+
+    await this.prisma.deudaProveedor.create({
+      data: {
+        proveedorId,
+        sedeId: debt.businessId,
+        suministro: debt.supply,
+        montoTotal: new Prisma.Decimal(debt.amount),
+        // Mediodia UTC, como el resto de fechas sin hora.
+        fechaLimite: new Date(`${debt.dueDate}T12:00:00.000Z`),
+        modalidad: debt.mode === 'cuotas' ? 'CUOTAS' : 'UNICO',
+        numeroCuotas: debt.mode === 'cuotas' ? debt.installments : null,
+        aplicaInteres: debt.interestRate > 0,
+        porcentajeInteres:
+          debt.interestRate > 0 ? new Prisma.Decimal(debt.interestRate) : null,
+      },
+    });
+
+    this.logger.log(
+      `Deuda con proveedor: ${debt.supplierName} · ${debt.amount} · vence ${debt.dueDate} en sede ${debt.businessId}.`,
+    );
+
+    return debt;
+  }
+
+  /** El proveedor de esa sede, creandolo si es la primera vez que aparece. */
+  private async ensureProveedor(
+    sedeId: string,
+    nombre: string,
+  ): Promise<string> {
+    const limpio = nombre.trim();
+    const existente = await this.prisma.proveedor.findFirst({
+      where: { sedeId, nombre: { equals: limpio, mode: 'insensitive' } },
+    });
+
+    if (existente) return existente.id;
+
+    const creado = await this.prisma.proveedor.create({
+      data: { nombre: limpio, sedeId },
+    });
+    return creado.id;
   }
 
   async saveProfitDistribution(

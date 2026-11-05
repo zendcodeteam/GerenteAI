@@ -51,6 +51,8 @@ export type PublicIntentType =
   | 'reparto_utilidades'
   /** Pago de nomina a un trabajador. */
   | 'nomina'
+  /** Suministro que queda pendiente de pago al proveedor. */
+  | 'deuda_proveedor'
   /** Le pagaron un fiado: baja la deuda, no crea un movimiento. */
   | 'abono'
   /** Contesto si o no a una pregunta de Luka. */
@@ -127,6 +129,7 @@ const TYPE_LABELS: Record<MessageIntentType, PublicIntentType> = {
   breakdown: 'desglose',
   profit_share: 'reparto_utilidades',
   payroll: 'nomina',
+  supply_debt: 'deuda_proveedor',
   payment: 'abono',
   confirmation: 'confirmacion',
   query: 'consulta',

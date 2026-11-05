@@ -32,6 +32,14 @@ import {
  * backend.
  *
  * ---------------------------------------------------------------------------
+ * v22: un suministro que queda a deber tiene plan de pagos.
+ *
+ * "La harina de Molinos quedo a deber" no es un gasto cualquiera: es una
+ * deuda con proveedor, con fecha limite, modalidad, cuotas e interes. Se
+ * extrae lo que venga y el backend pregunta lo que falte, de a un dato por
+ * mensaje, y ensena el plan de cuotas antes de guardar.
+ *
+ * ---------------------------------------------------------------------------
  * v21: pagos de nomina por conversacion.
  *
  * "Pagale el 40% a Carlos" no es un reparto de utilidades ni un gasto
@@ -133,7 +141,7 @@ import {
  * ---------------------------------------------------------------------------
  */
 
-export const WHATSAPP_ASSISTANT_PROMPT_VERSION = 'asistente-whatsapp/v21';
+export const WHATSAPP_ASSISTANT_PROMPT_VERSION = 'asistente-whatsapp/v22';
 
 /**
  * Forma CRUDA de la respuesta del modelo.
@@ -149,6 +157,15 @@ export interface WhatsAppIntentOutput {
     percentage?: number | string | null;
     amount?: number | string | null;
     date?: string | null;
+  } | null;
+  supplyDebt?: {
+    supplierName?: string | null;
+    supply?: string | null;
+    amount?: number | string | null;
+    dueDate?: string | null;
+    mode?: string | null;
+    installments?: number | string | null;
+    interestRate?: number | string | null;
   } | null;
   movements?: {
     type?: string;
@@ -449,6 +466,42 @@ REGLAS DE INTERPRETACIÓN:
        (se reparte una bolsa entre varios, el sistema calcula los montos)
      "Págale el 40% a Carlos, son 800.000"                 -> payroll
        (un pago concreto a una persona, con su monto)
+7C. SUMINISTRO QUE QUEDA A DEBER (type: "supply_debt"):
+   El negocio recibe mercancía de un proveedor y queda debiéndola.
+
+   - "La harina de Molinos quedó a deber"
+   - "Me trajeron 2 millones en bebidas y los pago en diciembre"
+   - "Quedé debiendo el pedido de Postobón, en 6 cuotas con 2% de interés"
+
+   Pon en "supplyDebt" lo que el mensaje diga y deja en null lo que no diga:
+
+   - supplierName: a quién se le debe.
+   - supply: qué le compró ("harina y levadura", "bebidas").
+   - amount: cuánto debe en total, SIN intereses.
+   - dueDate: la fecha límite en YYYY-MM-DD, resuelta contra la fecha de hoy.
+     Entiéndela como venga: "el 30 de noviembre", "en 15 días", "fin de mes",
+     "el otro mes". SIEMPRE futura. Si paga en cuotas, es la de la ÚLTIMA.
+   - mode: "unico" si paga de una sola vez, "cuotas" si va en varias.
+   - installments: cuántas cuotas, solo cuando mode es "cuotas".
+   - interestRate: el interés MENSUAL en porcentaje. Si dice que no le cobran
+     interés, pon 0 —no null—: 0 es "ya contestó que no" y null es "todavía no
+     se lo he preguntado", y el sistema los trata distinto.
+
+   REGLAS:
+   - NO inventes ningún dato. El sistema pregunta lo que falte, de a uno por
+     mensaje, y se acuerda de lo que ya le dijeron. No uses "unclear" por eso.
+   - "movements" va SIEMPRE vacío: []. La deuda no es un gasto del día: la
+     plata sale cuando se pague. Registrarla además como expense la contaría
+     dos veces.
+   - Cuando el usuario viene contestando una pregunta tuya, devuelve otra vez
+     type "supply_debt" con el dato que acaba de dar. "En 6 cuotas" es
+     supplyDebt con mode "cuotas" e installments 6, no un mensaje suelto.
+   - El resumen, el plan de cuotas y la confirmación los arma el sistema. En
+     responseText escribe algo breve: se reemplaza.
+
+   NO lo confundas con una compra a crédito normal (regla 4): si solo dice "a
+   30 días" sin hablar de cuotas ni intereses, eso sigue siendo un gasto con
+   isSupplierCredit. Esto es para cuando hay un PLAN de pago detrás.
 
 8. CONSULTAS (type: "query"):
    Elige el "queryKind" según lo que pidió:
@@ -1064,6 +1117,7 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
     'correction',
     'payment',
     'payroll',
+    'supplyDebt',
     'confirmed',
     'confirmedCount',
     'concept',
@@ -1083,6 +1137,7 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
         'breakdown',
         'profit_share',
         'payroll',
+        'supply_debt',
         'query',
         'correction',
         'confirmation',
@@ -1335,6 +1390,54 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
         date: {
           type: ['string', 'null'],
           description: 'Fecha del pago en YYYY-MM-DD. null = hoy.',
+        },
+      },
+    },
+    supplyDebt: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      required: [
+        'supplierName',
+        'supply',
+        'amount',
+        'dueDate',
+        'mode',
+        'installments',
+        'interestRate',
+      ],
+      description:
+        'Suministro que queda a deber al proveedor. null si el mensaje no habla de eso.',
+      properties: {
+        supplierName: {
+          type: ['string', 'null'],
+          description: 'A quien se le debe. null si no lo dijo todavia.',
+        },
+        supply: {
+          type: ['string', 'null'],
+          description: 'Que se compro. null si no lo dijo todavia.',
+        },
+        amount: {
+          type: ['number', 'null'],
+          description: 'Monto total de la deuda, sin intereses.',
+        },
+        dueDate: {
+          type: ['string', 'null'],
+          description:
+            'Fecha limite en YYYY-MM-DD, siempre futura. Con cuotas, la de la ULTIMA.',
+        },
+        mode: {
+          type: ['string', 'null'],
+          enum: ['unico', 'cuotas', null],
+          description: '"unico" = un solo pago; "cuotas" = varias mensuales.',
+        },
+        installments: {
+          type: ['number', 'null'],
+          description: 'Numero de cuotas cuando mode es "cuotas".',
+        },
+        interestRate: {
+          type: ['number', 'null'],
+          description:
+            'Interes mensual en porcentaje. 0 si dijo que no le cobran. null si no lo ha dicho.',
         },
       },
     },
