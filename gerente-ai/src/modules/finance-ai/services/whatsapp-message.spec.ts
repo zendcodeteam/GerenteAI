@@ -11,6 +11,7 @@ import type {
   ProfitDistribution,
   PaymentRequest,
   PaymentResult,
+  PayrollPayment,
   TransactionChanges,
 } from '../ports/finance-data.port';
 import type { WhatsAppIntentOutput } from '../prompts/whatsapp-assistant.prompt';
@@ -112,6 +113,8 @@ interface FakeFinanceData extends FinanceDataPort {
   saved: Transaction[];
   replaced: { id: string; parts: Transaction[] }[];
   distributions: ProfitDistribution[];
+  /** Nominas guardadas, para comprobar que se registran cuando toca. */
+  payrolls: PayrollPayment[];
   updated: { id: string; changes: TransactionChanges }[];
   deleted: string[];
   /** Abonos que se pidieron aplicar, para comprobar que llegan bien. */
@@ -127,6 +130,7 @@ function fakeFinanceData(rows: Transaction[] = SEED): FakeFinanceData {
   const saved: Transaction[] = [];
   const replaced: { id: string; parts: Transaction[] }[] = [];
   const distributions: ProfitDistribution[] = [];
+  const payrolls: PayrollPayment[] = [];
   const updated: { id: string; changes: TransactionChanges }[] = [];
   const deleted: string[] = [];
 
@@ -167,6 +171,11 @@ function fakeFinanceData(rows: Transaction[] = SEED): FakeFinanceData {
     saveProfitDistribution: (distribution: ProfitDistribution) => {
       distributions.push(distribution);
       return Promise.resolve(distribution);
+    },
+    payrolls,
+    savePayroll: (pago: PayrollPayment) => {
+      payrolls.push(pago);
+      return Promise.resolve(pago);
     },
     updated,
     deleted,
@@ -3987,5 +3996,288 @@ describe('SCRUM-22 · los registros se numeran', () => {
     });
 
     expect(result.replyText).not.toContain('1)');
+  });
+});
+
+// ===========================================================================
+// SCRUM-55 · flujo conversacional de registro de nomina
+// ===========================================================================
+
+/**
+ * Los tres datos —trabajador, porcentaje y monto— se piden de a uno y el
+ * borrador sobrevive entre turnos. Nada se guarda sin que el usuario vea el
+ * resumen y diga que si: una nomina mal registrada no se nota en el momento,
+ * aparece a fin de mes cuando las cuentas no cuadran.
+ */
+/**
+ * Una conversacion de varios turnos: el estado y la base se comparten, que es
+ * justo lo que hace falta probar aqui. `buildService` crea uno nuevo de cada
+ * vez y perderia el borrador entre mensajes.
+ */
+function conversacionDeNomina() {
+  const financeData = fakeFinanceData([]);
+  const state = new ConversationStateService();
+
+  const turno = (
+    intent: Partial<WhatsAppIntentOutput>,
+    request: Record<string, unknown> = {},
+  ) =>
+    new WhatsAppMessageService(
+      fakeLlm(intent),
+      financeData,
+      state,
+    ).handleMessage({ ...BASE_REQUEST, persist: true, ...request });
+
+  return { financeData, turno };
+}
+
+describe('WhatsAppMessageService · registro de nomina', () => {
+  const nomina = (parcial: Record<string, unknown> | null) => ({
+    type: 'payroll' as const,
+    movements: [],
+    payroll: parcial,
+    responseText: 'ok',
+  });
+
+  it('pide el nombre cuando el mensaje no dice a quien', async () => {
+    const { service, financeData } = buildService(
+      nomina({ workerName: null, percentage: null, amount: null, date: null }),
+    );
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    expect(result.replyText).toContain('¿A quién le vas a pagar?');
+    expect(financeData.payrolls).toHaveLength(0);
+  });
+
+  it('con el nombre ya dicho, pregunta el porcentaje y lo nombra', async () => {
+    const { service } = buildService(
+      nomina({
+        workerName: 'Carlos',
+        percentage: null,
+        amount: null,
+        date: null,
+      }),
+    );
+
+    const result = await service.handleMessage(BASE_REQUEST);
+
+    expect(result.replyText).toContain('porcentaje');
+    expect(result.replyText).toContain('Carlos');
+  });
+
+  it('con nombre y porcentaje, pregunta el monto', async () => {
+    const { service } = buildService(
+      nomina({
+        workerName: 'Carlos',
+        percentage: 40,
+        amount: null,
+        date: null,
+      }),
+    );
+
+    const result = await service.handleMessage(BASE_REQUEST);
+
+    expect(result.replyText).toContain('¿Cuánto le vas a pagar a Carlos');
+  });
+
+  it('no olvida lo que ya le dijeron en los turnos anteriores', async () => {
+    // El caso que justifica guardar el borrador: el usuario contesta de a un
+    // dato y el modelo solo devuelve el ultimo. Sin memoria, la conversacion
+    // volveria a empezar en cada mensaje.
+    const { turno: paso } = conversacionDeNomina();
+    const turno = (payroll: Record<string, unknown> | null) =>
+      paso(nomina(payroll));
+
+    await turno({
+      workerName: 'Carlos',
+      percentage: null,
+      amount: null,
+      date: null,
+    });
+    await turno({
+      workerName: null,
+      percentage: 40,
+      amount: null,
+      date: null,
+    });
+    const tercero = await turno({
+      workerName: null,
+      percentage: null,
+      amount: 800_000,
+      date: null,
+    });
+
+    // Con el tercer dato ya esta completa: toca resumen, no otra pregunta.
+    expect(tercero.replyText).toContain('Carlos');
+    expect(tercero.replyText).toContain('40%');
+    expect(tercero.replyText).toContain('$800.000');
+  });
+
+  it('muestra el resumen y pide confirmacion antes de guardar', async () => {
+    const { service, financeData } = buildService(
+      nomina({
+        workerName: 'Carlos',
+        percentage: 40,
+        amount: 800_000,
+        date: null,
+      }),
+    );
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    expect(result.replyText).toContain('Voy a registrar este pago de nómina');
+    expect(result.replyText).toContain('Carlos');
+    expect(result.replyText).toContain('40%');
+    expect(result.replyText).toContain('$800.000');
+    expect(result.replyText).toContain('¿Lo registro así?');
+    // Lo importante: todavia NO se guardo nada.
+    expect(financeData.payrolls).toHaveLength(0);
+  });
+
+  it('guarda solo despues del si', async () => {
+    const { financeData, turno } = conversacionDeNomina();
+
+    await turno(
+      nomina({
+        workerName: 'Carlos',
+        percentage: 40,
+        amount: 800_000,
+        date: null,
+      }),
+    );
+    const result = await turno({
+      type: 'confirmation',
+      confirmed: true,
+      responseText: 'ok',
+    });
+
+    expect(financeData.payrolls).toHaveLength(1);
+    expect(financeData.payrolls[0]).toMatchObject({
+      workerName: 'Carlos',
+      percentage: 40,
+      amount: 800_000,
+      businessId: 'b1',
+    });
+    expect(result.replyText).toContain('Registré el pago de nómina de Carlos');
+  });
+
+  it('un no descarta el pago y no guarda nada', async () => {
+    const { financeData, turno } = conversacionDeNomina();
+
+    await turno(
+      nomina({
+        workerName: 'Carlos',
+        percentage: 40,
+        amount: 800_000,
+        date: null,
+      }),
+    );
+    const result = await turno({
+      type: 'confirmation',
+      confirmed: false,
+      responseText: 'ok',
+    });
+
+    expect(financeData.payrolls).toHaveLength(0);
+    expect(result.replyText).toContain('no registré ese pago');
+  });
+
+  it('con persist en false no toca la base, pero responde igual', async () => {
+    const { financeData, turno } = conversacionDeNomina();
+
+    await turno(
+      nomina({
+        workerName: 'Carlos',
+        percentage: 40,
+        amount: 800_000,
+        date: null,
+      }),
+      { persist: false },
+    );
+    const result = await turno(
+      { type: 'confirmation', confirmed: true, responseText: 'ok' },
+      { persist: false },
+    );
+
+    expect(financeData.payrolls).toHaveLength(0);
+    expect(result.replyText).toContain('Registré el pago de nómina');
+  });
+
+  it('un porcentaje imposible se trata como si no lo hubiera dicho', async () => {
+    // "el 140%" es un error de dictado. Guardarlo descuadra la nomina y nadie
+    // lo revisa despues; preguntar de nuevo cuesta un mensaje.
+    const { service } = buildService(
+      nomina({
+        workerName: 'Carlos',
+        percentage: 140,
+        amount: null,
+        date: null,
+      }),
+    );
+
+    const result = await service.handleMessage(BASE_REQUEST);
+
+    expect(result.replyText).toContain('porcentaje');
+  });
+
+  it('un monto en cero tampoco pasa', async () => {
+    const { service, financeData } = buildService(
+      nomina({
+        workerName: 'Carlos',
+        percentage: 40,
+        amount: 0,
+        date: null,
+      }),
+    );
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    expect(result.replyText).toContain('¿Cuánto le vas a pagar');
+    expect(financeData.payrolls).toHaveLength(0);
+  });
+
+  it('una nomina no se registra como gasto: no duplica la plata', async () => {
+    const { service, financeData } = buildService(
+      nomina({
+        workerName: 'Carlos',
+        percentage: 40,
+        amount: 800_000,
+        date: null,
+      }),
+    );
+
+    await service.handleMessage({ ...BASE_REQUEST, persist: true });
+
+    expect(financeData.saved).toHaveLength(0);
+  });
+
+  it('respeta la fecha que diga el usuario', async () => {
+    const { financeData, turno } = conversacionDeNomina();
+
+    await turno(
+      nomina({
+        workerName: 'Carlos',
+        percentage: 40,
+        amount: 800_000,
+        date: '2026-10-30',
+      }),
+    );
+    await turno({
+      type: 'confirmation',
+      confirmed: true,
+      responseText: 'ok',
+    });
+
+    expect(financeData.payrolls[0].date).toBe('2026-10-30');
   });
 });

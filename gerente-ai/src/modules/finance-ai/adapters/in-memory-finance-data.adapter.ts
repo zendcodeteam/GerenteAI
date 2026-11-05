@@ -15,6 +15,7 @@ import type {
   FinanceDataPort,
   PaymentRequest,
   PaymentResult,
+  PayrollPayment,
   ProfitDistribution,
   TransactionChanges,
   TransactionQuery,
@@ -35,6 +36,7 @@ export class InMemoryFinanceDataAdapter implements FinanceDataPort {
 
   private readonly transactions: Transaction[] = seedTransactions();
   private readonly profitDistributions: ProfitDistribution[] = [];
+  readonly payrolls: PayrollPayment[] = [];
 
   getSnapshot(businessId: string): Promise<BusinessSnapshot> {
     const rows = this.transactions.filter(
@@ -254,6 +256,11 @@ export class InMemoryFinanceDataAdapter implements FinanceDataPort {
         ),
       ),
     };
+  }
+
+  savePayroll(payment: PayrollPayment): Promise<PayrollPayment> {
+    this.payrolls.push(payment);
+    return Promise.resolve(payment);
   }
 
   saveProfitDistribution(

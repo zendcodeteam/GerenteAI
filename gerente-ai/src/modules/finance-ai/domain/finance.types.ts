@@ -19,6 +19,8 @@ export type MessageIntentType =
   | 'breakdown'
   /** Reparto de utilidades entre el dueno y los trabajadores. */
   | 'profit_share'
+  /** Pago de nomina a un trabajador: nombre, porcentaje y monto. */
+  | 'payroll'
   /** Le pidieron algo que no son las finanzas del negocio (codigo, poemas...). */
   | 'out_of_scope'
   /** Pidio una funcion que solo existe en los planes pagos. */
@@ -230,6 +232,25 @@ export interface MovementDraft {
  * El monto puede faltar: "Rosa ya me pago" no dice cuanto, y lo correcto es
  * saldar toda su deuda, no adivinar una cifra.
  */
+/**
+ * Un pago de nomina a medio armar.
+ *
+ * Los tres datos se piden de a uno, asi que el borrador viaja incompleto entre
+ * turnos: cada respuesta del usuario rellena un hueco y el resto se conserva.
+ * Pedirlos todos juntos en un solo mensaje de WhatsApp termina en que la gente
+ * contesta solo el primero.
+ */
+export interface PayrollDraft {
+  /** A quien se le paga. */
+  workerName: string | null;
+  /** Porcentaje acordado, de 0 a 100. */
+  percentage: number | null;
+  /** Lo que se le paga de verdad, en la moneda del negocio. */
+  amount: number | null;
+  /** Fecha del pago en YYYY-MM-DD. null = hoy. */
+  date: string | null;
+}
+
 export interface PaymentDraft {
   /** A quien se le cobro. Sin nombre no hay a que deuda aplicarlo. */
   customerName: string | null;
@@ -354,6 +375,8 @@ export interface MessageIntent {
   correction: CorrectionRequest | null;
   /** El abono, cuando el mensaje avisa que le pagaron un fiado. */
   payment: PaymentDraft | null;
+  /** Pago de nomina detectado. null en todo lo demas. */
+  payroll: PayrollDraft | null;
   /**
    * Respuesta a una pregunta de si o no. null cuando el mensaje no contesta
    * ninguna, o cuando contesto algo que no es ni si ni no.

@@ -29,6 +29,7 @@ import {
   type MovementDraft,
   type PaymentDraft,
   type PaymentMethod,
+  type PayrollDraft,
   type PeriodSummary,
   type ProfitBeneficiary,
   type ProfitShare,
@@ -43,12 +44,14 @@ import {
   FINANCE_DATA_PORT,
   type FinanceDataPort,
   type PaymentResult,
+  type PayrollPayment,
 } from '../ports/finance-data.port';
 import {
   ConversationStateService,
   type PendingAction,
   type PendingCorrection,
   type PendingDeletion,
+  type PendingPayroll,
   type PendingRegistration,
 } from './conversation-state.service';
 import {
@@ -295,10 +298,15 @@ export class WhatsAppMessageService {
     // Cambiar de tema cierra la pregunta abierta. Dejarla viva haria que una
     // correccion de dentro de un rato se resolviera contra una lista que ya no
     // tiene nada que ver con lo que se esta hablando.
+    // "payroll" tambien conserva: una nomina se arma en varios turnos y cada
+    // respuesta del usuario llega como un payroll nuevo con un solo dato. Si
+    // se olvidara aqui, el borrador moriria entre mensaje y mensaje y Luka
+    // volveria a preguntar el nombre despues de que se lo dijeron.
     if (
       intent.type !== 'correction' &&
       intent.type !== 'confirmation' &&
-      intent.type !== 'unclear'
+      intent.type !== 'unclear' &&
+      intent.type !== 'payroll'
     ) {
       this.state.olvidar(request.businessId);
     }
@@ -326,7 +334,22 @@ export class WhatsAppMessageService {
         );
 
       case 'confirmation':
-        return this.handleConfirmation(intent, request, currency, meta);
+        return this.handleConfirmation(
+          intent,
+          request,
+          currency,
+          referenceDate,
+          meta,
+        );
+
+      case 'payroll':
+        return this.handlePayroll(
+          intent,
+          request,
+          currency,
+          referenceDate,
+          meta,
+        );
 
       case 'income':
       case 'expense':
@@ -530,6 +553,7 @@ export class WhatsAppMessageService {
         profitShares: [],
         correction: null,
         payment: null,
+        payroll: null,
         confirmed: null,
         confirmedCount: null,
         discount: null,
@@ -557,8 +581,22 @@ export class WhatsAppMessageService {
     intent: MessageIntent,
     request: WhatsAppMessageRequest,
     currency: string,
+    referenceDate: string,
     meta: WhatsAppMessageResult['meta'],
   ): Promise<WhatsAppMessageResult> {
+    const nomina = this.state.nominaPendiente(request.businessId);
+
+    if (nomina?.stage === 'confirmacion') {
+      return this.confirmarNomina(
+        nomina,
+        intent,
+        request,
+        currency,
+        referenceDate,
+        meta,
+      );
+    }
+
     const registro = this.state.registroPendiente(request.businessId);
 
     // Un descuadre no se resuelve con un si: lo que se pidio ahi fue la cifra
@@ -1442,6 +1480,99 @@ export class WhatsAppMessageService {
     };
   }
 
+  // ------------------------------------------------------------------ nomina
+
+  /**
+   * Registra el pago de nomina de un trabajador.
+   *
+   * Son tres datos —a quien, que porcentaje y cuanto— y se piden de a uno: un
+   * mensaje de WhatsApp que pregunta tres cosas a la vez se contesta a medias,
+   * y el usuario termina repitiendose. El borrador se guarda entre turnos, asi
+   * que cada respuesta rellena un hueco sin perder lo ya dicho.
+   *
+   * Nada se guarda sin visto bueno. Una nomina mal registrada no se nota en el
+   * momento: aparece a fin de mes, cuando las cuentas del trabajador no
+   * cuadran con las del dueno.
+   */
+  private handlePayroll(
+    intent: MessageIntent,
+    request: WhatsAppMessageRequest,
+    currency: string,
+    referenceDate: string,
+    meta: WhatsAppMessageResult['meta'],
+  ): Promise<WhatsAppMessageResult> {
+    const abierta = this.state.nominaPendiente(request.businessId);
+    const borrador = mezclarNomina(abierta?.draft, intent.payroll);
+
+    const falta = primerDatoQueFalta(borrador);
+
+    if (falta) {
+      this.state.recordarNomina(request.businessId, {
+        draft: borrador,
+        stage: 'datos',
+      });
+
+      return Promise.resolve(
+        this.plainResult(intent, preguntaDeNomina(falta, borrador), meta),
+      );
+    }
+
+    // Completo: se le ensena y se espera el si. El borrador queda guardado tal
+    // cual, para que la confirmacion registre exactamente lo que se mostro.
+    this.state.recordarNomina(request.businessId, {
+      draft: borrador,
+      stage: 'confirmacion',
+    });
+
+    return Promise.resolve(
+      this.plainResult(
+        intent,
+        renderPayrollSummary(borrador, currency, referenceDate),
+        meta,
+      ),
+    );
+  }
+
+  /** Guarda la nomina que el usuario acaba de confirmar. */
+  private async confirmarNomina(
+    pendiente: PendingPayroll,
+    intent: MessageIntent,
+    request: WhatsAppMessageRequest,
+    currency: string,
+    referenceDate: string,
+    meta: WhatsAppMessageResult['meta'],
+  ): Promise<WhatsAppMessageResult> {
+    this.state.olvidar(request.businessId);
+
+    if (intent.confirmed !== true) {
+      return this.plainResult(
+        intent,
+        'Listo, no registré ese pago. Si quieres lo hacemos de nuevo 😊',
+        meta,
+      );
+    }
+
+    const pago: PayrollPayment = {
+      id: randomUUID(),
+      businessId: request.businessId,
+      workerName: pendiente.draft.workerName ?? '',
+      percentage: pendiente.draft.percentage ?? 0,
+      amount: pendiente.draft.amount ?? 0,
+      date: pendiente.draft.date ?? referenceDate,
+      currency,
+    };
+
+    if (request.persist) {
+      await this.financeData.savePayroll(pago);
+    }
+
+    return this.plainResult(
+      intent,
+      renderPayrollRegistered(pago, currency),
+      meta,
+    );
+  }
+
   // -------------------------------------------------------------- resultados
 
   /** Resultado sin movimientos ni reparto: solo texto. */
@@ -1528,6 +1659,7 @@ export class WhatsAppMessageService {
       profitShares: normalizeProfitShares(output?.profitShares),
       correction: normalizeCorrection(output?.correction),
       payment,
+      payroll: normalizePayroll(output?.payroll),
       confirmed: normalizeConfirmed(output?.confirmed),
       confirmedCount: normalizePosition(output?.confirmedCount),
       amount,
@@ -1756,6 +1888,7 @@ const INTENT_TYPES: MessageIntentType[] = [
   'investment',
   'breakdown',
   'profit_share',
+  'payroll',
   'query',
   'correction',
   'unclear',
@@ -1860,6 +1993,137 @@ function normalizeMovements(value: unknown): MovementDraft[] {
     })
     .filter((movement): movement is MovementDraft => movement !== null)
     .slice(0, MAX_MOVEMENTS_PER_MESSAGE);
+}
+
+// --------------------------------------------------------------------- nomina
+
+/** Los tres datos de una nomina, en el orden en que se preguntan. */
+type DatoDeNomina = 'workerName' | 'percentage' | 'amount';
+
+/**
+ * Funde lo que ya se sabia con lo que acaba de decir el usuario.
+ *
+ * Lo nuevo manda, pero solo cuando viene: si el modelo devuelve el porcentaje
+ * en null porque este turno el usuario solo dijo el monto, el porcentaje de
+ * antes se conserva. Sin esto, cada respuesta borraria la anterior y la
+ * conversacion no avanzaria nunca.
+ */
+function mezclarNomina(
+  previo: PayrollDraft | undefined,
+  nuevo: PayrollDraft | null,
+): PayrollDraft {
+  return {
+    workerName: nuevo?.workerName ?? previo?.workerName ?? null,
+    percentage: nuevo?.percentage ?? previo?.percentage ?? null,
+    amount: nuevo?.amount ?? previo?.amount ?? null,
+    date: nuevo?.date ?? previo?.date ?? null,
+  };
+}
+
+/** El primer dato que falta, o null si ya esta completa. */
+function primerDatoQueFalta(draft: PayrollDraft): DatoDeNomina | null {
+  if (!draft.workerName) return 'workerName';
+  if (draft.percentage === null) return 'percentage';
+  if (draft.amount === null) return 'amount';
+  return null;
+}
+
+/**
+ * La pregunta por el dato que falta.
+ *
+ * Nombra al trabajador en cuanto se sabe quien es: "¿Qué porcentaje?" a secas,
+ * tres mensajes despues de haberlo dicho, obliga al usuario a acordarse de
+ * que estaba haciendo.
+ */
+function preguntaDeNomina(falta: DatoDeNomina, draft: PayrollDraft): string {
+  if (falta === 'workerName') {
+    return '¿A quién le vas a pagar? Dime el nombre del trabajador.';
+  }
+
+  const quien = draft.workerName ?? 'esta persona';
+
+  if (falta === 'percentage') {
+    return `¿Qué porcentaje le corresponde a ${quien}? Dímelo en números, por ejemplo 40%.`;
+  }
+
+  return `¿Cuánto le vas a pagar a ${quien} en total?`;
+}
+
+/**
+ * El resumen que se le ensena antes de guardar.
+ *
+ * Lleva los tres datos juntos aunque los haya dicho de a uno: es la unica
+ * oportunidad de ver si lo que entendio Luka es lo que el acordo.
+ */
+export function renderPayrollSummary(
+  draft: PayrollDraft,
+  currency: string,
+  referenceDate: string,
+): string {
+  const fecha = FECHA_CORTA.format(
+    new Date(`${draft.date ?? referenceDate}T12:00:00.000Z`),
+  );
+
+  return [
+    'Voy a registrar este pago de nómina:',
+    `• Trabajador: ${draft.workerName}`,
+    `• Porcentaje: ${formatPercentage(draft.percentage ?? 0)}`,
+    `• Monto: ${formatMoney(draft.amount ?? 0, currency)}`,
+    `• Fecha: ${fecha}`,
+    '',
+    '¿Lo registro así? Responde sí o no.',
+  ].join('\n');
+}
+
+/** Confirmacion de la nomina ya guardada. */
+export function renderPayrollRegistered(
+  pago: PayrollPayment,
+  currency: string,
+): string {
+  const fecha = FECHA_CORTA.format(new Date(`${pago.date}T12:00:00.000Z`));
+
+  return [
+    `✅ Registré el pago de nómina de ${pago.workerName}:`,
+    `${formatMoney(pago.amount, currency)} (${formatPercentage(pago.percentage)}) · ${fecha}`,
+  ].join('\n');
+}
+
+/** "40%" y "12,5%": sin decimales cuando son redondos, que es lo normal. */
+function formatPercentage(valor: number): string {
+  return `${Number.isInteger(valor) ? valor : valor.toFixed(2).replace('.', ',')}%`;
+}
+
+/**
+ * El borrador de nomina tal como lo devolvio el modelo.
+ *
+ * Los tres datos pueden venir sueltos o de a uno: el usuario dice "pagale a
+ * Carlos" y el porcentaje llega dos mensajes despues. Lo que no se entienda
+ * va en null y el servicio lo pregunta.
+ */
+function normalizePayroll(value: unknown): PayrollDraft | null {
+  if (!value || typeof value !== 'object') return null;
+
+  const crudo = value as Record<string, unknown>;
+
+  return {
+    workerName: cleanText(crudo.workerName),
+    percentage: normalizePercentage(crudo.percentage),
+    amount: normalizeAmount(crudo.amount),
+    date: normalizeMovementDate(crudo.date),
+  };
+}
+
+/**
+ * Un porcentaje de 0 a 100.
+ *
+ * El 0 se descarta junto con lo que no es numero: "le pago el 0%" no es un
+ * pago de nomina, es un error de dictado, y preguntar de nuevo cuesta menos
+ * que guardar un porcentaje que nadie quiso decir.
+ */
+function normalizePercentage(value: unknown): number | null {
+  const numero = Number(value);
+  if (!Number.isFinite(numero) || numero <= 0 || numero > 100) return null;
+  return round2(numero);
 }
 
 /** Unidades: un entero positivo, o nada. */
@@ -3030,7 +3294,54 @@ export function renderPendingQuestion(
     return renderPendingRegistration(pendiente, currency);
   }
 
+  if (pendiente.kind === 'payroll') {
+    return renderPendingPayroll(pendiente, currency);
+  }
+
   return renderPendingCorrection(pendiente, currency);
+}
+
+/**
+ * La nomina a medio armar, contada para el modelo.
+ *
+ * Es la pieza que hace que la conversacion funcione: sin esto, el usuario
+ * contesta "Carlos" y el modelo no tiene forma de saber que eso es el nombre
+ * del trabajador de un pago que se esta armando, asi que lo lee como un
+ * mensaje suelto y vuelve a empezar.
+ */
+function renderPendingPayroll(
+  pendiente: PendingPayroll,
+  currency: string,
+): string {
+  const { workerName, percentage, amount } = pendiente.draft;
+
+  const sabido = [
+    `- trabajador: ${workerName ?? 'todavia no lo dijo'}`,
+    `- porcentaje: ${percentage === null ? 'todavia no lo dijo' : `${percentage}%`}`,
+    `- monto: ${amount === null ? 'todavia no lo dijo' : formatMoney(amount, currency)}`,
+  ];
+
+  if (pendiente.stage === 'confirmacion') {
+    return [
+      'PREGUNTA ABIERTA (lo mas importante de este turno):',
+      'Le acabas de enseñar este pago de nomina y le preguntaste si lo registras:',
+      ...sabido,
+      'Si dice que si, devuelve type "confirmation" con confirmed true.',
+      'Si dice que no, confirmed false.',
+      'Si te CORRIGE un dato ("no, son 900.000"), no es una confirmacion:',
+      'devuelve type "payroll" con ese dato ya corregido.',
+    ].join('\n');
+  }
+
+  return [
+    'PREGUNTA ABIERTA (lo mas importante de este turno):',
+    'Estas armando un pago de nomina y le preguntaste por el dato que falta.',
+    'Esto es lo que ya sabes:',
+    ...sabido,
+    'Lo que conteste es ese dato: devuelve type "payroll" con el puesto donde',
+    'corresponde. NO vuelvas a pedir lo que ya esta arriba y NO lo trates como',
+    'un gasto ni como una venta.',
+  ].join('\n');
 }
 
 /** Espera un si, un no, o directamente la correccion. */

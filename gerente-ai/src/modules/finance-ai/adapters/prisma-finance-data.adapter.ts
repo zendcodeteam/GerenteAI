@@ -33,6 +33,7 @@ import type {
   FinanceDataPort,
   PaymentRequest,
   PaymentResult,
+  PayrollPayment,
   ProfitDistribution,
   TransactionChanges,
   TransactionQuery,
@@ -386,6 +387,27 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
   }
 
   /** Guarda el reparto de utilidades: una fila por beneficiario. */
+  async savePayroll(payment: PayrollPayment): Promise<PayrollPayment> {
+    await this.prisma.pagoNomina.create({
+      data: {
+        id: payment.id,
+        nombreTrabajador: payment.workerName,
+        porcentajePago: new Prisma.Decimal(payment.percentage),
+        montoExacto: new Prisma.Decimal(payment.amount),
+        // Mediodia UTC, como el resto de fechas sin hora: asi el pago no se
+        // corre de dia en ninguna zona horaria.
+        fechaPago: new Date(`${payment.date}T12:00:00.000Z`),
+        sedeId: payment.businessId,
+      },
+    });
+
+    this.logger.log(
+      `Nomina: ${payment.workerName} · ${payment.percentage}% · ${payment.amount} en sede ${payment.businessId}.`,
+    );
+
+    return payment;
+  }
+
   async saveProfitDistribution(
     distribution: ProfitDistribution,
   ): Promise<ProfitDistribution> {
