@@ -100,6 +100,7 @@ model Sede {
   productos          Producto[]
   proveedores        Proveedor[]
   repartos           RepartoUtilidad[]
+  pagosNomina        PagoNomina[]
   reportes           Reporte[]
   bitacorasAuditoria BitacoraAuditoria[]
   dashboardConfigs   DashboardConfig[]
@@ -342,6 +343,23 @@ model RepartoUtilidad {
   @@index([sedeId, fecha])
   @@index([grupoId])
 }
+
+model PagoNomina {
+  id               String   @id @default(uuid())
+  nombreTrabajador String
+  porcentajePago   Decimal  @db.Decimal(5, 2)
+  montoExacto      Decimal  @db.Decimal(12, 2)
+  fechaPago        DateTime @default(now())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  sedeId           String
+  sede             Sede     @relation(fields: [sedeId], references: [id], onDelete: Cascade)
+
+  @@index([sedeId, nombreTrabajador])
+  @@index([sedeId, fechaPago])
+  @@index([nombreTrabajador])
+}
+
 
 model Abono {
   id        String   @id @default(uuid())
