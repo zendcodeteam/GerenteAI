@@ -100,6 +100,20 @@ export type LlmEffort = 'low' | 'medium' | 'high';
 export interface LlmRequest {
   /** Instrucciones de sistema. Se envian por el canal nativo de cada proveedor. */
   system?: string;
+  /**
+   * Trozo inicial de `system` que es IDENTICO en todas las llamadas y, por lo
+   * tanto, se puede cachear en el proveedor.
+   *
+   * Es un prefijo de `system`, no un campo aparte: asi el texto que recibe el
+   * modelo no cambia ni una coma, y el proveedor que no sepa cachear puede
+   * ignorarlo sin perder nada. El que si sabe lo corta en dos bloques y marca
+   * el primero.
+   *
+   * Lo que va despues del prefijo tiene que ser lo volatil (la fecha, el
+   * negocio, la pregunta abierta): la cache casa por prefijo exacto, asi que
+   * un solo byte movido mas arriba la invalida entera.
+   */
+  cacheableSystemPrefix?: string;
   messages: LlmMessage[];
   tools?: LlmToolDefinition[];
   toolChoice?: LlmToolChoice;
