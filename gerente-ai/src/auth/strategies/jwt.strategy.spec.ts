@@ -36,7 +36,7 @@ describe('JwtStrategy con Caché de Sesión', () => {
   };
 
   it('debe rechazar tokens que no son de tipo session', async () => {
-    const invalidPayload = { ...basePayload, type: 'reset' as const };
+    const invalidPayload = { ...basePayload, type: 'password-reset' as const };
     await expect(strategy.validate(invalidPayload)).rejects.toThrow(
       UnauthorizedException,
     );
