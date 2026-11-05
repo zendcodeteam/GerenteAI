@@ -93,6 +93,30 @@ export interface SupplyDebt {
   interestRate: number;
 }
 
+/**
+ * Un producto listo para entrar al catalogo.
+ *
+ * `category` nunca viaja vacia: la columna es obligatoria desde SCRUM-27 y
+ * quien no la dice se queda en "Sin categoria", igual que hizo el relleno de
+ * aquella migracion. Asi el producto entra y se clasifica despues, en vez de
+ * no entrar.
+ */
+export interface ProductRegistration {
+  businessId: string;
+  name: string;
+  salePrice: number;
+  costPrice: number;
+  category: string;
+  stock: number;
+}
+
+/** Como quedo el alta de un producto. */
+export interface ProductRegistrationResult {
+  /** false = ya existia uno con ese nombre en la sede; no se creo nada. */
+  created: boolean;
+  product: ProductRegistration;
+}
+
 export interface PaymentResult {
   /** false = no habia a que aplicarlo; nada se guardo. */
   applied: boolean;
@@ -168,6 +192,15 @@ export interface FinanceDataPort {
    * una sede ya resuelta desde el telefono.
    */
   saveSupplyDebt(debt: SupplyDebt): Promise<SupplyDebt>;
+
+  /**
+   * Da de alta un producto en el catalogo de la sede.
+   *
+   * No crea duplicados: si ya hay uno con ese nombre devuelve
+   * `created: false` y no toca nada. Dos productos con el mismo nombre en la
+   * misma sede dejan la venta sin saber a cual descontarle el stock.
+   */
+  saveProduct(product: ProductRegistration): Promise<ProductRegistrationResult>;
 
   /** Guarda un reparto de utilidades. */
   saveProfitDistribution(
