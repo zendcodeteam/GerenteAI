@@ -730,3 +730,341 @@ describe('SCRUM-32 · lo que devuelve el modelo', () => {
     expect(titulo('last_30_days')).toBe('📊 Resumen de los últimos 30 días:');
   });
 });
+
+// ===========================================================================
+// SCRUM-33 · casos minimos del bug de cambio de mes
+// ===========================================================================
+
+/**
+ * Los cinco casos minimos del ticket ya estan cubiertos por los describes de
+ * arriba, que llegaron junto con el arreglo:
+ *
+ *   1. "como me fue la semana pasada" en la primera semana del mes
+ *      -> "la semana pasada el 4 de noviembre va del lunes 26 al domingo 1"
+ *         y "estando el 4 de noviembre, la semana pasada suma octubre y
+ *         noviembre".
+ *   2. corregir un registro del mes anterior
+ *      -> "corrige un registro del 28 de octubre estando en noviembre".
+ *   3. consultas de "ayer" el dia 1 del mes
+ *      -> "ayer el dia 1 del mes es el ultimo dia del mes anterior" y
+ *         "ayer estando el dia 1 trae lo del ultimo dia del mes anterior".
+ *   4. cambio de año, de diciembre a enero, simulando fechas
+ *      -> "cambio de año: la semana pasada del 3 de enero queda en diciembre".
+ *   5. regresion de consultas dentro del mismo mes
+ *      -> "regresion: dentro del mismo mes los periodos de siempre no cambian"
+ *         y "regresion: este mes sigue contando solo el mes en curso".
+ *
+ * Volver a escribirlos no agrega cobertura. Lo que sigue son los bordes que
+ * quedaron sin prueba, y son justo donde el bug original hacia mas daño: el
+ * negocio que no cierra el dia 1 (para ese, TODOS los meses cruzan), el
+ * movimiento que se registra hoy pero es de octubre, el salto de año probado
+ * de punta a punta y el 29 de febrero.
+ */
+
+/** Un movimiento tal como lo devuelve el modelo. */
+type MovimientoDelModelo = NonNullable<
+  WhatsAppIntentOutput['movements']
+>[number];
+
+function movimiento(
+  parcial: Partial<MovimientoDelModelo> = {},
+): MovimientoDelModelo {
+  return {
+    type: 'expense',
+    amount: 50_000,
+    category: 'transporte',
+    concept: 'Taxi',
+    paymentMethod: null,
+    isCredit: false,
+    customerName: null,
+    productName: 'Taxi',
+    quantity: 1,
+    supplierName: null,
+    supplierCreditDays: null,
+    isSupplierCredit: false,
+    date: null,
+    ...parcial,
+  };
+}
+
+describe('SCRUM-33 · negocios cuyo mes no arranca el dia 1', () => {
+  /**
+   * Con corte el 21, el 4 de noviembre el periodo en curso va del 21 de
+   * octubre al 20 de noviembre. Para este negocio "este mes" SIEMPRE incluye
+   * parte del mes calendario anterior: si el rango se calculara sobre el mes
+   * de calendario, perderia veinte dias de movimientos en cada consulta.
+   */
+  const CUATRO_NOV = enBogota('2026-11-04');
+  const CORTE = 21;
+
+  it('"este mes" con corte el 21 arranca en octubre', async () => {
+    jest.useFakeTimers().setSystemTime(CUATRO_NOV);
+
+    const { service } = await servicio(
+      { type: 'query', queryKind: 'summary', queryPeriod: 'month' },
+      [
+        fila('2026-10-15', 900_000), // antes del corte: es del periodo pasado
+        fila('2026-10-22', 100_000),
+        fila('2026-11-03', 50_000),
+      ],
+    );
+
+    const result = await service.handleMessage({
+      ...REQUEST,
+      diaInicioPeriodo: CORTE,
+    });
+
+    expect(result.summary).toMatchObject({
+      from: '2026-10-21',
+      to: '2026-11-04',
+      income: 150_000,
+    });
+  });
+
+  it('"el mes pasado" con corte el 21 va del 21/09 al 20/10', async () => {
+    jest.useFakeTimers().setSystemTime(CUATRO_NOV);
+
+    const { service } = await servicio(
+      { type: 'query', queryKind: 'summary', queryPeriod: 'last_month' },
+      [
+        fila('2026-09-20', 900_000), // un dia antes: periodo aun anterior
+        fila('2026-09-21', 30_000), // primer dia, inclusive
+        fila('2026-10-20', 20_000), // ultimo dia, inclusive
+        fila('2026-10-21', 700_000), // ya es el periodo en curso
+      ],
+    );
+
+    const result = await service.handleMessage({
+      ...REQUEST,
+      diaInicioPeriodo: CORTE,
+    });
+
+    expect(result.summary).toMatchObject({
+      from: '2026-09-21',
+      to: '2026-10-20',
+      income: 50_000,
+    });
+  });
+
+  it('la busqueda por concepto respeta el corte del negocio', async () => {
+    jest.useFakeTimers().setSystemTime(CUATRO_NOV);
+
+    const transporte = (date: string, amount: number) =>
+      fila(date, amount, {
+        type: 'expense',
+        category: 'transporte',
+        description: 'Transporte',
+      });
+
+    const { service } = await servicio(
+      {
+        type: 'query',
+        queryKind: 'search',
+        concept: 'transporte',
+        queryPeriod: 'month',
+      },
+      [
+        transporte('2026-10-15', 900_000), // antes del corte: fuera
+        transporte('2026-10-25', 30_000),
+        transporte('2026-11-02', 20_000),
+      ],
+    );
+
+    const result = await service.handleMessage({
+      ...REQUEST,
+      diaInicioPeriodo: CORTE,
+    });
+
+    expect(result.replyText).toContain(
+      'Encontré 2 movimientos con "transporte" este mes',
+    );
+    expect(result.replyText).toContain('Total: $50.000');
+  });
+
+  it('regresion: con el mes calendario el rango es el de siempre', async () => {
+    jest.useFakeTimers().setSystemTime(CUATRO_NOV);
+
+    const { service } = await servicio(
+      { type: 'query', queryKind: 'summary', queryPeriod: 'month' },
+      [fila('2026-10-22', 900_000), fila('2026-11-03', 50_000)],
+    );
+
+    // El mismo negocio, el mismo dia, pero cerrando el mes calendario.
+    const result = await service.handleMessage({
+      ...REQUEST,
+      diaInicioPeriodo: 1,
+    });
+
+    expect(result.summary).toMatchObject({
+      from: '2026-11-01',
+      to: '2026-11-04',
+      income: 50_000,
+    });
+  });
+});
+
+describe('SCRUM-33 · registrar hoy un movimiento del mes pasado', () => {
+  /**
+   * El otro lado del bug: no basta con que las consultas miren hacia atras, el
+   * movimiento tiene que quedar guardado con SU fecha. Si se guardara con la
+   * de hoy, la consulta del mes pasado seguiria sin encontrarlo por mucho que
+   * el rango este bien.
+   */
+  const registrarYConsultar = async (
+    fechaDelGasto: string | null,
+    hoy: Date,
+  ) => {
+    jest.useFakeTimers().setSystemTime(hoy);
+
+    const financeData = new InMemoryFinanceDataAdapter();
+    const registro = await new WhatsAppMessageService(
+      fakeLlm({
+        type: 'expense',
+        movements: [movimiento({ date: fechaDelGasto, amount: 50_000 })],
+      }),
+      financeData,
+      new ConversationStateService(),
+    ).handleMessage({ ...REQUEST, persist: true });
+
+    const consultar = (queryPeriod: string) =>
+      new WhatsAppMessageService(
+        fakeLlm({ type: 'query', queryKind: 'summary', queryPeriod }),
+        financeData,
+        new ConversationStateService(),
+      ).handleMessage(REQUEST);
+
+    return { registro, consultar };
+  };
+
+  it('un gasto del 28 de octubre no entra en "este mes" y si en "el mes pasado"', async () => {
+    const { registro, consultar } = await registrarYConsultar(
+      '2026-10-28',
+      enBogota('2026-11-02'),
+    );
+
+    expect(registro.transactions[0].date).toBe('2026-10-28');
+    expect((await consultar('month')).summary?.expense).toBe(0);
+    expect((await consultar('last_month')).summary?.expense).toBe(50_000);
+  });
+
+  it('el dia 1, lo de ayer se guarda en el mes que ya cerro', async () => {
+    // "Ayer gaste 50.000 en taxi", escrito el 1 de noviembre.
+    const { registro, consultar } = await registrarYConsultar(
+      '2026-10-31',
+      enBogota('2026-11-01'),
+    );
+
+    expect(registro.transactions[0].date).toBe('2026-10-31');
+    expect((await consultar('yesterday')).summary?.expense).toBe(50_000);
+    expect((await consultar('month')).summary?.expense).toBe(0);
+  });
+});
+
+describe('SCRUM-33 · el cambio de año de punta a punta', () => {
+  it('"ayer" el 1 de enero trae lo del 31 de diciembre', async () => {
+    jest.useFakeTimers().setSystemTime(enBogota('2027-01-01'));
+
+    const { service } = await servicio(
+      { type: 'query', queryKind: 'summary', queryPeriod: 'yesterday' },
+      [fila('2026-12-31', 120_000), fila('2027-01-01', 7_000)],
+    );
+
+    const result = await service.handleMessage(REQUEST);
+
+    expect(result.summary).toMatchObject({
+      from: '2026-12-31',
+      to: '2026-12-31',
+      income: 120_000,
+    });
+  });
+
+  it('corrige un registro del 30 de diciembre estando el 2 de enero', async () => {
+    jest.useFakeTimers().setSystemTime(enBogota('2027-01-02'));
+
+    const delAnioPasado = fila('2026-12-30', 80_000, {
+      type: 'expense',
+      category: 'servicios',
+      description: 'Luz',
+    });
+    const { service, financeData } = await servicio(
+      {
+        type: 'correction',
+        correction: correccion({
+          referenceDate: '2026-12-30',
+          newAmount: 95_000,
+        }),
+      },
+      [delAnioPasado, fila('2027-01-02', 10_000)],
+    );
+
+    const result = await service.handleMessage({ ...REQUEST, persist: true });
+
+    expect(result.replyText).toContain('Corregido');
+    const filas = await financeData.listTransactions({ businessId: 'b1' });
+    expect(filas.find((row) => row.id === delAnioPasado.id)?.amount).toBe(
+      95_000,
+    );
+  });
+
+  it('"los ultimos 10 dias" el 5 de enero incluye diciembre', async () => {
+    jest.useFakeTimers().setSystemTime(enBogota('2027-01-05'));
+
+    const { service } = await servicio(
+      { type: 'query', queryKind: 'summary', queryPeriod: 'last_10_days' },
+      [
+        fila('2026-12-26', 900_000), // un dia antes del rango
+        fila('2026-12-28', 40_000),
+        fila('2027-01-04', 60_000),
+      ],
+    );
+
+    const result = await service.handleMessage(REQUEST);
+
+    expect(result.summary).toMatchObject({
+      from: '2026-12-27',
+      to: '2027-01-05',
+      income: 100_000,
+    });
+  });
+});
+
+describe('SCRUM-33 · febrero y el año bisiesto', () => {
+  it('"ayer" el 1 de marzo de 2028 es el 29 de febrero', () => {
+    expect(periodRange('yesterday', enBogota('2028-03-01'))).toEqual({
+      from: '2028-02-29',
+      to: '2028-02-29',
+    });
+  });
+
+  it('"el mes pasado" en marzo de 2028 abarca los 29 dias de febrero', () => {
+    expect(periodRange('last_month', enBogota('2028-03-02'))).toEqual({
+      from: '2028-02-01',
+      to: '2028-02-29',
+    });
+  });
+
+  it('un gasto del 29 de febrero aparece en "el mes pasado" el 2 de marzo', async () => {
+    jest.useFakeTimers().setSystemTime(enBogota('2028-03-02'));
+
+    const { service } = await servicio(
+      { type: 'query', queryKind: 'summary', queryPeriod: 'last_month' },
+      [
+        fila('2028-02-29', 60_000, {
+          type: 'expense',
+          category: 'transporte',
+          description: 'Taxi',
+        }),
+        fila('2028-03-01', 900_000),
+      ],
+    );
+
+    const result = await service.handleMessage(REQUEST);
+
+    expect(result.summary).toMatchObject({
+      from: '2028-02-01',
+      to: '2028-02-29',
+      expense: 60_000,
+      income: 0,
+    });
+  });
+});
