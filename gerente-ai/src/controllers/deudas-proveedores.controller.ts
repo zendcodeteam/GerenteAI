@@ -56,6 +56,11 @@ export class DeudasProveedoresController {
     );
   }
 
+  @Get(':id/plan')
+  plan(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.deudasProveedoresService.plan(id, user.userId, user.rolGlobal);
+  }
+
   @Patch(':id')
   update(
     @Param('id') id: string,

@@ -10,6 +10,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from './prisma.service';
 import { NegociosService } from './negocios.service';
+import { planDeDeudaProveedor } from './plan-deuda-proveedor';
 import { CreateDeudaProveedorDto } from '../dto/deudas-proveedores/create-deuda-proveedor.dto';
 import { UpdateDeudaProveedorDto } from '../dto/deudas-proveedores/update-deuda-proveedor.dto';
 
@@ -108,6 +109,12 @@ export class DeudasProveedoresService {
     const deuda = await this.cargar(id);
     await this.verificarAccesoADeuda(deuda.sedeId, userId, rolGlobal);
     return deuda;
+  }
+
+  /** Calendario de cuotas de la deuda; mismo acceso que consultarla. */
+  async plan(id: string, userId: string, rolGlobal: string) {
+    const deuda = await this.findOne(id, userId, rolGlobal);
+    return { deudaId: deuda.id, ...planDeDeudaProveedor(deuda) };
   }
 
   async update(
