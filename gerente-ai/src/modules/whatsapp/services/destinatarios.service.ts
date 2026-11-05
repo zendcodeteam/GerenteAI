@@ -50,16 +50,6 @@ export interface ResumenNocturno extends Destinatario {
   movimientos: number;
 }
 
-/** Un fiado que lleva dias sin cobrarse. */
-export interface FiadoPorCobrar extends Destinatario {
-  ventaId: string;
-  cliente: string;
-  saldo: number;
-  /** Dias transcurridos desde que se registro el fiado. */
-  diasTranscurridos: number;
-  fecha: string;
-}
-
 @Injectable()
 export class DestinatariosService {
   private readonly logger = new Logger(DestinatariosService.name);
@@ -91,100 +81,6 @@ export class DestinatariosService {
     );
 
     return pendientes;
-  }
-
-  /**
-   * Fiados que llevan `diasLimite` dias sin cobrarse y de los que todavia no se
-   * ha avisado.
-   *
-   * El aviso se marca como enviado al servirlo, no despues: si se marcara al
-   * final, dos ejecuciones simultaneas mandarian el mismo recordatorio dos
-   * veces. Se prefiere el riesgo de perder uno al de repetirlo cada dia.
-   */
-  async fiadosPorCobrar(
-    diasLimite: number,
-    ahora = new Date(),
-  ): Promise<FiadoPorCobrar[]> {
-    const limite = new Date(ahora.getTime() - diasLimite * 86_400_000);
-
-    const ventas = await this.prisma.venta.findMany({
-      where: {
-        tipo: 'FIADO',
-        // Si ya lo pagaron, `saldoPendiente` quedo en 0 y no hay nada que cobrar.
-        saldoPendiente: { gt: 0 },
-        fecha: { lte: limite },
-
-        // RecordatorioFiado es una relacion opcional singular, no una lista.
-        // Por eso se busca que no exista un recordatorio asociado.
-        recordatorios: { is: null },
-      },
-      include: {
-        sede: { include: { negocio: true } },
-      },
-      orderBy: { fecha: 'asc' },
-      take: 200,
-    });
-
-    const alcanzables = new Map(
-      (await this.sedesAlcanzables()).map((destino) => [
-        destino.sedeId,
-        destino,
-      ]),
-    );
-
-    const pendientes: FiadoPorCobrar[] = [];
-
-    for (const venta of ventas) {
-      const destino = alcanzables.get(venta.sedeId);
-
-      if (!destino) {
-        // Sin forma de escribirle al duenno, avisar es imposible. No se marca
-        // como enviado para que se recupere cuando registre su linea.
-        this.logger.warn(
-          `Fiado ${venta.id} sin destinatario alcanzable en la sede ${venta.sedeId}.`,
-        );
-        continue;
-      }
-
-      let cliente = 'un cliente';
-
-      if (venta.clienteId) {
-        const clienteEncontrado = await this.prisma.cliente.findUnique({
-          where: { id: venta.clienteId },
-          select: { nombre: true },
-        });
-
-        cliente = clienteEncontrado?.nombre ?? 'un cliente';
-      }
-
-      pendientes.push({
-        ...destino,
-        ventaId: venta.id,
-        cliente,
-        saldo: Number(venta.saldoPendiente),
-        diasTranscurridos: Math.floor(
-          (ahora.getTime() - venta.fecha.getTime()) / 86_400_000,
-        ),
-        fecha: fechaColombiana(venta.fecha),
-      });
-    }
-
-    return pendientes;
-  }
-
-  /** Deja constancia de que ya se aviso por estos fiados. */
-  async marcarFiadosAvisados(fiados: FiadoPorCobrar[]): Promise<void> {
-    if (fiados.length === 0) return;
-
-    await this.prisma.recordatorioFiado.createMany({
-      data: fiados.map((fiado) => ({
-        ventaId: fiado.ventaId,
-        saldo: fiado.saldo,
-      })),
-
-      // Si otra ejecucion se adelanto, no es un error: el aviso ya salio.
-      skipDuplicates: true,
-    });
   }
 
   /** Sedes con actividad financiera para recibir el resumen de las 21:00. */
