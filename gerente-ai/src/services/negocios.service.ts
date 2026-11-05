@@ -1,3 +1,4 @@
+import { UserContextCacheService } from './user-context-cache.service';
 import {
   Injectable,
   ForbiddenException,
@@ -5,10 +6,7 @@ import {
 } from '@nestjs/common';
 
 import { PrismaService } from './prisma.service';
-import {
-  PlanesService,
-  PLAN_ASISTENTE,
-} from './planes.service';
+import { PlanesService, PLAN_ASISTENTE } from './planes.service';
 
 import { CreateNegocioDto } from '../dto/negocios/create-negocio.dto';
 import { UpdateNegocioDto } from '../dto/negocios/update-negocio.dto';
@@ -18,20 +16,14 @@ import type { Ciclo } from '../dto/negocios/cambiar-plan.dto';
 import { Prisma, Sede } from '@prisma/client';
 
 /** Lo mínimo que hace falta de una sede para resolver permisos y plan. */
-export type SedeParaAcceso = Pick<
-  Sede,
-  'id' | 'negocioId' | 'createdAt'
->;
+export type SedeParaAcceso = Pick<Sede, 'id' | 'negocioId' | 'createdAt'>;
 
 /**
  * Valor que se le pasa a Prisma como `where.sedeId` en un listado:
  * una sede concreta, el conjunto de las visibles,
  * o `undefined` para no filtrar (MASTER).
  */
-export type FiltroDeSede =
-  | string
-  | { in: string[] }
-  | undefined;
+export type FiltroDeSede = string | { in: string[] } | undefined;
 
 /** Un ciclo mensual son 30 días y uno anual 365. */
 function diasDelCiclo(ciclo: Ciclo): number {
@@ -43,6 +35,7 @@ export class NegociosService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly planes: PlanesService,
+    private readonly userCache?: UserContextCacheService,
   ) {}
 
   // ============================================================
@@ -50,10 +43,7 @@ export class NegociosService {
   // ============================================================
 
   // Quien crea el negocio queda como dueño en la misma transacción.
-  async create(
-    userId: string,
-    createNegocioDto: CreateNegocioDto,
-  ) {
+  async create(userId: string, createNegocioDto: CreateNegocioDto) {
     return this.prisma.$transaction(async (tx) => {
       const negocio = await tx.negocio.create({
         data: createNegocioDto,
@@ -72,10 +62,7 @@ export class NegociosService {
         select: { telefono: true },
       });
 
-      const telefono = await this.telefonoLibre(
-        tx,
-        duenno?.telefono,
-      );
+      const telefono = await this.telefonoLibre(tx, duenno?.telefono);
 
       const sede = await tx.sede.create({
         data: {
@@ -93,6 +80,7 @@ export class NegociosService {
         },
       });
 
+      this.userCache?.invalidateUser(userId);
       return negocio;
     });
   }
@@ -111,9 +99,7 @@ export class NegociosService {
       return null;
     }
 
-    const normalizado = /^3\d{9}$/.test(digitos)
-      ? `57${digitos}`
-      : digitos;
+    const normalizado = /^3\d{9}$/.test(digitos) ? `57${digitos}` : digitos;
 
     const ocupado = await tx.sede.findUnique({
       where: { telefono: normalizado },
@@ -128,10 +114,7 @@ export class NegociosService {
   // ============================================================
 
   /** Solo los negocios del usuario. MASTER los ve todos. */
-  findAll(
-    usuarioId: string,
-    rolGlobal: string,
-  ) {
+  findAll(usuarioId: string, rolGlobal: string) {
     if (rolGlobal === 'MASTER') {
       return this.prisma.negocio.findMany();
     }
@@ -146,34 +129,27 @@ export class NegociosService {
   }
 
   async findOne(id: string, usuarioId: string, rolGlobal: string) {
-  const negocio = await this.cargar(id);
+    const negocio = await this.cargar(id);
 
-  await this.verificarPropietario(
-    usuarioId,
-    id,
-    rolGlobal,
-  );
+    await this.verificarPropietario(usuarioId, id, rolGlobal);
 
-  const estado = this.planes.estado(
-    negocio.plan,
-    negocio.planVenceEl,
-  );
+    const estado = this.planes.estado(negocio.plan, negocio.planVenceEl);
 
-  return {
-    ...negocio,
+    return {
+      ...negocio,
 
-    // Plan contratado originalmente.
-    plan: negocio.plan,
+      // Plan contratado originalmente.
+      plan: negocio.plan,
 
-    // Plan que realmente puede utilizar actualmente.
-    planVigente: estado.vigente.id,
+      // Plan que realmente puede utilizar actualmente.
+      planVigente: estado.vigente.id,
 
-    // Indica si el plan contratado ya perdió vigencia.
-    planVencido: estado.vencido,
+      // Indica si el plan contratado ya perdió vigencia.
+      planVencido: estado.vencido,
 
-    // Se conserva la fecha original para mostrar información
-    // de vencimiento en la interfaz.
-    planVenceEl: negocio.planVenceEl,
+      // Se conserva la fecha original para mostrar información
+      // de vencimiento en la interfaz.
+      planVenceEl: negocio.planVenceEl,
     };
   }
 
@@ -181,15 +157,12 @@ export class NegociosService {
    * Carga sin comprobar permisos.
    */
   private async cargar(id: string) {
-    const negocio =
-      await this.prisma.negocio.findUnique({
-        where: { id },
-      });
+    const negocio = await this.prisma.negocio.findUnique({
+      where: { id },
+    });
 
     if (!negocio) {
-      throw new NotFoundException(
-        `Negocio con id ${id} no encontrado`,
-      );
+      throw new NotFoundException(`Negocio con id ${id} no encontrado`);
     }
 
     return negocio;
@@ -207,11 +180,7 @@ export class NegociosService {
   ) {
     await this.cargar(id);
 
-    await this.verificarPropietario(
-      userId,
-      id,
-      rolGlobal,
-    );
+    await this.verificarPropietario(userId, id, rolGlobal);
 
     return this.prisma.negocio.update({
       where: { id },
@@ -223,18 +192,10 @@ export class NegociosService {
   // ELIMINAR NEGOCIO
   // ============================================================
 
-  async remove(
-    id: string,
-    userId: string,
-    rolGlobal: string,
-  ) {
+  async remove(id: string, userId: string, rolGlobal: string) {
     await this.cargar(id);
 
-    await this.verificarPropietario(
-      userId,
-      id,
-      rolGlobal,
-    );
+    await this.verificarPropietario(userId, id, rolGlobal);
 
     return this.prisma.negocio.delete({
       where: { id },
@@ -264,12 +225,7 @@ export class NegociosService {
       );
     }
 
-    return this.activarPlan(
-      negocioId,
-      plan,
-      ciclo,
-      { venceEl },
-    );
+    return this.activarPlan(negocioId, plan, ciclo, { venceEl });
   }
 
   // ============================================================
@@ -302,20 +258,12 @@ export class NegociosService {
     usuarioId: string,
     rolGlobal: string,
   ) {
-    const negocio =
-      await this.cargar(negocioId);
+    const negocio = await this.cargar(negocioId);
 
-    await this.verificarPropietario(
-      usuarioId,
-      negocioId,
-      rolGlobal,
-    );
+    await this.verificarPropietario(usuarioId, negocioId, rolGlobal);
 
     // Ya está en Asistente.
-    if (
-      negocio.plan === PLAN_ASISTENTE &&
-      negocio.planVenceEl === null
-    ) {
+    if (negocio.plan === PLAN_ASISTENTE && negocio.planVenceEl === null) {
       return negocio;
     }
 
@@ -353,18 +301,14 @@ export class NegociosService {
       tx?: Prisma.TransactionClient;
     } = {},
   ) {
-    const tx =
-      opciones.tx ?? this.prisma;
+    const tx = opciones.tx ?? this.prisma;
 
-    const negocio =
-      await tx.negocio.findUnique({
-        where: { id: negocioId },
-      });
+    const negocio = await tx.negocio.findUnique({
+      where: { id: negocioId },
+    });
 
     if (!negocio) {
-      throw new NotFoundException(
-        `Negocio con id ${negocioId} no encontrado`,
-      );
+      throw new NotFoundException(`Negocio con id ${negocioId} no encontrado`);
     }
 
     return tx.negocio.update({
@@ -372,8 +316,7 @@ export class NegociosService {
       data: {
         plan,
         planVenceEl:
-          opciones.venceEl &&
-          plan !== PLAN_ASISTENTE
+          opciones.venceEl && plan !== PLAN_ASISTENTE
             ? opciones.venceEl
             : this.nuevoVencimiento(
                 negocio,
@@ -408,18 +351,12 @@ export class NegociosService {
     }
 
     const ahora = Date.now();
-    const vigente =
-      negocio.planVenceEl?.getTime() ?? 0;
+    const vigente = negocio.planVenceEl?.getTime() ?? 0;
 
-    const acumula =
-      renovacion &&
-      plan === negocio.plan &&
-      vigente > ahora;
+    const acumula = renovacion && plan === negocio.plan && vigente > ahora;
 
     return new Date(
-      (acumula ? vigente : ahora) +
-        diasDelCiclo(ciclo) *
-          86_400_000,
+      (acumula ? vigente : ahora) + diasDelCiclo(ciclo) * 86_400_000,
     );
   }
 
@@ -427,16 +364,10 @@ export class NegociosService {
   // ESTADO DEL PLAN
   // ============================================================
 
-  async estadoDelPlan(
-    negocioId: string,
-  ) {
-    const negocio =
-      await this.cargar(negocioId);
+  async estadoDelPlan(negocioId: string) {
+    const negocio = await this.cargar(negocioId);
 
-    return this.planes.estado(
-      negocio.plan,
-      negocio.planVenceEl,
-    );
+    return this.planes.estado(negocio.plan, negocio.planVenceEl);
   }
 
   // ============================================================
@@ -452,20 +383,17 @@ export class NegociosService {
       return;
     }
 
-    const relacion =
-      await this.prisma.usuarioNegocio.findUnique({
-        where: {
-          usuarioId_negocioId: {
-            usuarioId,
-            negocioId,
-          },
+    const relacion = await this.prisma.usuarioNegocio.findUnique({
+      where: {
+        usuarioId_negocioId: {
+          usuarioId,
+          negocioId,
         },
-      });
+      },
+    });
 
     if (!relacion) {
-      throw new ForbiddenException(
-        'No tienes permisos sobre este negocio',
-      );
+      throw new ForbiddenException('No tienes permisos sobre este negocio');
     }
   }
 
@@ -481,10 +409,12 @@ export class NegociosService {
       return null;
     }
 
-    const [
-      porNegocio,
-      porVinculo,
-    ] = await Promise.all([
+    const enCache = this.userCache?.getSedesVisibles(usuarioId, rolGlobal);
+    if (enCache !== undefined) {
+      return enCache;
+    }
+
+    const [porNegocio, porVinculo] = await Promise.all([
       this.prisma.sede.findMany({
         where: {
           negocio: {
@@ -502,16 +432,15 @@ export class NegociosService {
       }),
     ]);
 
-    return [
+    const resultado = [
       ...new Set([
-        ...porNegocio.map(
-          (sede) => sede.id,
-        ),
-        ...porVinculo.map(
-          (vinculo) => vinculo.sedeId,
-        ),
+        ...porNegocio.map((sede) => sede.id),
+        ...porVinculo.map((vinculo) => vinculo.sedeId),
       ]),
     ];
+
+    this.userCache?.setSedesVisibles(usuarioId, rolGlobal, resultado);
+    return resultado;
   }
 
   // ============================================================
@@ -524,35 +453,22 @@ export class NegociosService {
     sedeId?: string,
   ): Promise<FiltroDeSede> {
     if (sedeId) {
-      const sede =
-        await this.prisma.sede.findUnique({
-          where: { id: sedeId },
-        });
+      const sede = await this.prisma.sede.findUnique({
+        where: { id: sedeId },
+      });
 
       if (!sede) {
-        throw new NotFoundException(
-          'La sede indicada no existe',
-        );
+        throw new NotFoundException('La sede indicada no existe');
       }
 
-      await this.verificarAccesoSede(
-        usuarioId,
-        sede,
-        rolGlobal,
-      );
+      await this.verificarAccesoSede(usuarioId, sede, rolGlobal);
 
       return sedeId;
     }
 
-    const visibles =
-      await this.sedesVisibles(
-        usuarioId,
-        rolGlobal,
-      );
+    const visibles = await this.sedesVisibles(usuarioId, rolGlobal);
 
-    return visibles === null
-      ? undefined
-      : { in: visibles };
+    return visibles === null ? undefined : { in: visibles };
   }
 
   // ============================================================
@@ -571,8 +487,12 @@ export class NegociosService {
       return;
     }
 
-    const esDuenoDelNegocio =
-      await this.prisma.usuarioNegocio.findUnique({
+    const permisosCache = this.userCache?.getSedePermission(usuarioId, sede.id);
+    let esDuenoDelNegocio = permisosCache?.esDueno;
+    let esMiembroDeLaSede = permisosCache?.esMiembro;
+
+    if (permisosCache === undefined) {
+      const relacionDueno = await this.prisma.usuarioNegocio.findUnique({
         where: {
           usuarioId_negocioId: {
             usuarioId,
@@ -580,32 +500,34 @@ export class NegociosService {
           },
         },
       });
+      esDuenoDelNegocio = !!relacionDueno;
 
-    const esMiembroDeLaSede =
-      esDuenoDelNegocio
-        ? null
-        : await this.prisma.usuarioSede.findUnique({
-            where: {
-              usuarioId_sedeId: {
-                usuarioId,
-                sedeId: sede.id,
-              },
+      if (esDuenoDelNegocio) {
+        esMiembroDeLaSede = false;
+      } else {
+        const relacionMiembro = await this.prisma.usuarioSede.findUnique({
+          where: {
+            usuarioId_sedeId: {
+              usuarioId,
+              sedeId: sede.id,
             },
-          });
+          },
+        });
+        esMiembroDeLaSede = !!relacionMiembro;
+      }
 
-    if (
-      !esDuenoDelNegocio &&
-      !esMiembroDeLaSede
-    ) {
-      throw new ForbiddenException(
-        'No tienes permisos sobre esta sede',
-      );
+      this.userCache?.setSedePermission(usuarioId, sede.id, {
+        esDueno: esDuenoDelNegocio,
+        esMiembro: esMiembroDeLaSede,
+      });
+    }
+
+    if (!esDuenoDelNegocio && !esMiembroDeLaSede) {
+      throw new ForbiddenException('No tienes permisos sobre esta sede');
     }
 
     if (opciones.escritura) {
-      await this.verificarSedeHabilitadaPorPlan(
-        sede,
-      );
+      await this.verificarSedeHabilitadaPorPlan(sede);
     }
   }
 
@@ -613,53 +535,30 @@ export class NegociosService {
   // SEDES HABILITADAS POR PLAN
   // ============================================================
 
-  private async verificarSedeHabilitadaPorPlan(
-    sede: SedeParaAcceso,
-  ) {
-    const negocio =
-      await this.cargar(
-        sede.negocioId,
-      );
+  private async verificarSedeHabilitadaPorPlan(sede: SedeParaAcceso) {
+    const negocio = await this.cargar(sede.negocioId);
 
-    const estado =
-      this.planes.estado(
-        negocio.plan,
-        negocio.planVenceEl,
-      );
+    const estado = this.planes.estado(negocio.plan, negocio.planVenceEl);
 
-    const tope =
-      estado.vigente.maxSedes;
+    const tope = estado.vigente.maxSedes;
 
-    if (
-      tope ===
-      Number.POSITIVE_INFINITY
-    ) {
+    if (tope === Number.POSITIVE_INFINITY) {
       return;
     }
 
-    const habilitadas =
-      await this.prisma.sede.findMany({
-        where: {
-          negocioId: sede.negocioId,
-        },
-        orderBy: [
-          { createdAt: 'asc' },
-          { id: 'asc' },
-        ],
-        take: tope,
-        select: { id: true },
-      });
+    const habilitadas = await this.prisma.sede.findMany({
+      where: {
+        negocioId: sede.negocioId,
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: tope,
+      select: { id: true },
+    });
 
-    if (
-      !habilitadas.some(
-        (habilitada) =>
-          habilitada.id === sede.id,
-      )
-    ) {
-      const motivo =
-        estado.vencido
-          ? `El plan ${estado.contratado.nombre} venció, así que solo la primera sede sigue habilitada para registrar información`
-          : `El plan ${estado.vigente.nombre} permite operar en ${tope} sede(s)`;
+    if (!habilitadas.some((habilitada) => habilitada.id === sede.id)) {
+      const motivo = estado.vencido
+        ? `El plan ${estado.contratado.nombre} venció, así que solo la primera sede sigue habilitada para registrar información`
+        : `El plan ${estado.vigente.nombre} permite operar en ${tope} sede(s)`;
 
       throw new ForbiddenException(
         `${motivo}. Esta sede queda en solo lectura hasta que se active un plan superior.`,
