@@ -207,6 +207,15 @@ export interface MovementDraft {
   /** A quien se le fio, cuando se menciona. */
   customerName: string | null;
   /**
+   * Fecha maxima de pago acordada para un fiado, en YYYY-MM-DD.
+   *
+   * Solo aplica cuando `isCredit` es true, y entonces es obligatoria: sin
+   * plazo no hay deuda vencida, nadie sabe cuando cobrar y el recordatorio de
+   * fiados no tiene contra que comparar. null = el usuario no la dijo todavia
+   * y el sistema se la pregunta antes de guardar.
+   */
+  dueDate: string | null;
+  /**
    * Cuantas unidades, cuando el mensaje o la factura lo dicen.
    *
    * No cambia el monto (ese ya viene total), pero se conserva en la
@@ -424,6 +433,11 @@ export interface Transaction {
   pendingAmount?: number | null;
   /** Cliente al que se le fio. */
   customerName?: string | null;
+  /**
+   * Fecha maxima de pago del fiado, en YYYY-MM-DD. La acuerda el usuario con
+   * su cliente y se la pregunta Luka al registrar. null en lo que no es fiado.
+   */
+  dueDate?: string | null;
   productName?: string | null;
   productId?: string | null;
   quantity?: number | null;

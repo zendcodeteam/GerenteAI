@@ -14,7 +14,7 @@ import type {
   TransactionChanges,
 } from '../ports/finance-data.port';
 import type { WhatsAppIntentOutput } from '../prompts/whatsapp-assistant.prompt';
-import { fechaColombiana } from '../domain/dia-colombia';
+import { fechaColombiana, sumarDias } from '../domain/dia-colombia';
 import {
   WhatsAppMessageService,
   checkBreakdown,
@@ -80,6 +80,13 @@ function movimiento(
     ...parcial,
   };
 }
+
+/**
+ * Un plazo valido para un fiado: tiene que ser futuro, asi que se calcula
+ * sobre el dia de hoy en vez de escribirse a mano. Una fecha fija habria
+ * funcionado hasta que llegara ese dia.
+ */
+const PLAZO = sumarDias(fechaColombiana(new Date()), 7);
 
 const SEED: Transaction[] = [
   {
@@ -1016,6 +1023,7 @@ describe('WhatsAppMessageService - fiados', () => {
           concept: 'Venta fiada a dona Rosa',
           isCredit: true,
           customerName: 'Dona Rosa',
+          dueDate: PLAZO,
         }),
       ],
       responseText: 'ok',
@@ -2146,6 +2154,7 @@ describe('WhatsAppMessageService · un fiado necesita saber de quién es', () =>
           concept: 'Venta fiada',
           isCredit: true,
           customerName: 'Doña Rosa',
+          dueDate: PLAZO,
         }),
       ],
       responseText: 'Registré el fiado de doña Rosa.',
@@ -3987,5 +3996,214 @@ describe('SCRUM-22 · los registros se numeran', () => {
     });
 
     expect(result.replyText).not.toContain('1)');
+  });
+});
+
+// ===========================================================================
+// SCRUM-43 · todo fiado nace con fecha maxima de pago
+// ===========================================================================
+
+/**
+ * El plazo se inventaba: el adaptador le sumaba 30 dias a la venta. Como ese
+ * plazo no lo habia acordado nadie, el recordatorio de cobro salia cuando no
+ * tocaba. Ahora lo dice el usuario, y si no lo dice, Luka lo pregunta antes de
+ * guardar nada.
+ */
+describe('WhatsAppMessageService · la fecha maxima de pago de un fiado', () => {
+  const fiado = (parcial: Record<string, unknown> = {}) =>
+    buildService({
+      type: 'income',
+      movements: [
+        movimiento({
+          type: 'income',
+          amount: 50_000,
+          category: 'ventas',
+          concept: 'Venta fiada a doña Rosa',
+          isCredit: true,
+          customerName: 'Doña Rosa',
+          ...parcial,
+        }),
+      ],
+      responseText: 'ok',
+    });
+
+  it('la pregunta cuando el usuario no la dijo, y no guarda nada', async () => {
+    const { service, financeData } = fiado({ dueDate: null });
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    expect(financeData.saved).toHaveLength(0);
+    expect(result.intent.type).toBe('unclear');
+    expect(result.replyText).toContain('¿Para cuándo quedó de pagarte');
+    expect(result.replyText).toContain('Doña Rosa');
+  });
+
+  it('la pregunta sugiriendo como contestarla', async () => {
+    // Quien no sabe que formato espera el sistema contesta cualquier cosa y
+    // acaba en un ida y vuelta de tres mensajes.
+    const { service } = fiado({ dueDate: null });
+
+    const result = await service.handleMessage(BASE_REQUEST);
+
+    expect(result.replyText).toContain('el viernes');
+    expect(result.replyText).toContain('fin de mes');
+  });
+
+  it('la guarda en el fiado cuando viene', async () => {
+    const { service, financeData } = fiado({ dueDate: PLAZO });
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    expect(result.transactions[0].dueDate).toBe(PLAZO);
+    expect(financeData.saved[0].dueDate).toBe(PLAZO);
+    expect(financeData.saved[0].isCredit).toBe(true);
+  });
+
+  it('la muestra en la confirmacion', async () => {
+    // El dueño tiene que poder ver que Luka entendio el plazo que acordo; si
+    // no se lo enseña, el error se descubre el dia que va a cobrar.
+    const { service } = fiado({ dueDate: PLAZO });
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    expect(result.replyText).toContain('Te paga el');
+  });
+
+  it('una fecha que ya paso se trata como si no la hubiera dicho', async () => {
+    // Un plazo vencido no es un plazo. Preguntar de nuevo es mejor que
+    // guardar una deuda que nace con el recordatorio ya disparado.
+    const ayer = sumarDias(fechaColombiana(new Date()), -1);
+    const { service, financeData } = fiado({ dueDate: ayer });
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    expect(financeData.saved).toHaveLength(0);
+    expect(result.replyText).toContain('¿Para cuándo quedó de pagarte');
+  });
+
+  it('hoy tampoco sirve: el plazo tiene que ser futuro', async () => {
+    const { service, financeData } = fiado({
+      dueDate: fechaColombiana(new Date()),
+    });
+
+    await service.handleMessage({ ...BASE_REQUEST, persist: true });
+
+    expect(financeData.saved).toHaveLength(0);
+  });
+
+  it('descarta un dia que no existe en el calendario', async () => {
+    // "2026-11-31" pasa el formato pero se desborda a diciembre: si se
+    // guardara, el plazo quedaria un dia despues del que se acordo.
+    const { service, financeData } = fiado({ dueDate: '2026-11-31' });
+
+    await service.handleMessage({ ...BASE_REQUEST, persist: true });
+
+    expect(financeData.saved).toHaveLength(0);
+  });
+
+  it('descarta un plazo absurdo: a mas de un año no es un fiado', async () => {
+    const { service, financeData } = fiado({
+      dueDate: sumarDias(fechaColombiana(new Date()), 400),
+    });
+
+    await service.handleMessage({ ...BASE_REQUEST, persist: true });
+
+    expect(financeData.saved).toHaveLength(0);
+  });
+
+  it('una venta de contado no pide plazo ninguno', async () => {
+    const { service, financeData } = buildService({
+      type: 'income',
+      movements: [
+        movimiento({
+          type: 'income',
+          amount: 50_000,
+          category: 'ventas',
+          concept: 'Venta del dia',
+        }),
+      ],
+      responseText: 'ok',
+    });
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    expect(financeData.saved).toHaveLength(1);
+    expect(result.transactions[0].dueDate).toBeNull();
+    expect(result.replyText).not.toContain('paga el');
+  });
+
+  it('con varios fiados pregunta por el primero al que le falta el plazo', async () => {
+    const { service, financeData } = buildService({
+      type: 'income',
+      movements: [
+        movimiento({
+          type: 'income',
+          amount: 50_000,
+          category: 'ventas',
+          concept: 'Fiado a Rosa',
+          isCredit: true,
+          customerName: 'Rosa',
+          dueDate: PLAZO,
+        }),
+        movimiento({
+          type: 'income',
+          amount: 30_000,
+          category: 'ventas',
+          concept: 'Fiado a Juan',
+          isCredit: true,
+          customerName: 'Juan',
+          dueDate: null,
+        }),
+      ],
+      responseText: 'ok',
+    });
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    // Ninguno se guarda a medias: o entran los dos completos, o no entra nada.
+    expect(financeData.saved).toHaveLength(0);
+    expect(result.replyText).toContain('Juan');
+  });
+
+  it('primero pregunta de quien es, y solo despues el plazo', async () => {
+    // Las dos preguntas no se pueden hacer juntas sin marear: el nombre va
+    // primero porque sin el la deuda no tiene dueño.
+    const { service } = buildService({
+      type: 'income',
+      movements: [
+        movimiento({
+          type: 'income',
+          amount: 20_000,
+          category: 'ventas',
+          concept: 'Venta fiada',
+          isCredit: true,
+          customerName: null,
+          dueDate: null,
+        }),
+      ],
+      responseText: 'ok',
+    });
+
+    const result = await service.handleMessage(BASE_REQUEST);
+
+    expect(result.replyText).toContain('¿A quién le fiaste?');
   });
 });
