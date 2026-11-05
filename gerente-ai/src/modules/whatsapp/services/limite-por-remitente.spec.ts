@@ -134,6 +134,9 @@ describe('WhatsappInterpretService · límite por remitente', () => {
       new MessageDedupeService(),
       prisma,
       { get: () => undefined } as unknown as ConfigService,
+      // La cuota de IA no interviene en estas pruebas, y el parámetro es
+      // opcional en el servicio.
+      undefined,
       limite,
     );
 

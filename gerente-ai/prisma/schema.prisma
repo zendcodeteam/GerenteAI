@@ -100,6 +100,7 @@ model Sede {
   productos          Producto[]
   proveedores        Proveedor[]
   repartos           RepartoUtilidad[]
+  pagosNomina        PagoNomina[]
   reportes           Reporte[]
   bitacorasAuditoria BitacoraAuditoria[]
   dashboardConfigs   DashboardConfig[]
@@ -201,7 +202,9 @@ model Producto {
   sede           Sede            @relation(fields: [sedeId], references: [id], onDelete: Cascade)
 
   @@index([sedeId])
-  @@index([categoria])
+  @@index([sedeId, categoria])
+  @@index([sedeId, nombre])
+  @@index([sedeId, stock])
 }
 
 model Cliente {
@@ -213,6 +216,11 @@ model Cliente {
   abonos         Abono[]
   sede           Sede    @relation(fields: [sedeId], references: [id], onDelete: Cascade)
   ventas         Venta[]
+
+  @@index([sedeId])
+  @@index([sedeId, saldoPendiente])
+  @@index([sedeId, telefono])
+  @@index([sedeId, nombre])
 }
 
 model Proveedor {
@@ -254,6 +262,8 @@ model Venta {
   @@index([sedeId, fecha])
   @@index([clienteId, saldoPendiente])
   @@index([grupoId])
+  @@index([sedeId, tipo, saldoPendiente])
+  @@index([sedeId, saldoPendiente, fechaVencimiento])
 }
 
 model RecordatorioFiado {
@@ -277,6 +287,7 @@ model DetalleVenta {
   venta      Venta    @relation(fields: [ventaId], references: [id], onDelete: Cascade)
 
   @@index([productoId])
+  @@index([ventaId])
 }
 
 model Compra {
@@ -291,6 +302,7 @@ model Compra {
   cuentaPorPagar CuentaPorPagarProveedor?
 
   @@index([sedeId, fecha])
+  @@index([proveedorId, fecha])
 }
 
 model DetalleCompra {
@@ -347,6 +359,23 @@ model RepartoUtilidad {
   @@index([grupoId])
 }
 
+model PagoNomina {
+  id               String   @id @default(uuid())
+  nombreTrabajador String
+  porcentajePago   Decimal  @db.Decimal(5, 2)
+  montoExacto      Decimal  @db.Decimal(12, 2)
+  fechaPago        DateTime @default(now())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  sedeId           String
+  sede             Sede     @relation(fields: [sedeId], references: [id], onDelete: Cascade)
+
+  @@index([sedeId, nombreTrabajador])
+  @@index([sedeId, fechaPago])
+  @@index([nombreTrabajador])
+}
+
+
 model Abono {
   id        String   @id @default(uuid())
   monto     Decimal
@@ -360,6 +389,7 @@ model Abono {
 
   @@index([sedeId, fecha])
   @@index([clienteId])
+  @@index([ventaId])
 }
 
 model Pago {
@@ -572,6 +602,7 @@ model CuentaPorPagarProveedor {
 
   @@index([sedeId, estado, fechaVencimiento])
   @@index([proveedorId, estado])
+  @@index([sedeId, saldoPendiente])
 }
 
 model PagoProveedor {
@@ -582,6 +613,7 @@ model PagoProveedor {
   cuentaPorPagar   CuentaPorPagarProveedor @relation(fields: [cuentaPorPagarId], references: [id], onDelete: Cascade)
 
   @@index([cuentaPorPagarId, fecha])
+  @@index([fecha])
 }
 
 enum EstadoCuentaProveedor {
