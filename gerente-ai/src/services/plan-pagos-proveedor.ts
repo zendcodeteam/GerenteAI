@@ -46,7 +46,8 @@ function redondear(valor: number): number {
   return Math.round((valor + Number.EPSILON) * 100) / 100;
 }
 
-function sumarMeses(fecha: Date, meses: number): Date {
+/** Suma (o resta, con `meses` negativo) meses calendario; el día se recorta al fin de mes. */
+export function sumarMeses(fecha: Date, meses: number): Date {
   const mesBase = fecha.getUTCMonth() + meses;
   const anio = fecha.getUTCFullYear() + Math.floor(mesBase / 12);
   const mes = ((mesBase % 12) + 12) % 12;
