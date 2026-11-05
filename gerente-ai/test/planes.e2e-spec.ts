@@ -137,6 +137,7 @@ describe('Límites por plan (contra Postgres real)', () => {
       await expect(
         ctx.productos.create(s.duenoId, 'CLIENTE', {
           nombre: 'Nuevo',
+          categoria: 'General',
           precioCompra: 1,
           precioVenta: 2,
           ...enSedeBloqueada,
