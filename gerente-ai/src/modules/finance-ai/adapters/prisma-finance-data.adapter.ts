@@ -846,12 +846,11 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
               saldoPendiente: new Prisma.Decimal(
                 esFiado ? transaction.amount : 0,
               ),
-              // Sin plazo no hay deuda "vencida", y el panel no puede avisar.
+              // El plazo que el usuario acordo con su cliente. Los 30 dias
+              // quedan de red de seguridad para lo que no entra por WhatsApp:
+              // ahi Luka pregunta la fecha y nunca llega en null.
               fechaVencimiento: esFiado
-                ? sumarDiasAFecha(
-                    fechaDelMovimiento(transaction),
-                    DIAS_CREDITO_POR_DEFECTO,
-                  )
+                ? vencimientoDelFiado(transaction)
                 : null,
               descripcion: transaction.description,
               metodoPago: transaction.paymentMethod
@@ -1092,6 +1091,26 @@ const BENEFICIARY_TO_PRISMA: Record<ProfitBeneficiary, BeneficiarioReparto> = {
 
 /** Plazo estandar de un fiado. El mismo que usa el panel en VentasService. */
 const DIAS_CREDITO_POR_DEFECTO = 30;
+
+/**
+ * Cuando vence un fiado.
+ *
+ * Manda la fecha que acordaron el dueno y su cliente. Antes se sumaban 30 dias
+ * siempre, y como ese plazo no lo habia pactado nadie, el recordatorio de
+ * cobro salia cuando no tocaba y el dueno dejo de hacerle caso. El default
+ * sobrevive para los movimientos que no traen plazo (el panel, una
+ * importacion), donde una fecha estimada sigue siendo mejor que ninguna.
+ */
+function vencimientoDelFiado(transaction: Transaction): Date {
+  if (transaction.dueDate) {
+    return new Date(`${transaction.dueDate}T12:00:00.000Z`);
+  }
+
+  return sumarDiasAFecha(
+    fechaDelMovimiento(transaction),
+    DIAS_CREDITO_POR_DEFECTO,
+  );
+}
 const UN_DIA_MS = 86_400_000;
 
 /** Clave para agrupar los fiados que se registraron sin cliente. */
