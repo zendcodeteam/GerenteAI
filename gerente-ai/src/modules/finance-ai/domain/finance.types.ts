@@ -45,7 +45,25 @@ export type MessageIntentType =
 /** Solo estas tres intenciones producen un movimiento contable. */
 export type TransactionType = 'income' | 'expense' | 'investment';
 
-export type QueryPeriod = 'day' | 'week' | 'month';
+/**
+ * El periodo por el que pregunta el usuario. El rango real lo calcula
+ * `periodRange`, en dias colombianos.
+ *
+ * Antes solo existian los tres "en curso" (hoy, esta semana, este mes) y el
+ * modelo metia "la semana pasada" en uno de ellos: el 4 de noviembre eso daba
+ * del 1 o del 2 de noviembre en adelante, y los registros de finales de
+ * octubre desaparecian de la respuesta. Los periodos hacia atras se nombran
+ * aparte y el rango cruza el cambio de mes o de año sin recortarse.
+ */
+export type QueryPeriod =
+  | 'day'
+  | 'yesterday'
+  | 'week'
+  | 'last_week'
+  | 'month'
+  | 'last_month'
+  /** "Ultimos N dias", contando hoy. */
+  | `last_${number}_days`;
 
 /** Categorias cerradas por tipo de movimiento. */
 export const EXPENSE_CATEGORIES = [

@@ -16,7 +16,6 @@ import {
   WhatsappInterpretService,
   type InterpretResponse,
 } from './services/whatsapp-interpret.service';
-import type { FiadoPorCobrar } from './services/destinatarios.service';
 import { CuentasProveedoresService } from '../../services/cuentas-proveedores.service';
 
 /**
@@ -34,9 +33,6 @@ import { CuentasProveedoresService } from '../../services/cuentas-proveedores.se
 // protege la API key, y /interpret se limita por remitente (en el servicio).
 @SkipThrottle()
 export class WhatsappController {
-  /** Dias que se le dan al fiado antes de recordarle al duenno que cobre. */
-  private static readonly DIAS_PARA_COBRAR_FIADO = 5;
-
   constructor(
     private readonly interpretService: WhatsappInterpretService,
     private readonly destinatarios: DestinatariosService,
@@ -97,34 +93,6 @@ export class WhatsappController {
     };
   }
 
-  /**
-   * Fiados que llevan 5 dias sin cobrarse.
-   *
-   * Servirlos los marca como avisados: si se marcaran despues del envio, dos
-   * ejecuciones simultaneas mandarian el mismo recordatorio dos veces.
-   */
-  @Get('recordatorios/fiados')
-  async recordatorioFiados() {
-    const fiados = await this.destinatarios.fiadosPorCobrar(
-      WhatsappController.DIAS_PARA_COBRAR_FIADO,
-    );
-    await this.destinatarios.marcarFiadosAvisados(fiados);
-
-    return {
-      total: fiados.length,
-      fiados: fiados.map((fiado) => ({
-        ...fiado,
-        // El monto ya formateado. Si lo armara n8n, el formato colombiano
-        // acabaria escrito en dos sitios y terminarian discrepando.
-        montoTexto: montoColombiano(fiado.saldo),
-        // Texto completo, para los canales que admiten texto libre y para el
-        // log. WhatsApp fuera de la ventana de 24 h exige plantilla, asi que el
-        // workflow envia las partes por separado; el tono se cambia aqui.
-        mensaje: mensajeDeCobro(fiado),
-      })),
-    };
-  }
-
   @Get('recordatorios/proveedores')
   async recordatorioProveedores() {
     const recordatorios = await this.cuentasProveedores.recordatorios();
@@ -143,29 +111,4 @@ export class WhatsappController {
       at: new Date().toISOString(),
     };
   }
-}
-
-/**
- * El texto del recordatorio de cobro.
- *
- * Se nombran la persona y el monto porque el duenno puede tener varios fiados
- * abiertos y un aviso generico no le dice a quien perseguir.
- */
-function mensajeDeCobro(fiado: FiadoPorCobrar): string {
-  const monto = montoColombiano(fiado.saldo);
-
-  return (
-    `Hola ${fiado.contacto} 👋 Un recordatorio de ${fiado.negocio} (${fiado.sede}):
-
-` +
-    `${fiado.cliente} te debe ${monto} del fiado que registraste hace ${fiado.diasTranscurridos} días.
-
-` +
-    `No olvides cobrarle. Cuando te pague, escríbeme y lo marco como cobrado.`
-  );
-}
-
-/** Pesos colombianos, sin decimales: `$45.000`. */
-function montoColombiano(valor: number): string {
-  return `$${Math.round(valor).toLocaleString('es-CO')}`;
 }

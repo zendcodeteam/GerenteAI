@@ -1,3 +1,4 @@
+import { NominaModule } from './modules/nomina.module';
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
@@ -99,6 +100,7 @@ import { DeudasProveedoresModule } from './modules/deudas-proveedores.module';
     DashboardConfigModule,
     CuentasProveedoresModule,
     EstadisticasPublicasModule,
+    NominaModule,
     DeudasProveedoresModule,
   ],
   controllers: [AppController],
