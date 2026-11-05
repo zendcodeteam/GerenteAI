@@ -11,6 +11,7 @@ import { SedesService } from '../../src/services/sedes.service';
 import { ReportesService } from '../../src/services/reportes.service';
 import { ClientesService } from '../../src/services/clientes.service';
 import { ProveedoresService } from '../../src/services/proveedores.service';
+import { CuentasProveedoresService } from '../../src/services/cuentas-proveedores.service';
 import { GastosService } from '../../src/services/gastos.service';
 import { PagosService } from '../../src/services/pagos.service';
 
@@ -27,6 +28,7 @@ export interface Contexto {
   reportes: ReportesService;
   clientes: ClientesService;
   proveedores: ProveedoresService;
+  cuentasProveedores: CuentasProveedoresService;
   gastos: GastosService;
   pagos: PagosService;
 }
@@ -49,6 +51,7 @@ export async function crearContexto(): Promise<Contexto> {
       ReportesService,
       ClientesService,
       ProveedoresService,
+      CuentasProveedoresService,
       GastosService,
       PagosService,
     ],
@@ -70,6 +73,7 @@ export async function crearContexto(): Promise<Contexto> {
     reportes: moduleRef.get(ReportesService),
     clientes: moduleRef.get(ClientesService),
     proveedores: moduleRef.get(ProveedoresService),
+    cuentasProveedores: moduleRef.get(CuentasProveedoresService),
     gastos: moduleRef.get(GastosService),
     pagos: moduleRef.get(PagosService),
   };

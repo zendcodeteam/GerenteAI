@@ -57,6 +57,7 @@ import {
 import {
   WHATSAPP_ASSISTANT_PROMPT_VERSION,
   WHATSAPP_INTENT_SCHEMA,
+  WHATSAPP_ASSISTANT_SYSTEM_PROMPT,
   buildWhatsAppAssistantSystemPrompt,
   type WhatsAppIntentOutput,
 } from '../prompts/whatsapp-assistant.prompt';
@@ -230,6 +231,11 @@ export class WhatsAppMessageService {
     const { data, response } =
       await this.llm.completeJson<WhatsAppIntentOutput>(
         {
+          // Los ~14.500 tokens del prompt viajan identicos en cada mensaje;
+          // solo cambia el bloque de contexto que va al final. Marcandolos
+          // como prefijo cacheable, el proveedor los cobra al 10% y responde
+          // antes. El texto que lee el modelo no cambia.
+          cacheableSystemPrefix: WHATSAPP_ASSISTANT_SYSTEM_PROMPT,
           system: buildWhatsAppAssistantSystemPrompt({
             businessName: request.businessName ?? 'el negocio',
             currency,
@@ -429,6 +435,22 @@ export class WhatsAppMessageService {
       );
     }
 
+    // Un fiado sin plazo es una deuda sin fecha de cobro: el recordatorio no
+    // tiene contra que comparar y el dueno nunca sabe cuando reclamar. Antes
+    // el sistema le inventaba unos dias fijos; ahora se pregunta, porque el
+    // plazo lo acuerdan el y su cliente, no el software.
+    const fiadoSinPlazo = intent.movements.find(
+      (movimiento) => movimiento.isCredit && !movimiento.dueDate,
+    );
+
+    if (fiadoSinPlazo) {
+      return this.needsClarification(
+        intent,
+        `¿Para cuándo quedó de pagarte ${fiadoSinPlazo.customerName}? Puedes decirme "el viernes", "el 15" o "fin de mes".`,
+        meta,
+      );
+    }
+
     const compraSinPlazo = intent.movements.find(
       (movimiento) =>
         movimiento.isSupplierCredit &&
@@ -529,10 +551,12 @@ export class WhatsAppMessageService {
       summary: null,
       // Con un solo movimiento se respeta el texto del modelo, que suena
       // natural. Con varios lo arma el backend: son cifras, y las cifras las
-      // pone quien tiene los datos.
+      // pone quien tiene los datos. El plazo del fiado se agrega aparte por lo
+      // mismo: que salga o no en la confirmacion no puede depender de que al
+      // modelo se le ocurra mencionarlo.
       replyText:
         transactions.length === 1 && !intent.discount
-          ? intent.responseText
+          ? intent.responseText + lineaDePlazo(transactions[0])
           : renderMovementsRegistered(transactions, currency, intent.discount),
       meta,
     };
@@ -1728,6 +1752,7 @@ export class WhatsAppMessageService {
       paymentMethod: movement.paymentMethod,
       isCredit: movement.isCredit,
       customerName: movement.customerName,
+      dueDate: movement.dueDate,
       productName: movement.productName,
       quantity: movement.quantity,
       supplierName: movement.supplierName,
@@ -1964,6 +1989,38 @@ function normalizeMovementDate(value: unknown): string | null {
 
 const DIA_MS = 24 * 60 * 60 * 1000;
 
+/** Mas alla de esto no es un fiado, es otra cosa: se descarta y se repregunta. */
+const MAX_DIAS_DE_PLAZO = 366;
+
+/**
+ * Fecha maxima de pago de un fiado.
+ *
+ * Es el espejo de `normalizeMovementDate`: aquella rechaza el futuro porque
+ * nadie registra lo que no ha pasado; esta rechaza el pasado porque un plazo
+ * que ya vencio no es un plazo. Devolver null no pierde nada: el servicio lo
+ * lee como "no la dijo" y se la vuelve a preguntar, que es mejor que guardar
+ * una fecha que el modelo resolvio mal.
+ */
+function normalizeDueDate(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+
+  const texto = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(texto)) return null;
+
+  const fecha = new Date(`${texto}T12:00:00.000Z`);
+  if (Number.isNaN(fecha.getTime())) return null;
+  // "2026-11-31" pasa el regex pero se desborda a diciembre.
+  if (fecha.toISOString().slice(0, 10) !== texto) return null;
+
+  // Se compara contra el dia colombiano, no contra el del contenedor: a las
+  // 8 p.m. en Colombia ya es manana en UTC, y "me paga manana" se habria
+  // leido como una fecha de hoy.
+  if (texto <= todayIso()) return null;
+  if (texto > sumarDias(todayIso(), MAX_DIAS_DE_PLAZO)) return null;
+
+  return texto;
+}
+
 function normalizeMovements(value: unknown): MovementDraft[] {
   if (!Array.isArray(value)) return [];
 
@@ -1987,6 +2044,7 @@ function normalizeMovements(value: unknown): MovementDraft[] {
         paymentMethod: normalizePaymentMethod(row.paymentMethod),
         isCredit: row.isCredit === true,
         customerName: cleanText(row.customerName),
+        dueDate: normalizeDueDate(row.dueDate),
         quantity: normalizeQuantity(row.quantity),
         date: normalizeMovementDate(row.date),
       };
@@ -2715,12 +2773,12 @@ export function renderSummary(summary: PeriodSummary): string {
     );
   }
 
-  const paymentLines = PAYMENT_METHODS
-    .filter((method) => (summary.byPaymentMethod?.[method] ?? 0) > 0)
-    .map(
-      (method) =>
-        `${PAYMENT_METHOD_LABELS[method]}: ${money(summary.byPaymentMethod?.[method] ?? 0)}`,
-    );
+  const paymentLines = PAYMENT_METHODS.filter(
+    (method) => (summary.byPaymentMethod?.[method] ?? 0) > 0,
+  ).map(
+    (method) =>
+      `${PAYMENT_METHOD_LABELS[method]}: ${money(summary.byPaymentMethod?.[method] ?? 0)}`,
+  );
 
   if (paymentLines.length > 0) {
     lines.push('Ingresos por forma de pago:', ...paymentLines);
@@ -3448,6 +3506,22 @@ function renderPendingCorrection(
 // ------------------------------------------------- respuestas de movimientos
 
 /** Una linea por movimiento: "• 15 ago · Transporte · -$50.000 COP". */
+/**
+ * El recordatorio del plazo, para pegarlo al texto que escribio el modelo.
+ *
+ * Vacio en todo lo que no sea un fiado con fecha: no hay nada que recordar.
+ */
+function lineaDePlazo(transaction: Transaction | undefined): string {
+  if (!transaction?.isCredit || !transaction.dueDate) return '';
+
+  const fecha = FECHA_CORTA.format(
+    new Date(`${transaction.dueDate}T12:00:00.000Z`),
+  );
+
+  return `
+📅 Te paga el ${fecha}.`;
+}
+
 function movementLine(
   row: Transaction,
   currency: string,
@@ -3457,7 +3531,13 @@ function movementLine(
   const fecha = FECHA_CORTA.format(new Date(`${row.date}T12:00:00.000Z`));
   const extras = [
     row.paymentMethod ? PAYMENT_METHOD_LABELS[row.paymentMethod] : null,
-    row.isCredit ? 'fiado' : null,
+    // El plazo va pegado al "fiado" y no en una linea aparte: es lo que el
+    // dueno necesita ver para saber si lo que entendio Luka es lo que acordo.
+    row.isCredit
+      ? row.dueDate
+        ? `fiado, paga el ${FECHA_CORTA.format(new Date(`${row.dueDate}T12:00:00.000Z`))}`
+        : 'fiado'
+      : null,
   ].filter(Boolean);
 
   return (

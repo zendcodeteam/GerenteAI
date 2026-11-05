@@ -1,4 +1,8 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   EstadoDeudaProveedor,
   ModalidadDeudaProveedor,
@@ -273,6 +277,54 @@ describe('DeudasProveedoresService - Modelo de datos de deuda con proveedor', ()
       expect(prismaMock.deudaProveedor.delete).toHaveBeenCalledWith({
         where: { id: 'd-1' },
       });
+    });
+  });
+
+  describe('plan - calendario de cuotas de la deuda', () => {
+    const deudaEnCuotas = {
+      id: 'd-1',
+      sedeId: 'sede-1',
+      montoTotal: new Prisma.Decimal(300000),
+      fechaLimite: new Date('2026-12-31T12:00:00.000Z'),
+      modalidad: ModalidadDeudaProveedor.CUOTAS,
+      numeroCuotas: 3,
+      aplicaInteres: false,
+      porcentajeInteres: null,
+    };
+
+    it('devuelve el plan de la deuda verificando acceso a su sede', async () => {
+      prismaMock.deudaProveedor.findUnique.mockResolvedValueOnce(deudaEnCuotas);
+
+      const res = await service.plan('d-1', 'user-1', 'CLIENTE');
+
+      expect(negociosServiceMock.verificarAccesoSede).toHaveBeenCalledWith(
+        'user-1',
+        sedeMock,
+        'CLIENTE',
+        {},
+      );
+      expect(res.deudaId).toBe('d-1');
+      expect(res.total).toBe(300000);
+      expect(res.cuotas.map((c) => c.monto)).toEqual([100000, 100000, 100000]);
+    });
+
+    it('no calcula nada si el usuario no tiene acceso a la sede', async () => {
+      prismaMock.deudaProveedor.findUnique.mockResolvedValueOnce(deudaEnCuotas);
+      negociosServiceMock.verificarAccesoSede.mockRejectedValueOnce(
+        new ForbiddenException('No tienes permisos sobre esta sede'),
+      );
+
+      await expect(service.plan('d-1', 'ajeno', 'CLIENTE')).rejects.toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('lanza NotFound si la deuda no existe', async () => {
+      prismaMock.deudaProveedor.findUnique.mockResolvedValueOnce(null);
+
+      await expect(service.plan('nope', 'user-1', 'CLIENTE')).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 });
