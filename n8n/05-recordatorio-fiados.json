@@ -48,7 +48,7 @@
       },
       "alwaysOutputData": true,
       "onError": "stopWorkflow",
-      "notes": "Devuelve los fiados con saldo pendiente que ya cumplieron 5 dias y de los\nque todavia no se ha avisado.\n\nIMPORTANTE: consultar este endpoint YA LOS MARCA como avisados. Es\ndeliberado: marcarlos despues del envio haria que dos ejecuciones que se\nsolapan mandaran el mismo recordatorio dos veces. Se prefiere perder un\naviso a repetirlo todos los dias.\n\nConsecuencia practica: NO reintentar este nodo (retryOnFail queda en false)\ny no ejecutarlo a mano para probar, porque quema los avisos del dia."
+      "notes": "Devuelve los fiados con saldo pendiente cuyo vencimiento llega en cinco dias o menos y de los\nque todavia no se ha avisado. Los fiados antiguos sin vencimiento reciben 30 dias desde la venta.\n\nIMPORTANTE: consultar este endpoint YA LOS MARCA como avisados. Es\ndeliberado: marcarlos despues del envio haria que dos ejecuciones que se\nsolapan mandaran el mismo recordatorio dos veces. Se prefiere perder un\naviso a repetirlo todos los dias.\n\nConsecuencia practica: NO reintentar este nodo (retryOnFail queda en false)\ny no ejecutarlo a mano para probar, porque quema los avisos del dia."
     },
     {
       "parameters": {

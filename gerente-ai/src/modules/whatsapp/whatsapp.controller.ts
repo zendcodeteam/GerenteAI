@@ -93,6 +93,13 @@ export class WhatsappController {
     };
   }
 
+  /** Fiados con saldo abierto que ya cumplen cinco días, listos para n8n. */
+  @Get('recordatorios/fiados')
+  async recordatorioFiados() {
+    const fiados = await this.destinatarios.recordatoriosDeFiados();
+    return { total: fiados.length, fiados };
+  }
+
   @Get('recordatorios/proveedores')
   async recordatorioProveedores() {
     const recordatorios = await this.cuentasProveedores.recordatorios();

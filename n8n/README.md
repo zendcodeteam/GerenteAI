@@ -32,7 +32,7 @@ Archivos de este directorio:
 | `02-recordatorio-nocturno.json` | RF-07 · cron 21:00 diario a quien no registró nada |
 | `03-resumen-semanal.json` | RF-08 · cron domingos 10:00 con el resumen de la semana |
 | `04-mantener-despierto.json` | Ping periódico para que Render no duerma el servicio |
-| `05-recordatorio-fiados.json` | Cron 10:00 diario · avisa de los fiados con 5 días sin cobrar |
+| `05-recordatorio-fiados.json` | Cron 10:00 diario · avisa de fiados cuyo vencimiento llega en cinco días o menos |
 
 ---
 

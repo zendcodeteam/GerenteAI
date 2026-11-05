@@ -21,6 +21,7 @@ function cuenta(parcial: Record<string, unknown> = {}) {
     estado: 'PENDIENTE',
     recordatorioCincoDiasAt: null,
     recordatorioVencimientoAt: null,
+    cuotas: [],
     fechaVencimiento: new Date(Date.now() + 5 * UN_DIA),
     proveedor: { nombre: 'Distribuidora Cali' },
     sede: {
@@ -81,6 +82,27 @@ describe('CuentasProveedoresService · recordatorios', () => {
 
     expect(avisos).toHaveLength(1);
     expect(avisos[0].tipo).toBe('cinco_dias');
+  });
+
+  it('programa el aviso cinco días antes de la cuota pendiente, usando una fecha simulada', async () => {
+    const ahora = new Date('2026-04-10T12:00:00.000Z');
+    const fechaCuota = new Date('2026-04-14T12:00:00.000Z');
+    const { servicio: s, actualizaciones } = servicio([
+      cuenta({
+        fechaVencimiento: new Date('2026-05-10T12:00:00.000Z'),
+        cuotas: [{ fechaVencimiento: fechaCuota }],
+      }),
+    ]);
+
+    const avisos = await s.recordatorios(ahora);
+
+    expect(avisos).toHaveLength(1);
+    expect(avisos[0].fechaVencimiento).toBe(fechaCuota.toISOString());
+    expect(avisos[0].estadoTexto).toBe('vence en 4 días');
+    expect(actualizaciones[0].data).toHaveProperty(
+      'recordatorioCincoDiasAt',
+      ahora,
+    );
   });
 
   it('también avisa si el workflow no corrió ese día', async () => {

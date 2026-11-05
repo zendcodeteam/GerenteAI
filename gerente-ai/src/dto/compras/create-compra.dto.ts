@@ -2,10 +2,12 @@ import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
   IsArray,
+  IsInt,
   IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -32,6 +34,20 @@ export class CreateCompraDto {
   @IsString()
   @IsOptional()
   fechaVencimiento?: string;
+
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(60)
+  @IsOptional()
+  numeroCuotas?: number;
+
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(100)
+  @IsOptional()
+  interesMensualPorcentaje?: number;
 
   @IsArray()
   @ArrayMinSize(1)
