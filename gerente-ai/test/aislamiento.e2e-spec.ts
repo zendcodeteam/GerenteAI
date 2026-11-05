@@ -54,6 +54,7 @@ describe('Aislamiento de datos entre negocios (contra Postgres real)', () => {
     const producto = await ctx.prisma.producto.create({
       data: {
         nombre: 'Secreto comercial',
+        categoria: 'General',
         stock: 3,
         precioCompra: 100,
         precioVenta: 999,
@@ -141,7 +142,7 @@ describe('Aislamiento de datos entre negocios (contra Postgres real)', () => {
   describe('listados con sedeId ajeno', () => {
     it('rechaza pedir el inventario de una sede de otro negocio', async () => {
       await expect(
-        ctx.productos.findAll(s.duenoId, 'CLIENTE', sedeAjenaId),
+        ctx.productos.findAll(s.duenoId, 'CLIENTE', { sedeId: sedeAjenaId }),
       ).rejects.toThrow(ForbiddenException);
     });
 
@@ -154,7 +155,7 @@ describe('Aislamiento de datos entre negocios (contra Postgres real)', () => {
     // Dentro del mismo negocio también hay frontera: la sede hermana es ajena.
     it('rechaza que el admin de sede pida el inventario de la sede hermana', async () => {
       await expect(
-        ctx.productos.findAll(s.adminSedeAId, 'CLIENTE', s.sedeBId),
+        ctx.productos.findAll(s.adminSedeAId, 'CLIENTE', { sedeId: s.sedeBId }),
       ).rejects.toThrow(ForbiddenException);
     });
   });
@@ -209,11 +210,9 @@ describe('Aislamiento de datos entre negocios (contra Postgres real)', () => {
     });
 
     it('sigue listando el inventario de la sede que quedó en solo lectura', async () => {
-      const productos = await ctx.productos.findAll(
-        s.duenoId,
-        'CLIENTE',
-        s.sedeBId,
-      );
+      const productos = await ctx.productos.findAll(s.duenoId, 'CLIENTE', {
+        sedeId: s.sedeBId,
+      });
 
       expect(productos.map((producto) => producto.id)).toEqual([s.arrozId]);
     });

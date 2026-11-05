@@ -1,9 +1,14 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { ProductosService } from './productos.service';
 import { PrismaService } from './prisma.service';
 import { NegociosService } from './negocios.service';
 import { CreateProductoDto } from '../dto/productos/create-producto.dto';
+import { UpdateProductoDto } from '../dto/productos/update-producto.dto';
 
 type MockFn = jest.Mock;
 
@@ -45,7 +50,6 @@ describe('ProductosService', () => {
               Promise.resolve({
                 id: 'prod-1',
                 ...data,
-                fechaRegistro: new Date('2026-11-04T12:00:00Z'),
                 createdAt: new Date('2026-11-04T12:00:00Z'),
                 updatedAt: new Date('2026-11-04T12:00:00Z'),
               }),
@@ -298,7 +302,7 @@ describe('ProductosService', () => {
           stock: 5,
           precioCompra: new Prisma.Decimal(100),
           precioVenta: new Prisma.Decimal(150),
-          fechaRegistro: new Date(),
+          createdAt: new Date(),
         },
       ];
       prisma.producto.findMany.mockResolvedValue(productosMock);
@@ -315,7 +319,7 @@ describe('ProductosService', () => {
       );
       expect(prisma.producto.findMany).toHaveBeenCalledWith({
         where: { sedeId: { in: ['sede-1'] } },
-        orderBy: { fechaRegistro: 'desc' },
+        orderBy: { createdAt: 'desc' },
       });
     });
 
@@ -367,6 +371,125 @@ describe('ProductosService', () => {
       await expect(
         service.findOne('prod-1', 'user-1', 'CLIENTE'),
       ).rejects.toThrow(NotFoundException);
+    });
+  });
+  describe('Aislamiento por sede al registrar', () => {
+    /**
+     * El `sedeId` viaja en el cuerpo de la peticion, asi que es el cliente
+     * quien lo elige: si el servicio no comprobara el permiso de escritura,
+     * cualquier usuario autenticado podria sembrar productos en la sede de
+     * otro negocio con solo cambiar un campo del JSON.
+     */
+    const dtoValido = (): CreateProductoDto => ({
+      nombre: 'Arroz Diana 1kg',
+      categoria: 'Abarrotes',
+      precioCompra: 3500,
+      precioVenta: 4200,
+      stock: 10,
+      sedeId: 'sede-ajena',
+    });
+
+    it('no registra nada si el usuario no tiene escritura sobre la sede', async () => {
+      negociosService.verificarAccesoSede.mockRejectedValue(
+        new ForbiddenException('Sin acceso a esta sede'),
+      );
+
+      await expect(
+        service.create('user-1', 'CLIENTE', dtoValido()),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(prisma.producto.create).not.toHaveBeenCalled();
+    });
+
+    it('pide permiso de ESCRITURA, no solo de lectura', async () => {
+      await service.create('user-1', 'CLIENTE', dtoValido());
+
+      expect(negociosService.verificarAccesoSede).toHaveBeenCalledWith(
+        'user-1',
+        sedeMock,
+        'CLIENTE',
+        { escritura: true },
+      );
+    });
+
+    it('rechaza una sede que no existe', async () => {
+      prisma.sede.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.create('user-1', 'CLIENTE', dtoValido()),
+      ).rejects.toThrow(NotFoundException);
+
+      expect(prisma.producto.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Editar no puede dejar el producto incompleto o invalido', () => {
+    /**
+     * Los criterios 1 y 2 no valen solo en el alta: un PATCH que dejara el
+     * nombre vacio o el precio en 0 romperia las mismas reglas por la puerta
+     * de atras, y el producto ya estaria guardado.
+     */
+    beforeEach(() => {
+      prisma.producto.findUnique.mockResolvedValue({
+        id: 'prod-1',
+        sedeId: 'sede-1',
+        nombre: 'Arroz Diana 1kg',
+        categoria: 'Abarrotes',
+      });
+      prisma.producto.update.mockImplementation(
+        ({ data }: { data: Prisma.ProductoUpdateInput }) =>
+          Promise.resolve({ id: 'prod-1', ...data }),
+      );
+    });
+
+    const rechaza = async (dto: UpdateProductoDto) => {
+      await expect(
+        service.update('prod-1', 'user-1', 'CLIENTE', dto),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.producto.update).not.toHaveBeenCalled();
+    };
+
+    it('rechaza dejar el nombre vacio', () => rechaza({ nombre: '   ' }));
+
+    it('rechaza dejar la categoria vacia', () => rechaza({ categoria: '  ' }));
+
+    it('rechaza poner el costo de compra en 0', () =>
+      rechaza({ precioCompra: 0 }));
+
+    it('rechaza poner el precio de venta en 0', () =>
+      rechaza({ precioVenta: 0 }));
+
+    it('rechaza una cantidad negativa', () => rechaza({ stock: -1 }));
+
+    it('rechaza una cantidad con decimales', () => rechaza({ stock: 2.5 }));
+
+    it('rechaza el alias costoCompra en 0, igual que precioCompra', () =>
+      rechaza({ costoCompra: 0 }));
+
+    it('deja pasar un cambio valido y guarda solo lo enviado', async () => {
+      await service.update('prod-1', 'user-1', 'CLIENTE', {
+        precioVenta: 5000,
+      });
+
+      const [{ data }] = prisma.producto.update.mock.calls[0] as [
+        { data: Prisma.ProductoUpdateInput },
+      ];
+      expect(data.precioVenta).toEqual(new Prisma.Decimal(5000));
+      // Lo que no se envio no se toca: un PATCH no puede borrar el nombre.
+      expect(data.nombre).toBeUndefined();
+      expect(data.categoria).toBeUndefined();
+    });
+
+    it('exige escritura sobre la sede del producto', async () => {
+      negociosService.verificarAccesoSede.mockRejectedValue(
+        new ForbiddenException('Sin acceso a esta sede'),
+      );
+
+      await expect(
+        service.update('prod-1', 'user-1', 'CLIENTE', { precioVenta: 5000 }),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(prisma.producto.update).not.toHaveBeenCalled();
     });
   });
 });

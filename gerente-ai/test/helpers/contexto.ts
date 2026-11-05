@@ -185,6 +185,7 @@ export async function sembrar(prisma: PrismaService): Promise<Semilla> {
   const gaseosa = await prisma.producto.create({
     data: {
       nombre: 'Gaseosa',
+      categoria: 'Bebidas',
       stock: 10,
       precioCompra: 1000,
       precioVenta: 1500.5,
@@ -194,6 +195,7 @@ export async function sembrar(prisma: PrismaService): Promise<Semilla> {
   const pan = await prisma.producto.create({
     data: {
       nombre: 'Pan',
+      categoria: 'Panaderia',
       stock: 5,
       precioCompra: 200,
       precioVenta: 500,
@@ -203,6 +205,7 @@ export async function sembrar(prisma: PrismaService): Promise<Semilla> {
   const arroz = await prisma.producto.create({
     data: {
       nombre: 'Arroz',
+      categoria: 'Abarrotes',
       stock: 10,
       precioCompra: 2000,
       precioVenta: 3000,

@@ -137,7 +137,7 @@ export class ProductosService {
 
     return this.prisma.producto.findMany({
       where,
-      orderBy: { fechaRegistro: 'desc' },
+      orderBy: { createdAt: 'desc' },
     });
   }
 
