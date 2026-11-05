@@ -14,6 +14,7 @@ import type {
   TransactionChanges,
 } from '../ports/finance-data.port';
 import type { WhatsAppIntentOutput } from '../prompts/whatsapp-assistant.prompt';
+import { fechaColombiana } from '../domain/dia-colombia';
 import {
   WhatsAppMessageService,
   checkBreakdown,
@@ -723,9 +724,10 @@ describe('WhatsAppMessageService - varios movimientos', () => {
     expect(result.transactions.map((row) => row.amount)).toEqual([
       50_000, 30_000,
     ]);
+    // `movimiento()` trae 1 unidad, y las unidades van en la descripcion.
     expect(result.transactions.map((row) => row.description)).toEqual([
-      'Transporte',
-      'Almuerzo',
+      'Transporte · 1 u.',
+      'Almuerzo · 1 u.',
     ]);
     expect(financeData.saved).toHaveLength(2);
   });
@@ -1719,21 +1721,22 @@ describe('WhatsAppMessageService · fecha del movimiento', () => {
    * semana. Antes todo se guardaba con la fecha en que se le escribió al bot y
    * los reportes por día quedaban descuadrados.
    */
-  const HOY = new Date().toISOString().slice(0, 10);
+  // El dia colombiano, como lo registra el servicio. Con `toISOString()` esta
+  // prueba fallaba cada noche despues de las 7 p.m., cuando en UTC ya es manana.
+  const HOY = fechaColombiana(new Date());
 
+  // Una venta necesita producto y unidades para registrarse (inventario).
   const enFecha = (fecha: string | null) => ({
     type: 'income' as const,
     movements: [
-      {
-        type: 'income' as const,
+      movimiento({
+        type: 'income',
         amount: 2_000_000,
         category: 'ventas',
         concept: 'Cama nube',
-        paymentMethod: null,
-        isCredit: false,
-        customerName: null,
+        productName: 'Cama nube',
         date: fecha,
-      },
+      }),
     ],
     responseText: 'ok',
   });
