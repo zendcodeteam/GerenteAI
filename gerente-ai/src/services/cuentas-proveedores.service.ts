@@ -31,6 +31,7 @@ export class CuentasProveedoresService {
         proveedor: true,
         compra: { include: { detalles: true } },
         pagos: { orderBy: { fecha: 'desc' } },
+        cuotas: { orderBy: { numero: 'asc' } },
       },
       orderBy: { fechaVencimiento: 'asc' },
     });
@@ -76,6 +77,50 @@ export class CuentasProveedoresService {
         );
       }
 
+      let porAplicar = monto;
+      const cuotas = await tx.cuotaPorPagarProveedor.findMany({
+        where: { cuentaPorPagarId: id, saldoPendiente: { gt: 0 } },
+        orderBy: { numero: 'asc' },
+      });
+      for (const cuota of cuotas) {
+        if (!porAplicar.greaterThan(0)) break;
+        const aplicado = cuota.saldoPendiente.lessThan(porAplicar)
+          ? cuota.saldoPendiente
+          : porAplicar;
+        const resultado = await tx.cuotaPorPagarProveedor.updateMany({
+          where: { id: cuota.id, saldoPendiente: { gte: aplicado } },
+          data: { saldoPendiente: { decrement: aplicado } },
+        });
+        if (!resultado.count) {
+          throw new BadRequestException(
+            'El saldo de una cuota cambió mientras se registraba el pago. Intenta de nuevo.',
+          );
+        }
+        porAplicar = porAplicar.sub(aplicado);
+      }
+
+      const siguienteCuota = await tx.cuotaPorPagarProveedor.findFirst({
+        where: { cuentaPorPagarId: id, saldoPendiente: { gt: 0 } },
+        orderBy: { numero: 'asc' },
+      });
+      if (
+        siguienteCuota &&
+        siguienteCuota.numero !== cuotas[0]?.numero
+      ) {
+        await tx.cuentaPorPagarProveedor.update({
+          where: { id },
+          data: {
+            fechaVencimiento: siguienteCuota.fechaVencimiento,
+            recordatorioCincoDiasAt: null,
+            recordatorioVencimientoAt: null,
+            estado:
+              siguienteCuota.fechaVencimiento < new Date()
+                ? 'VENCIDA'
+                : 'PENDIENTE',
+          },
+        });
+      }
+
       return tx.pagoProveedor.create({
         data: { cuentaPorPagarId: id, monto },
       });
@@ -90,6 +135,11 @@ export class CuentasProveedoresService {
       },
       include: {
         proveedor: true,
+        cuotas: {
+          where: { saldoPendiente: { gt: 0 } },
+          orderBy: { numero: 'asc' },
+          take: 1,
+        },
         sede: {
           include: {
             usuariosSede: {
@@ -124,9 +174,11 @@ export class CuentasProveedoresService {
     }[] = [];
 
     for (const cuenta of cuentas) {
+      const fechaVencimiento =
+        cuenta.cuotas[0]?.fechaVencimiento ?? cuenta.fechaVencimiento;
       const dias = diferenciaEntreFechas(
         fechaColombiana(ahora),
-        fechaCalendarioVencimiento(cuenta.fechaVencimiento),
+        fechaCalendarioVencimiento(fechaVencimiento),
       );
       let tipo: 'cinco_dias' | 'vencimiento' | 'vencida' | null = null;
 
@@ -173,7 +225,7 @@ export class CuentasProveedoresService {
         sedeId: cuenta.sedeId,
         sede: cuenta.sede.nombre,
         saldoPendiente: saldo,
-        fechaVencimiento: cuenta.fechaVencimiento.toISOString(),
+        fechaVencimiento: fechaVencimiento.toISOString(),
         // Lo que se le muestra al usuario sobre el estado de la cuenta.
         //
         // Lo arma el backend y no n8n: el workflow lo tenia escrito a mano

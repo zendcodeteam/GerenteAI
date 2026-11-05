@@ -8,6 +8,9 @@ import {
 } from '../../finance-ai/domain/dia-colombia';
 import { maskPhone } from './whatsapp-routing.service';
 
+const DIA = 86_400_000;
+const DIAS_ANTES_DEL_VENCIMIENTO_FIADO = 5;
+
 /**
  * Quien puede recibir un mensaje del bot, y por que numero.
  *
@@ -48,6 +51,15 @@ export interface ResumenNocturno extends Destinatario {
   gastos: number;
   balance: number;
   movimientos: number;
+}
+
+export interface RecordatorioFiado extends Destinatario {
+  ventaId: string;
+  cliente: string;
+  monto: number;
+  montoTexto: string;
+  diasTranscurridos: number;
+  mensaje: string;
 }
 
 @Injectable()
@@ -125,6 +137,61 @@ export class DestinatariosService {
         const total = totals.get(destino.sedeId)!;
         return { ...destino, ...total, balance: total.ingresos - total.gastos };
       });
+  }
+
+  /** Fiados abiertos cuyo vencimiento está dentro de los próximos cinco días. */
+  async recordatoriosDeFiados(ahora = new Date()): Promise<RecordatorioFiado[]> {
+    const alcanzables = await this.sedesAlcanzables();
+    if (alcanzables.length === 0) return [];
+
+    const porSede = new Map(alcanzables.map((destino) => [destino.sedeId, destino]));
+    const ids = [...porSede.keys()];
+    const corte = new Date(
+      ahora.getTime() + DIAS_ANTES_DEL_VENCIMIENTO_FIADO * DIA,
+    );
+    const ventas = await this.prisma.venta.findMany({
+      where: {
+        sedeId: { in: ids },
+        tipo: 'FIADO',
+        saldoPendiente: { gt: 0 },
+        fechaVencimiento: { lte: corte },
+        recordatorios: { is: null },
+      },
+      include: { cliente: true },
+      orderBy: { fecha: 'asc' },
+    });
+
+    const recordatorios: RecordatorioFiado[] = [];
+    for (const venta of ventas) {
+      const destino = porSede.get(venta.sedeId);
+      if (!destino) continue;
+
+      const { count } = await this.prisma.recordatorioFiado.createMany({
+        data: [{ ventaId: venta.id, saldo: venta.saldoPendiente }],
+        skipDuplicates: true,
+      });
+      if (count === 0) continue;
+
+      const cliente = venta.cliente?.nombre ?? 'Cliente sin identificar';
+      const monto = Number(venta.saldoPendiente);
+      const montoTexto = `$${Math.round(monto).toLocaleString('es-CO')}`;
+      const diasTranscurridos = Math.floor(
+        (ahora.getTime() - venta.fecha.getTime()) / DIA,
+      );
+      const mensaje = `Hola ${destino.contacto}, ${cliente} tiene un fiado pendiente de ${montoTexto} desde hace ${diasTranscurridos} días. No olvides cobrarle. Cuando te pague, escríbeme y lo marco como cobrado.`;
+
+      recordatorios.push({
+        ...destino,
+        ventaId: venta.id,
+        cliente,
+        monto,
+        montoTexto,
+        diasTranscurridos,
+        mensaje,
+      });
+    }
+
+    return recordatorios;
   }
 
   // ----------------------------------------------------------------- interno

@@ -593,6 +593,8 @@ model CuentaPorPagarProveedor {
   montoOriginal             Decimal
   saldoPendiente            Decimal
   fechaVencimiento          DateTime
+  numeroCuotas              Int                      @default(1)
+  interesMensualPorcentaje  Decimal                  @default(0)
   estado                    EstadoCuentaProveedor @default(PENDIENTE)
   recordatorioCincoDiasAt   DateTime?
   recordatorioVencimientoAt DateTime?
@@ -600,6 +602,7 @@ model CuentaPorPagarProveedor {
   proveedor                 Proveedor              @relation(fields: [proveedorId], references: [id])
   sede                      Sede                   @relation(fields: [sedeId], references: [id], onDelete: Cascade)
   pagos                     PagoProveedor[]
+  cuotas                    CuotaPorPagarProveedor[]
 
   @@index([sedeId, estado, fechaVencimiento])
   @@index([proveedorId, estado])
@@ -622,7 +625,6 @@ enum EstadoCuentaProveedor {
   PAGADA
   VENCIDA
 }
-
 
 model DeudaProveedor {
   id                String                  @id @default(uuid())
@@ -656,4 +658,19 @@ enum EstadoDeudaProveedor {
   PAGADA
   VENCIDA
   CANCELADA
+}
+
+model CuotaPorPagarProveedor {
+  id               String                  @id @default(uuid())
+  cuentaPorPagarId String
+  numero           Int
+  capital          Decimal
+  interes          Decimal
+  monto            Decimal
+  saldoPendiente   Decimal
+  fechaVencimiento DateTime
+  cuentaPorPagar   CuentaPorPagarProveedor @relation(fields: [cuentaPorPagarId], references: [id], onDelete: Cascade)
+
+  @@unique([cuentaPorPagarId, numero])
+  @@index([cuentaPorPagarId, fechaVencimiento])
 }

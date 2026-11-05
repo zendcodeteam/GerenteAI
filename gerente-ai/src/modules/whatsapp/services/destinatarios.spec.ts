@@ -17,6 +17,7 @@ function fakePrisma(datos: {
   ventasFiadas?: unknown[];
 }) {
   const creados: unknown[] = [];
+  const ventasRecordadas = new Set<string>();
 
   return {
     creados,
@@ -35,8 +36,14 @@ function fakePrisma(datos: {
       abono: { findMany: () => Promise.resolve(datos.abonos ?? []) },
       recordatorioFiado: {
         createMany: (args: { data: unknown[] }) => {
-          creados.push(...args.data);
-          return Promise.resolve({ count: args.data.length });
+          const nuevos = args.data.filter((dato) => {
+            const ventaId = (dato as { ventaId: string }).ventaId;
+            if (ventasRecordadas.has(ventaId)) return false;
+            ventasRecordadas.add(ventaId);
+            return true;
+          });
+          creados.push(...nuevos);
+          return Promise.resolve({ count: nuevos.length });
         },
       },
     } as unknown as PrismaService,
@@ -153,6 +160,81 @@ describe('DestinatariosService - a quien se le puede escribir', () => {
     ).sedesSinMovimientosHoy();
 
     expect(destinos[0].destinatario).toBe('573001234567');
+  });
+});
+
+describe('DestinatariosService - recordatorio personalizado de fiados', () => {
+  const ahora = new Date('2026-11-05T15:00:00.000Z');
+  const ventaFiada = {
+    id: 'venta-1',
+    sedeId: 's1',
+    fecha: new Date('2026-10-30T15:00:00.000Z'),
+    fechaVencimiento: new Date('2026-11-08T15:00:00.000Z'),
+    total: 50000,
+    saldoPendiente: 25000,
+    cliente: { nombre: 'Doña María' },
+  };
+
+  it('arma el mensaje personalizado y registra el saldo avisado', async () => {
+    const { prisma, creados } = fakePrisma({
+      sedes: [
+        sede({
+          negocio: {
+            nombre: 'El Virrey',
+            usuariosNegocio: [usuario('Beto Cuellar', '573009998888')],
+          },
+        }),
+      ],
+      ventasFiadas: [ventaFiada],
+    });
+
+    const avisos = await new DestinatariosService(prisma).recordatoriosDeFiados(ahora);
+
+    expect(avisos).toEqual([
+      expect.objectContaining({
+        ventaId: 'venta-1',
+        destinatario: '573009998888',
+        contacto: 'Beto',
+        cliente: 'Doña María',
+        monto: 25000,
+        montoTexto: '$25.000',
+        diasTranscurridos: 6,
+        via: 'usuario_telefono',
+        mensaje:
+          'Hola Beto, Doña María tiene un fiado pendiente de $25.000 desde hace 6 días. No olvides cobrarle. Cuando te pague, escríbeme y lo marco como cobrado.',
+      }),
+    ]);
+    expect(creados).toEqual([{ ventaId: 'venta-1', saldo: 25000 }]);
+  });
+
+  it('no vuelve a devolver ni registrar el mismo fiado', async () => {
+    const { prisma, creados } = fakePrisma({
+      sedes: [sede({ telefono: '573001234567' })],
+      ventasFiadas: [ventaFiada],
+    });
+    const service = new DestinatariosService(prisma);
+
+    expect(await service.recordatoriosDeFiados(ahora)).toHaveLength(1);
+    expect(await service.recordatoriosDeFiados(ahora)).toHaveLength(0);
+    expect(creados).toHaveLength(1);
+  });
+
+  it('consulta fiados por vencer dentro de cinco días que aún no tienen aviso', async () => {
+    const { prisma } = fakePrisma({ sedes: [sede({ telefono: '573001234567' })] });
+    const findMany = jest.spyOn(prisma.venta, 'findMany');
+
+    await new DestinatariosService(prisma).recordatoriosDeFiados(ahora);
+
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          tipo: 'FIADO',
+          saldoPendiente: { gt: 0 },
+          fechaVencimiento: { lte: new Date('2026-11-10T15:00:00.000Z') },
+          recordatorios: { is: null },
+        }),
+      }),
+    );
   });
 });
 
