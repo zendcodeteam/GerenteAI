@@ -30,6 +30,7 @@ import { AuthModule } from './auth/auth.module';
 import { DashboardConfigModule } from './modules/dashboard-config.module';
 import { CuentasProveedoresModule } from './modules/cuentas-proveedores.module';
 import { EstadisticasPublicasModule } from './modules/estadisticas-publicas.module';
+import { DeudasProveedoresModule } from './modules/deudas-proveedores.module';
 
 @Module({
   imports: [
@@ -100,6 +101,7 @@ import { EstadisticasPublicasModule } from './modules/estadisticas-publicas.modu
     CuentasProveedoresModule,
     EstadisticasPublicasModule,
     NominaModule,
+    DeudasProveedoresModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],
