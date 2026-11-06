@@ -33,11 +33,15 @@ export class ProductosController {
     @Query('sedeId') sedeId?: string,
     @Query('categoria') categoria?: string,
     @Query('search') search?: string,
+    @Query('stockBajo') stockBajo?: string,
   ) {
     return this.productosService.findAll(user.userId, user.rolGlobal, {
       sedeId,
       categoria,
       search,
+      // En la query todo llega como texto. Se aceptan las dos formas que
+      // manda un frontend: ?stockBajo=true y ?stockBajo=1.
+      stockBajo: stockBajo === 'true' || stockBajo === '1',
     });
   }
 

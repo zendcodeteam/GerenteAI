@@ -1,6 +1,7 @@
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { NegociosService } from '../src/services/negocios.service';
+import { UserContextCacheService } from '../src/services/user-context-cache.service';
 import { PlanesService } from '../src/services/planes.service';
 import { PrismaService } from '../src/services/prisma.service';
 import { ReportesService } from '../src/services/reportes.service';
@@ -25,6 +26,7 @@ describe('ReportesService (contra Postgres real)', () => {
       providers: [
         ReportesService,
         NegociosService,
+        UserContextCacheService,
         PlanesService,
         PrismaService,
       ],

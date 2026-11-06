@@ -74,6 +74,7 @@ describe('MFA obligatorio para MASTER (contra Postgres real)', () => {
         AuthService,
         PrismaService,
         NegociosService,
+        UserContextCacheService,
         PlanesService,
         {
           provide: JwtService,

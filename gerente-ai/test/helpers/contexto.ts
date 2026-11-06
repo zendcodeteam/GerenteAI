@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../../src/services/prisma.service';
 import { NegociosService } from '../../src/services/negocios.service';
+import { UserContextCacheService } from '../../src/services/user-context-cache.service';
 import { PlanesService } from '../../src/services/planes.service';
 import { ProductosService } from '../../src/services/productos.service';
 import { VentasService } from '../../src/services/ventas.service';
@@ -41,6 +42,7 @@ export async function crearContexto(): Promise<Contexto> {
     providers: [
       PrismaService,
       NegociosService,
+      UserContextCacheService,
       PlanesService,
       ProductosService,
       VentasService,

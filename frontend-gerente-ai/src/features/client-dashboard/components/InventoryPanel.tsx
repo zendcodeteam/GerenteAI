@@ -94,7 +94,11 @@ export function InventoryPanel({ sedeId, transactions }: InventoryPanelProps) {
     const costo = Number(precioCompra);
     const venta = Number(precioVenta);
 
-    if (venta < costo) {
+    // El aviso se queda, pero ya no es la única guarda: el servidor rechaza un
+    // producto a pérdida que no traiga este visto bueno explícito, así que la
+    // respuesta del tendero hay que mandársela.
+    const aPerdida = venta < costo;
+    if (aPerdida) {
       const confirmar = window.confirm(
         `Luka: el precio de venta ($${money(venta)}) es menor que el costo ($${money(costo)}). ¿Quieres registrar el producto con pérdida?`,
       );
@@ -113,6 +117,7 @@ export function InventoryPanel({ sedeId, transactions }: InventoryPanelProps) {
           precioVenta: venta,
           stock: Number(stock),
           sedeId,
+          ...(aPerdida ? { aceptoVenderConPerdida: true } : {}),
         }),
       });
       setNombre("");

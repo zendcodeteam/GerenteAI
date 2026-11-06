@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { createHash } from 'crypto';
 import { PrismaService } from '../src/services/prisma.service';
 import { NegociosService } from '../src/services/negocios.service';
+import { UserContextCacheService } from '../src/services/user-context-cache.service';
 import { PlanesService } from '../src/services/planes.service';
 import { PagosService } from '../src/services/pagos.service';
 import { RecordatoriosService } from '../src/services/recordatorios.service';
@@ -66,6 +67,7 @@ describe('Recordatorios de vencimiento (contra Postgres real)', () => {
         PrismaService,
         PlanesService,
         NegociosService,
+        UserContextCacheService,
         PagosService,
         RecordatoriosService,
         { provide: MailService, useValue: mail },
