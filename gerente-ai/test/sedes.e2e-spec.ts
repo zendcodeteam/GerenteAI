@@ -1,6 +1,7 @@
 import { ConflictException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { NegociosService } from '../src/services/negocios.service';
+import { UserContextCacheService } from '../src/services/user-context-cache.service';
 import { PlanesService } from '../src/services/planes.service';
 import { PrismaService } from '../src/services/prisma.service';
 import { SedesService } from '../src/services/sedes.service';
@@ -14,7 +15,13 @@ describe('Sedes y enrutamiento por teléfono (contra Postgres real)', () => {
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
-      providers: [SedesService, NegociosService, PlanesService, PrismaService],
+      providers: [
+        SedesService,
+        NegociosService,
+        UserContextCacheService,
+        PlanesService,
+        PrismaService,
+      ],
     }).compile();
 
     prisma = moduleRef.get(PrismaService);
