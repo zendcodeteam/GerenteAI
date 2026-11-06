@@ -1,3 +1,4 @@
+import { UserContextCacheService } from '../services/user-context-cache.service';
 import {
   BadRequestException,
   ConflictException,
@@ -17,11 +18,7 @@ import { OAuth2Client } from 'google-auth-library';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 
-import {
-  generateSecret,
-  generateURI,
-  verify as verifyTotp,
-} from 'otplib';
+import { generateSecret, generateURI, verify as verifyTotp } from 'otplib';
 
 import { PrismaService } from '../services/prisma.service';
 import { NegociosService } from '../services/negocios.service';
@@ -109,9 +106,7 @@ const MFA_AUTH_TAG_LENGTH = 16;
 
 const MFA_KEY_LENGTH = 32;
 
-type MfaPendingPurpose =
-  | 'setup'
-  | 'login';
+type MfaPendingPurpose = 'setup' | 'login';
 
 interface MfaPendingPayload {
   sub: string;
@@ -158,9 +153,7 @@ export interface MfaLoginResponse {
 }
 
 export type AuthResponse =
-  | AuthenticatedUserResponse
-  | MfaSetupResponse
-  | MfaLoginResponse;
+  AuthenticatedUserResponse | MfaSetupResponse | MfaLoginResponse;
 
 @Injectable()
 export class AuthService {
@@ -176,20 +169,16 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly mailService: MailService,
     private readonly negociosService: NegociosService,
+    private readonly userCache?: UserContextCacheService,
   ) {
-    this.googleClient = new OAuth2Client(
-      process.env.GOOGLE_CLIENT_ID,
-    );
+    this.googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
   }
 
   // ============================================================
   // REGISTRO TRADICIONAL
   // ============================================================
 
-  async register(
-    dto: RegisterDto,
-    ipAddress: string,
-  ) {
+  async register(dto: RegisterDto, ipAddress: string) {
     // ----------------------------------------------------------
     // VALIDAR ACEPTACIONES LEGALES
     // ----------------------------------------------------------
@@ -206,82 +195,65 @@ export class AuthService {
       );
     }
 
-    const hashedPassword =
-      await bcrypt.hash(
-        dto.password,
-        BCRYPT_ROUNDS,
-      );
+    const hashedPassword = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
 
     try {
-      const resultado =
-        await this.prisma.$transaction(
-          async (tx) => {
-            // --------------------------------------------------
-            // USUARIO
-            // --------------------------------------------------
+      const resultado = await this.prisma.$transaction(async (tx) => {
+        // --------------------------------------------------
+        // USUARIO
+        // --------------------------------------------------
 
-            const usuario =
-              await tx.usuario.create({
-                data: {
-                  nombre: dto.nombre,
-                  telefono: dto.telefono,
-                  email: dto.email
-                    .trim()
-                    .toLowerCase(),
-                  password: hashedPassword,
-                },
-              });
-
-            // --------------------------------------------------
-            // ACEPTACIONES LEGALES
-            // --------------------------------------------------
-
-            const aceptadoEn =
-              new Date();
-
-            await tx.consentimientoLegal.create({
-              data: {
-                usuarioId: usuario.id,
-                documento:
-                  DocumentoLegal.TERMINOS_SERVICIO,
-                version:
-                  LEGAL_DOCUMENT_VERSION,
-                aceptadoEn,
-                ipAddress,
-              },
-            });
-
-            await tx.consentimientoLegal.create({
-              data: {
-                usuarioId: usuario.id,
-                documento:
-                  DocumentoLegal.POLITICA_PRIVACIDAD,
-                version:
-                  LEGAL_DOCUMENT_VERSION,
-                aceptadoEn,
-                ipAddress,
-              },
-            });
-
-            return {
-              usuario,
-            };
+        const usuario = await tx.usuario.create({
+          data: {
+            nombre: dto.nombre,
+            telefono: dto.telefono,
+            email: dto.email.trim().toLowerCase(),
+            password: hashedPassword,
           },
-        );
+        });
 
-      const usuario =
-        resultado.usuario;
+        // --------------------------------------------------
+        // ACEPTACIONES LEGALES
+        // --------------------------------------------------
 
-      const verificationToken =
-        this.jwtService.sign(
-          {
-            sub: usuario.id,
-            type: 'email-verification',
+        const aceptadoEn = new Date();
+
+        await tx.consentimientoLegal.create({
+          data: {
+            usuarioId: usuario.id,
+            documento: DocumentoLegal.TERMINOS_SERVICIO,
+            version: LEGAL_DOCUMENT_VERSION,
+            aceptadoEn,
+            ipAddress,
           },
-          firmaDe('email-verification', {
-            expiresIn: '24h',
-          }),
-        );
+        });
+
+        await tx.consentimientoLegal.create({
+          data: {
+            usuarioId: usuario.id,
+            documento: DocumentoLegal.POLITICA_PRIVACIDAD,
+            version: LEGAL_DOCUMENT_VERSION,
+            aceptadoEn,
+            ipAddress,
+          },
+        });
+
+        return {
+          usuario,
+        };
+      });
+
+      const usuario = resultado.usuario;
+
+      const verificationToken = this.jwtService.sign(
+        {
+          sub: usuario.id,
+          type: 'email-verification',
+        },
+        firmaDe('email-verification', {
+          expiresIn: '24h',
+        }),
+      );
 
       /**
        * El correo se dispara sin esperarlo:
@@ -306,8 +278,7 @@ export class AuthService {
       };
     } catch (error) {
       if (
-        error instanceof
-          Prisma.PrismaClientKnownRequestError &&
+        error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
       ) {
         throw new ConflictException(
@@ -323,56 +294,40 @@ export class AuthService {
   // VERIFICACIÓN DE EMAIL
   // ============================================================
 
-  async verificarEmail(
-    token: string,
-  ) {
+  async verificarEmail(token: string) {
     let payload: {
       sub: string;
       type: string;
     };
 
     try {
-      payload =
-        this.jwtService.verify(
-          token,
-          verificacionDe(
-            'email-verification',
-          ),
-        );
+      payload = this.jwtService.verify(
+        token,
+        verificacionDe('email-verification'),
+      );
     } catch {
       throw new UnauthorizedException(
         'El enlace de verificación es inválido o expiró',
       );
     }
 
-    if (
-      payload.type !==
-      'email-verification'
-    ) {
-      throw new UnauthorizedException(
-        'Token inválido para esta operación',
-      );
+    if (payload.type !== 'email-verification') {
+      throw new UnauthorizedException('Token inválido para esta operación');
     }
 
-    const usuario =
-      await this.prisma.usuario.findUnique(
-        {
-          where: {
-            id: payload.sub,
-          },
-        },
-      );
+    const usuario = await this.prisma.usuario.findUnique({
+      where: {
+        id: payload.sub,
+      },
+    });
 
     if (!usuario) {
-      throw new NotFoundException(
-        'Usuario no encontrado',
-      );
+      throw new NotFoundException('Usuario no encontrado');
     }
 
     if (usuario.emailVerificado) {
       return {
-        mensaje:
-          'Este correo ya había sido verificado anteriormente',
+        mensaje: 'Este correo ya había sido verificado anteriormente',
         usuarioId: usuario.id,
       };
     }
@@ -387,8 +342,7 @@ export class AuthService {
     });
 
     return {
-      mensaje:
-        'Correo verificado correctamente',
+      mensaje: 'Correo verificado correctamente',
       usuarioId: usuario.id,
     };
   }
@@ -408,36 +362,27 @@ export class AuthService {
    * Al bloquear, el contador vuelve a cero: cuando el bloqueo venza, la
    * persona tiene otra vez sus cinco intentos.
    */
-  private async registrarIntentoFallido(
-    usuarioId: string,
-  ): Promise<void> {
-    const { intentosFallidos } =
-      await this.prisma.usuario.update({
-        where: { id: usuarioId },
-        data: {
-          intentosFallidos: {
-            increment: 1,
-          },
+  private async registrarIntentoFallido(usuarioId: string): Promise<void> {
+    const { intentosFallidos } = await this.prisma.usuario.update({
+      where: { id: usuarioId },
+      data: {
+        intentosFallidos: {
+          increment: 1,
         },
-        select: {
-          intentosFallidos: true,
-        },
-      });
+      },
+      select: {
+        intentosFallidos: true,
+      },
+    });
 
-    if (
-      intentosFallidos <
-      MAX_INTENTOS_FALLIDOS
-    ) {
+    if (intentosFallidos < MAX_INTENTOS_FALLIDOS) {
       return;
     }
 
     await this.prisma.usuario.update({
       where: { id: usuarioId },
       data: {
-        bloqueadoHasta: new Date(
-          Date.now() +
-            MINUTOS_BLOQUEO * 60_000,
-        ),
+        bloqueadoHasta: new Date(Date.now() + MINUTOS_BLOQUEO * 60_000),
         intentosFallidos: 0,
       },
     });
@@ -451,55 +396,39 @@ export class AuthService {
   // LOGIN TRADICIONAL
   // ============================================================
 
-  async login(
-    dto: LoginDto,
-  ): Promise<AuthResponse> {
-    const email =
-      dto.email
-        .trim()
-        .toLowerCase();
+  async login(dto: LoginDto): Promise<AuthResponse> {
+    const email = dto.email.trim().toLowerCase();
 
-    const usuario =
-      await this.prisma.usuario.findUnique(
-        {
-          where: {
-            email,
-          },
+    const usuario = await this.prisma.usuario.findUnique({
+      where: {
+        email,
+      },
 
-          select: {
-            id: true,
-            nombre: true,
-            email: true,
-            password: true,
-            emailVerificado: true,
-            rolGlobal: true,
-            mfaActivado: true,
-            intentosFallidos: true,
-            bloqueadoHasta: true,
-            negocios: true,
-          },
-        },
-      );
+      select: {
+        id: true,
+        nombre: true,
+        email: true,
+        password: true,
+        emailVerificado: true,
+        rolGlobal: true,
+        mfaActivado: true,
+        intentosFallidos: true,
+        bloqueadoHasta: true,
+        negocios: true,
+      },
+    });
 
     // La contraseña se compara SIEMPRE, exista o no la cuenta y esté o no
     // bloqueada: es lo que impide averiguar qué correos están registrados
     // midiendo cuánto tarda la respuesta.
     const passwordValida = usuario
-      ? await bcrypt.compare(
-          dto.password,
-          usuario.password,
-        )
-      : await bcrypt.compare(
-          dto.password,
-          this.DUMMY_HASH,
-        );
+      ? await bcrypt.compare(dto.password, usuario.password)
+      : await bcrypt.compare(dto.password, this.DUMMY_HASH);
 
-    const bloqueadoHasta =
-      usuario?.bloqueadoHasta ?? null;
+    const bloqueadoHasta = usuario?.bloqueadoHasta ?? null;
 
     const sigueBloqueada =
-      bloqueadoHasta !== null &&
-      bloqueadoHasta > new Date();
+      bloqueadoHasta !== null && bloqueadoHasta > new Date();
 
     if (sigueBloqueada) {
       // Solo se le explica el bloqueo a quien acertó la contraseña. Si se le
@@ -508,9 +437,7 @@ export class AuthService {
       // commit anterior de mensajes de login.
       if (passwordValida) {
         const minutosRestantes = Math.ceil(
-          (bloqueadoHasta.getTime() -
-            Date.now()) /
-            60_000,
+          (bloqueadoHasta.getTime() - Date.now()) / 60_000,
         );
 
         throw new UnauthorizedException(
@@ -520,21 +447,15 @@ export class AuthService {
 
       // Insistir durante el bloqueo no lo alarga ni suma intentos: si lo
       // hiciera, un atacante podría dejar a alguien afuera indefinidamente.
-      throw new UnauthorizedException(
-        'Correo o contraseña incorrectos',
-      );
+      throw new UnauthorizedException('Correo o contraseña incorrectos');
     }
 
     if (!usuario || !passwordValida) {
       if (usuario) {
-        await this.registrarIntentoFallido(
-          usuario.id,
-        );
+        await this.registrarIntentoFallido(usuario.id);
       }
 
-      throw new UnauthorizedException(
-        'Correo o contraseña incorrectos',
-      );
+      throw new UnauthorizedException('Correo o contraseña incorrectos');
     }
 
     // Login exitoso: resetear intentos fallidos y bloqueo
@@ -554,29 +475,18 @@ export class AuthService {
     // Re-hashear en el login si la contraseña fue creada
     // con un factor menor a 12.
     try {
-      if (
-        bcrypt.getRounds(
-          usuario.password,
-        ) < BCRYPT_ROUNDS
-      ) {
-        const rehashedPassword =
-          await bcrypt.hash(
-            dto.password,
-            BCRYPT_ROUNDS,
-          );
+      if (bcrypt.getRounds(usuario.password) < BCRYPT_ROUNDS) {
+        const rehashedPassword = await bcrypt.hash(dto.password, BCRYPT_ROUNDS);
 
-        await this.prisma.usuario.update(
-          {
-            where: {
-              id: usuario.id,
-            },
-
-            data: {
-              password:
-                rehashedPassword,
-            },
+        await this.prisma.usuario.update({
+          where: {
+            id: usuario.id,
           },
-        );
+
+          data: {
+            password: rehashedPassword,
+          },
+        });
       }
     } catch {
       // Si getRounds falla por formato no estándar,
@@ -593,8 +503,7 @@ export class AuthService {
       );
     }
 
-    const usuarioNegocio =
-      usuario.negocios[0];
+    const usuarioNegocio = usuario.negocios[0];
 
     // ==========================================================
     // MASTER
@@ -625,13 +534,8 @@ export class AuthService {
     // JWT definitivo
     // ==========================================================
 
-    if (
-      usuario.rolGlobal ===
-      'MASTER'
-    ) {
-      return this.buildMasterMfaResponse(
-        usuario,
-      );
+    if (usuario.rolGlobal === 'MASTER') {
+      return this.buildMasterMfaResponse(usuario);
     }
 
     // ==========================================================
@@ -644,10 +548,8 @@ export class AuthService {
     return this.buildAuthResponse(
       usuario.id,
       usuario.nombre,
-      usuarioNegocio?.negocioId ??
-        null,
-      usuarioNegocio?.role ??
-        null,
+      usuarioNegocio?.negocioId ?? null,
+      usuarioNegocio?.role ?? null,
       usuario.rolGlobal,
     );
   }
@@ -662,11 +564,8 @@ export class AuthService {
    * Nunca confiamos directamente en nombre/email
    * enviados por el frontend.
    */
-  private async validarGoogleCredential(
-    credential: string,
-  ) {
-    const googleClientId =
-      process.env.GOOGLE_CLIENT_ID;
+  private async validarGoogleCredential(credential: string) {
+    const googleClientId = process.env.GOOGLE_CLIENT_ID;
 
     if (!googleClientId) {
       throw new UnauthorizedException(
@@ -675,30 +574,23 @@ export class AuthService {
     }
 
     if (!credential?.trim()) {
-      throw new BadRequestException(
-        'La credencial de Google es obligatoria',
-      );
+      throw new BadRequestException('La credencial de Google es obligatoria');
     }
 
     let ticket;
 
     try {
-      ticket =
-        await this.googleClient.verifyIdToken(
-          {
-            idToken: credential,
-            audience:
-              googleClientId,
-          },
-        );
+      ticket = await this.googleClient.verifyIdToken({
+        idToken: credential,
+        audience: googleClientId,
+      });
     } catch {
       throw new UnauthorizedException(
         'La credencial de Google es inválida o expiró',
       );
     }
 
-    const payload =
-      ticket.getPayload();
+    const payload = ticket.getPayload();
 
     if (!payload) {
       throw new UnauthorizedException(
@@ -706,16 +598,11 @@ export class AuthService {
       );
     }
 
-    const googleId =
-      payload.sub;
+    const googleId = payload.sub;
 
-    const email =
-      payload.email
-        ?.trim()
-        .toLowerCase();
+    const email = payload.email?.trim().toLowerCase();
 
-    const nombre =
-      payload.name?.trim();
+    const nombre = payload.name?.trim();
 
     if (!googleId) {
       throw new UnauthorizedException(
@@ -765,57 +652,40 @@ export class AuthService {
    *   ↓
    * JWT definitivo
    */
-  async googleLogin(
-    dto: GoogleLoginDto,
-  ): Promise<AuthResponse> {
-    const google =
-      await this.validarGoogleCredential(
-        dto.credential,
-      );
+  async googleLogin(dto: GoogleLoginDto): Promise<AuthResponse> {
+    const google = await this.validarGoogleCredential(dto.credential);
 
     // ------------------------------------------------------------
     // 1. Buscar por Google ID
     // ------------------------------------------------------------
 
-    const usuarioPorGoogle =
-      await this.prisma.usuario.findUnique(
-        {
-          where: {
-            googleId:
-              google.googleId,
-          },
+    const usuarioPorGoogle = await this.prisma.usuario.findUnique({
+      where: {
+        googleId: google.googleId,
+      },
 
-          select: {
-            id: true,
-            nombre: true,
-            email: true,
-            rolGlobal: true,
-            mfaActivado: true,
-            negocios: true,
-          },
-        },
-      );
+      select: {
+        id: true,
+        nombre: true,
+        email: true,
+        rolGlobal: true,
+        mfaActivado: true,
+        negocios: true,
+      },
+    });
 
     if (usuarioPorGoogle) {
-      const usuarioNegocio =
-        usuarioPorGoogle.negocios[0];
+      const usuarioNegocio = usuarioPorGoogle.negocios[0];
 
-      if (
-        usuarioPorGoogle.rolGlobal ===
-        'MASTER'
-      ) {
-        return this.buildMasterMfaResponse(
-          usuarioPorGoogle,
-        );
+      if (usuarioPorGoogle.rolGlobal === 'MASTER') {
+        return this.buildMasterMfaResponse(usuarioPorGoogle);
       }
 
       return this.buildAuthResponse(
         usuarioPorGoogle.id,
         usuarioPorGoogle.nombre,
-        usuarioNegocio?.negocioId ??
-          null,
-        usuarioNegocio?.role ??
-          null,
+        usuarioNegocio?.negocioId ?? null,
+        usuarioNegocio?.role ?? null,
         usuarioPorGoogle.rolGlobal,
       );
     }
@@ -824,18 +694,15 @@ export class AuthService {
     // 2. Buscar por email
     // ------------------------------------------------------------
 
-    const usuarioPorEmail =
-      await this.prisma.usuario.findUnique(
-        {
-          where: {
-            email: google.email,
-          },
+    const usuarioPorEmail = await this.prisma.usuario.findUnique({
+      where: {
+        email: google.email,
+      },
 
-          select: {
-            id: true,
-          },
-        },
-      );
+      select: {
+        id: true,
+      },
+    });
 
     if (usuarioPorEmail) {
       throw new ConflictException(
@@ -856,10 +723,7 @@ export class AuthService {
   // REGISTRO CON GOOGLE
   // ============================================================
 
-  async googleRegister(
-    dto: GoogleRegisterDto,
-    ipAddress: string,
-  ) {
+  async googleRegister(dto: GoogleRegisterDto, ipAddress: string) {
     // ----------------------------------------------------------
     // VALIDAR ACEPTACIONES LEGALES
     // ----------------------------------------------------------
@@ -876,28 +740,18 @@ export class AuthService {
       );
     }
 
-    const google =
-      await this.validarGoogleCredential(
-        dto.credential,
-      );
+    const google = await this.validarGoogleCredential(dto.credential);
 
     // ------------------------------------------------------------
     // LIMPIAR INFORMACIÓN
     // ------------------------------------------------------------
 
-    const telefono =
-      this.normalizarTelefono(
-        dto.telefono,
-      );
+    const telefono = this.normalizarTelefono(dto.telefono);
 
-    const nombreNegocio =
-      dto.nombreNegocio?.trim();
+    const nombreNegocio = dto.nombreNegocio?.trim();
 
     const whatsappUsername =
-      dto.whatsappUsername
-        ?.trim()
-        .replace(/^@+/, '') ||
-      null;
+      dto.whatsappUsername?.trim().replace(/^@+/, '') || null;
 
     if (!telefono) {
       throw new BadRequestException(
@@ -906,28 +760,22 @@ export class AuthService {
     }
 
     if (!nombreNegocio) {
-      throw new BadRequestException(
-        'El nombre del negocio es obligatorio',
-      );
+      throw new BadRequestException('El nombre del negocio es obligatorio');
     }
 
     // ------------------------------------------------------------
     // VERIFICAR CUENTA POR GOOGLE ID
     // ------------------------------------------------------------
 
-    const cuentaPorGoogle =
-      await this.prisma.usuario.findUnique(
-        {
-          where: {
-            googleId:
-              google.googleId,
-          },
+    const cuentaPorGoogle = await this.prisma.usuario.findUnique({
+      where: {
+        googleId: google.googleId,
+      },
 
-          select: {
-            id: true,
-          },
-        },
-      );
+      select: {
+        id: true,
+      },
+    });
 
     if (cuentaPorGoogle) {
       throw new ConflictException(
@@ -939,18 +787,15 @@ export class AuthService {
     // VERIFICAR CUENTA POR EMAIL
     // ------------------------------------------------------------
 
-    const cuentaPorEmail =
-      await this.prisma.usuario.findUnique(
-        {
-          where: {
-            email: google.email,
-          },
+    const cuentaPorEmail = await this.prisma.usuario.findUnique({
+      where: {
+        email: google.email,
+      },
 
-          select: {
-            id: true,
-          },
-        },
-      );
+      select: {
+        id: true,
+      },
+    });
 
     if (cuentaPorEmail) {
       throw new ConflictException(
@@ -962,156 +807,126 @@ export class AuthService {
     // CONTRASEÑA INTERNA
     // ------------------------------------------------------------
 
-    const randomPassword =
-      await bcrypt.hash(
-        `${google.googleId}-${crypto.randomUUID()}`,
-        BCRYPT_ROUNDS,
-      );
+    const randomPassword = await bcrypt.hash(
+      `${google.googleId}-${crypto.randomUUID()}`,
+      BCRYPT_ROUNDS,
+    );
 
     // ------------------------------------------------------------
     // CREACIÓN ATÓMICA
     // ------------------------------------------------------------
 
     try {
-      const resultado =
-        await this.prisma.$transaction(
-          async (tx) => {
-            // --------------------------------------------------
-            // USUARIO
-            // --------------------------------------------------
+      const resultado = await this.prisma.$transaction(async (tx) => {
+        // --------------------------------------------------
+        // USUARIO
+        // --------------------------------------------------
 
-            const usuario =
-              await tx.usuario.create({
-                data: {
-                  nombre:
-                    google.nombre,
+        const usuario = await tx.usuario.create({
+          data: {
+            nombre: google.nombre,
 
-                  email:
-                    google.email,
+            email: google.email,
 
-                  telefono,
+            telefono,
 
-                  password:
-                    randomPassword,
+            password: randomPassword,
 
-                  // Google ya verificó el correo.
-                  emailVerificado:
-                    true,
+            // Google ya verificó el correo.
+            emailVerificado: true,
 
-                  googleId:
-                    google.googleId,
-                },
-              });
-
-            // --------------------------------------------------
-            // ACEPTACIONES LEGALES
-            // --------------------------------------------------
-
-            const aceptadoEn =
-              new Date();
-
-            await tx.consentimientoLegal.create(
-              {
-                data: {
-                  usuarioId:
-                    usuario.id,
-
-                  documento:
-                    DocumentoLegal.TERMINOS_SERVICIO,
-
-                  version:
-                    LEGAL_DOCUMENT_VERSION,
-
-                  aceptadoEn,
-
-                  ipAddress,
-                },
-              },
-            );
-
-            await tx.consentimientoLegal.create(
-              {
-                data: {
-                  usuarioId:
-                    usuario.id,
-
-                  documento:
-                    DocumentoLegal.POLITICA_PRIVACIDAD,
-
-                  version:
-                    LEGAL_DOCUMENT_VERSION,
-
-                  aceptadoEn,
-
-                  ipAddress,
-                },
-              },
-            );
-
-            // --------------------------------------------------
-            // NEGOCIO
-            // --------------------------------------------------
-
-            const negocio =
-              await tx.negocio.create({
-                data: {
-                  nombre:
-                    nombreNegocio,
-                },
-              });
-
-            // --------------------------------------------------
-            // USUARIO → NEGOCIO
-            // --------------------------------------------------
-
-            await tx.usuarioNegocio.create({
-              data: {
-                usuarioId:
-                  usuario.id,
-
-                negocioId:
-                  negocio.id,
-              },
-            });
-
-            // --------------------------------------------------
-            // SEDE PRINCIPAL
-            // --------------------------------------------------
-
-            const sede =
-              await tx.sede.create({
-                data: {
-                  nombre:
-                    'Sede principal',
-
-                  negocioId:
-                    negocio.id,
-
-                  whatsappUsername,
-                },
-              });
-
-            // --------------------------------------------------
-            // USUARIO → SEDE
-            // --------------------------------------------------
-
-            await tx.usuarioSede.create({
-              data: {
-                usuarioId:
-                  usuario.id,
-
-                sedeId:
-                  sede.id,
-              },
-            });
-
-            return {
-              usuario,
-              negocio,
-              sede,
-            };
+            googleId: google.googleId,
           },
-        );
+        });
+
+        // --------------------------------------------------
+        // ACEPTACIONES LEGALES
+        // --------------------------------------------------
+
+        const aceptadoEn = new Date();
+
+        await tx.consentimientoLegal.create({
+          data: {
+            usuarioId: usuario.id,
+
+            documento: DocumentoLegal.TERMINOS_SERVICIO,
+
+            version: LEGAL_DOCUMENT_VERSION,
+
+            aceptadoEn,
+
+            ipAddress,
+          },
+        });
+
+        await tx.consentimientoLegal.create({
+          data: {
+            usuarioId: usuario.id,
+
+            documento: DocumentoLegal.POLITICA_PRIVACIDAD,
+
+            version: LEGAL_DOCUMENT_VERSION,
+
+            aceptadoEn,
+
+            ipAddress,
+          },
+        });
+
+        // --------------------------------------------------
+        // NEGOCIO
+        // --------------------------------------------------
+
+        const negocio = await tx.negocio.create({
+          data: {
+            nombre: nombreNegocio,
+          },
+        });
+
+        // --------------------------------------------------
+        // USUARIO → NEGOCIO
+        // --------------------------------------------------
+
+        await tx.usuarioNegocio.create({
+          data: {
+            usuarioId: usuario.id,
+
+            negocioId: negocio.id,
+          },
+        });
+
+        // --------------------------------------------------
+        // SEDE PRINCIPAL
+        // --------------------------------------------------
+
+        const sede = await tx.sede.create({
+          data: {
+            nombre: 'Sede principal',
+
+            negocioId: negocio.id,
+
+            whatsappUsername,
+          },
+        });
+
+        // --------------------------------------------------
+        // USUARIO → SEDE
+        // --------------------------------------------------
+
+        await tx.usuarioSede.create({
+          data: {
+            usuarioId: usuario.id,
+
+            sedeId: sede.id,
+          },
+        });
+
+        return {
+          usuario,
+          negocio,
+          sede,
+        };
+      });
 
       // ----------------------------------------------------------
       // RESPUESTA
@@ -1126,26 +941,14 @@ export class AuthService {
       );
     } catch (error) {
       if (
-        error instanceof
-          Prisma.PrismaClientKnownRequestError &&
+        error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
       ) {
-        const target =
-          Array.isArray(
-            error.meta?.target,
-          )
-            ? (error.meta
-                .target as string[])
-            : [];
+        const target = Array.isArray(error.meta?.target)
+          ? (error.meta.target as string[])
+          : [];
 
-        if (
-          target.includes(
-            'email',
-          ) ||
-          target.includes(
-            'googleId',
-          )
-        ) {
+        if (target.includes('email') || target.includes('googleId')) {
           throw new ConflictException(
             'Ya existe una cuenta de Luka con este correo de Google.',
           );
@@ -1164,34 +967,22 @@ export class AuthService {
   // NORMALIZAR TELÉFONO COLOMBIANO
   // ============================================================
 
-  private normalizarTelefono(
-    telefono?: string,
-  ): string | null {
-    const raw =
-      (telefono ?? '').trim();
+  private normalizarTelefono(telefono?: string): string | null {
+    const raw = (telefono ?? '').trim();
 
     if (!raw) {
       return null;
     }
 
-    const digits =
-      raw.replace(/\D/g, '');
+    const digits = raw.replace(/\D/g, '');
 
     // 3001234567
-    if (
-      /^3\d{9}$/.test(
-        digits,
-      )
-    ) {
+    if (/^3\d{9}$/.test(digits)) {
       return `+57${digits}`;
     }
 
     // 573001234567
-    if (
-      /^57(3\d{9})$/.test(
-        digits,
-      )
-    ) {
+    if (/^57(3\d{9})$/.test(digits)) {
       return `+${digits}`;
     }
 
@@ -1207,14 +998,11 @@ export class AuthService {
     rolGlobal: string,
     dto: AsociarNegocioDto,
   ) {
-    const negocio =
-      await this.prisma.negocio.findUnique(
-        {
-          where: {
-            id: dto.negocioId,
-          },
-        },
-      );
+    const negocio = await this.prisma.negocio.findUnique({
+      where: {
+        id: dto.negocioId,
+      },
+    });
 
     if (!negocio) {
       throw new NotFoundException(
@@ -1228,37 +1016,27 @@ export class AuthService {
       rolGlobal,
     );
 
-    const usuario =
-      await this.prisma.usuario.findUnique(
-        {
-          where: {
-            id: dto.usuarioId,
-          },
-        },
-      );
+    const usuario = await this.prisma.usuario.findUnique({
+      where: {
+        id: dto.usuarioId,
+      },
+    });
 
     if (!usuario) {
-      throw new NotFoundException(
-        'El usuario indicado no existe',
-      );
+      throw new NotFoundException('El usuario indicado no existe');
     }
 
     try {
-      return await this.prisma.usuarioNegocio.create(
-        {
-          data: {
-            usuarioId:
-              dto.usuarioId,
+      return await this.prisma.usuarioNegocio.create({
+        data: {
+          usuarioId: dto.usuarioId,
 
-            negocioId:
-              dto.negocioId,
-          },
+          negocioId: dto.negocioId,
         },
-      );
+      });
     } catch (error) {
       if (
-        error instanceof
-          Prisma.PrismaClientKnownRequestError &&
+        error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
       ) {
         throw new ConflictException(
@@ -1274,40 +1052,28 @@ export class AuthService {
   // ELIMINAR USUARIO
   // ============================================================
 
-  async removeUsuario(
-    id: string,
-    rolGlobal: string,
-  ) {
-    if (
-      rolGlobal !== 'MASTER'
-    ) {
+  async removeUsuario(id: string, rolGlobal: string) {
+    if (rolGlobal !== 'MASTER') {
       throw new ForbiddenException(
         'Solo un usuario MASTER puede eliminar cuentas',
       );
     }
 
-    const usuario =
-      await this.prisma.usuario.findUnique(
-        {
-          where: {
-            id,
-          },
-        },
-      );
+    const usuario = await this.prisma.usuario.findUnique({
+      where: {
+        id,
+      },
+    });
 
     if (!usuario) {
-      throw new NotFoundException(
-        `Usuario con id ${id} no encontrado`,
-      );
+      throw new NotFoundException(`Usuario con id ${id} no encontrado`);
     }
 
-    return this.prisma.usuario.delete(
-      {
-        where: {
-          id,
-        },
+    return this.prisma.usuario.delete({
+      where: {
+        id,
       },
-    );
+    });
   }
 
   // ============================================================
@@ -1319,33 +1085,24 @@ export class AuthService {
    *
    * Nunca genera un access_token definitivo.
    */
-  private buildMasterMfaResponse(
-    usuario: {
-      id: string;
-      nombre: string;
-      email: string;
-      rolGlobal: string;
-      mfaActivado: boolean;
-    },
-  ):
-    | MfaSetupResponse
-    | MfaLoginResponse {
+  private buildMasterMfaResponse(usuario: {
+    id: string;
+    nombre: string;
+    email: string;
+    rolGlobal: string;
+    mfaActivado: boolean;
+  }): MfaSetupResponse | MfaLoginResponse {
     // ----------------------------------------------------------
     // MFA NO ACTIVADO
     // ----------------------------------------------------------
 
     if (!usuario.mfaActivado) {
-      const mfaToken =
-        this.createMfaPendingToken(
-          usuario.id,
-          'setup',
-        );
+      const mfaToken = this.createMfaPendingToken(usuario.id, 'setup');
 
       return {
         requiresMfa: true,
 
-        mfaRequiredAction:
-          'setup',
+        mfaRequiredAction: 'setup',
 
         mfaToken,
 
@@ -1353,8 +1110,7 @@ export class AuthService {
           id: usuario.id,
           nombre: usuario.nombre,
           email: usuario.email,
-          rolGlobal:
-            usuario.rolGlobal,
+          rolGlobal: usuario.rolGlobal,
         },
       };
     }
@@ -1363,17 +1119,12 @@ export class AuthService {
     // MFA YA ACTIVADO
     // ----------------------------------------------------------
 
-    const mfaToken =
-      this.createMfaPendingToken(
-        usuario.id,
-        'login',
-      );
+    const mfaToken = this.createMfaPendingToken(usuario.id, 'login');
 
     return {
       requiresMfa: true,
 
-      mfaRequiredAction:
-        'verify',
+      mfaRequiredAction: 'verify',
 
       mfaToken,
 
@@ -1381,8 +1132,7 @@ export class AuthService {
         id: usuario.id,
         nombre: usuario.nombre,
         email: usuario.email,
-        rolGlobal:
-          usuario.rolGlobal,
+        rolGlobal: usuario.rolGlobal,
       },
     };
   }
@@ -1415,8 +1165,7 @@ export class AuthService {
         purpose,
       },
       firmaDe('mfa-pending', {
-        expiresIn:
-          MFA_TOKEN_EXPIRES_IN,
+        expiresIn: MFA_TOKEN_EXPIRES_IN,
       }),
     );
   }
@@ -1430,21 +1179,16 @@ export class AuthService {
     expectedPurpose: MfaPendingPurpose,
   ): MfaPendingPayload {
     if (!token?.trim()) {
-      throw new BadRequestException(
-        'El token temporal de MFA es obligatorio',
-      );
+      throw new BadRequestException('El token temporal de MFA es obligatorio');
     }
 
     let payload: MfaPendingPayload;
 
     try {
-      payload =
-        this.jwtService.verify<MfaPendingPayload>(
-          token,
-          verificacionDe(
-            'mfa-pending',
-          ),
-        );
+      payload = this.jwtService.verify<MfaPendingPayload>(
+        token,
+        verificacionDe('mfa-pending'),
+      );
     } catch {
       throw new UnauthorizedException(
         'El proceso de MFA expiró o es inválido. Inicia sesión nuevamente.',
@@ -1452,10 +1196,8 @@ export class AuthService {
     }
 
     if (
-      payload.type !==
-        'mfa-pending' ||
-      payload.purpose !==
-        expectedPurpose ||
+      payload.type !== 'mfa-pending' ||
+      payload.purpose !== expectedPurpose ||
       !payload.sub
     ) {
       throw new UnauthorizedException(
@@ -1471,8 +1213,7 @@ export class AuthService {
   // ============================================================
 
   private getMfaEncryptionKey(): Buffer {
-    const rawKey =
-      process.env.MFA_ENCRYPTION_KEY?.trim();
+    const rawKey = process.env.MFA_ENCRYPTION_KEY?.trim();
 
     if (!rawKey) {
       throw this.errorDeConfiguracionMfa(
@@ -1480,26 +1221,15 @@ export class AuthService {
       );
     }
 
-    if (
-      !/^[0-9a-fA-F]{64}$/.test(
-        rawKey,
-      )
-    ) {
+    if (!/^[0-9a-fA-F]{64}$/.test(rawKey)) {
       throw this.errorDeConfiguracionMfa(
         'La configuración de seguridad MFA es inválida',
       );
     }
 
-    const key =
-      Buffer.from(
-        rawKey,
-        'hex',
-      );
+    const key = Buffer.from(rawKey, 'hex');
 
-    if (
-      key.length !==
-      MFA_KEY_LENGTH
-    ) {
+    if (key.length !== MFA_KEY_LENGTH) {
       throw this.errorDeConfiguracionMfa(
         'La configuración de seguridad MFA es inválida',
       );
@@ -1512,39 +1242,21 @@ export class AuthService {
   // MFA — CIFRAR SECRETO
   // ============================================================
 
-  private encryptMfaSecret(
-    secret: string,
-  ): string {
-    const key =
-      this.getMfaEncryptionKey();
+  private encryptMfaSecret(secret: string): string {
+    const key = this.getMfaEncryptionKey();
 
-    const iv =
-      crypto.randomBytes(
-        MFA_IV_LENGTH,
-      );
+    const iv = crypto.randomBytes(MFA_IV_LENGTH);
 
-    const cipher =
-      crypto.createCipheriv(
-        MFA_ENCRYPTION_ALGORITHM,
-        key,
-        iv,
-        {
-          authTagLength:
-            MFA_AUTH_TAG_LENGTH,
-        },
-      );
+    const cipher = crypto.createCipheriv(MFA_ENCRYPTION_ALGORITHM, key, iv, {
+      authTagLength: MFA_AUTH_TAG_LENGTH,
+    });
 
-    const encrypted =
-      Buffer.concat([
-        cipher.update(
-          secret,
-          'utf8',
-        ),
-        cipher.final(),
-      ]);
+    const encrypted = Buffer.concat([
+      cipher.update(secret, 'utf8'),
+      cipher.final(),
+    ]);
 
-    const authTag =
-      cipher.getAuthTag();
+    const authTag = cipher.getAuthTag();
 
     /**
      * Formato:
@@ -1564,85 +1276,50 @@ export class AuthService {
   // MFA — DESCIFRAR SECRETO
   // ============================================================
 
-  private decryptMfaSecret(
-    encryptedSecret: string,
-  ): string {
-    const key =
-      this.getMfaEncryptionKey();
+  private decryptMfaSecret(encryptedSecret: string): string {
+    const key = this.getMfaEncryptionKey();
 
-    const parts =
-      encryptedSecret.split(':');
+    const parts = encryptedSecret.split(':');
 
-    if (
-      parts.length !== 3
-    ) {
+    if (parts.length !== 3) {
       throw this.errorDeConfiguracionMfa(
         'No fue posible recuperar la configuración MFA',
       );
     }
 
-    const [
-      ivHex,
-      authTagHex,
-      encryptedHex,
-    ] = parts;
+    const [ivHex, authTagHex, encryptedHex] = parts;
 
     try {
-      const iv =
-        Buffer.from(
-          ivHex,
-          'hex',
-        );
+      const iv = Buffer.from(ivHex, 'hex');
 
-      const authTag =
-        Buffer.from(
-          authTagHex,
-          'hex',
-        );
+      const authTag = Buffer.from(authTagHex, 'hex');
 
-      const encrypted =
-        Buffer.from(
-          encryptedHex,
-          'hex',
-        );
+      const encrypted = Buffer.from(encryptedHex, 'hex');
 
       if (
-        iv.length !==
-          MFA_IV_LENGTH ||
-        authTag.length !==
-          MFA_AUTH_TAG_LENGTH
+        iv.length !== MFA_IV_LENGTH ||
+        authTag.length !== MFA_AUTH_TAG_LENGTH
       ) {
-        throw new Error(
-          'Invalid MFA encryption metadata',
-        );
+        throw new Error('Invalid MFA encryption metadata');
       }
 
-      const decipher =
-        crypto.createDecipheriv(
-          MFA_ENCRYPTION_ALGORITHM,
-          key,
-          iv,
-          {
-            authTagLength:
-              MFA_AUTH_TAG_LENGTH,
-          },
-        );
-
-      decipher.setAuthTag(
-        authTag,
+      const decipher = crypto.createDecipheriv(
+        MFA_ENCRYPTION_ALGORITHM,
+        key,
+        iv,
+        {
+          authTagLength: MFA_AUTH_TAG_LENGTH,
+        },
       );
 
-      const decrypted =
-        Buffer.concat([
-          decipher.update(
-            encrypted,
-          ),
-          decipher.final(),
-        ]);
+      decipher.setAuthTag(authTag);
 
-      return decrypted.toString(
-        'utf8',
-      );
+      const decrypted = Buffer.concat([
+        decipher.update(encrypted),
+        decipher.final(),
+      ]);
+
+      return decrypted.toString('utf8');
     } catch {
       throw this.errorDeConfiguracionMfa(
         'No fue posible recuperar la configuración MFA',
@@ -1671,42 +1348,28 @@ export class AuthService {
    * 6. Usuario introduce código.
    * 7. verificarActivacionMfa() valida el código.
    */
-  async activarMfa(
-    token: string,
-  ) {
-    const payload =
-      this.verifyMfaPendingToken(
-        token,
-        'setup',
-      );
+  async activarMfa(token: string) {
+    const payload = this.verifyMfaPendingToken(token, 'setup');
 
-    const usuario =
-      await this.prisma.usuario.findUnique(
-        {
-          where: {
-            id: payload.sub,
-          },
+    const usuario = await this.prisma.usuario.findUnique({
+      where: {
+        id: payload.sub,
+      },
 
-          select: {
-            id: true,
-            nombre: true,
-            email: true,
-            rolGlobal: true,
-            mfaActivado: true,
-          },
-        },
-      );
+      select: {
+        id: true,
+        nombre: true,
+        email: true,
+        rolGlobal: true,
+        mfaActivado: true,
+      },
+    });
 
     if (!usuario) {
-      throw new NotFoundException(
-        'Usuario no encontrado',
-      );
+      throw new NotFoundException('Usuario no encontrado');
     }
 
-    if (
-      usuario.rolGlobal !==
-      'MASTER'
-    ) {
+    if (usuario.rolGlobal !== 'MASTER') {
       throw new ForbiddenException(
         'Solo los usuarios MASTER pueden configurar MFA',
       );
@@ -1722,59 +1385,46 @@ export class AuthService {
     // GENERAR NUEVO SECRETO
     // ----------------------------------------------------------
 
-    const secret =
-      generateSecret();
+    const secret = generateSecret();
 
     // ----------------------------------------------------------
     // CIFRAR SECRETO
     // ----------------------------------------------------------
 
-    const encryptedSecret =
-      this.encryptMfaSecret(
-        secret,
-      );
+    const encryptedSecret = this.encryptMfaSecret(secret);
 
     // ----------------------------------------------------------
     // GUARDAR SECRETO
     // ----------------------------------------------------------
 
-    await this.prisma.usuario.update(
-      {
-        where: {
-          id: usuario.id,
-        },
-
-        data: {
-          mfaSecret:
-            encryptedSecret,
-
-          mfaActivado:
-            false,
-
-          mfaActivadoEn:
-            null,
-
-          // El paso guardado pertenece al secreto anterior.
-          mfaUltimoPaso:
-            null,
-        },
+    await this.prisma.usuario.update({
+      where: {
+        id: usuario.id,
       },
-    );
+
+      data: {
+        mfaSecret: encryptedSecret,
+
+        mfaActivado: false,
+
+        mfaActivadoEn: null,
+
+        // El paso guardado pertenece al secreto anterior.
+        mfaUltimoPaso: null,
+      },
+    });
 
     // ----------------------------------------------------------
     // GENERAR URI TOTP
     // ----------------------------------------------------------
 
-    const otpauthUrl =
-      generateURI({
-        issuer:
-          MFA_ISSUER,
+    const otpauthUrl = generateURI({
+      issuer: MFA_ISSUER,
 
-        label:
-          usuario.email,
+      label: usuario.email,
 
-        secret,
-      });
+      secret,
+    });
 
     // ----------------------------------------------------------
     // RESPUESTA
@@ -1783,8 +1433,7 @@ export class AuthService {
     return {
       requiresMfa: true,
 
-      mfaRequiredAction:
-        'verify-activation' as const,
+      mfaRequiredAction: 'verify-activation' as const,
 
       /**
        * Se devuelve el secreto en texto plano
@@ -1804,8 +1453,7 @@ export class AuthService {
         id: usuario.id,
         nombre: usuario.nombre,
         email: usuario.email,
-        rolGlobal:
-          usuario.rolGlobal,
+        rolGlobal: usuario.rolGlobal,
       },
     };
   }
@@ -1828,50 +1476,36 @@ export class AuthService {
     token: string,
     codigo: string,
   ): Promise<AuthenticatedUserResponse> {
-    const payload =
-      this.verifyMfaPendingToken(
-        token,
-        'setup',
-      );
+    const payload = this.verifyMfaPendingToken(token, 'setup');
 
-    const usuario =
-      await this.prisma.usuario.findUnique(
-        {
-          where: {
-            id: payload.sub,
-          },
+    const usuario = await this.prisma.usuario.findUnique({
+      where: {
+        id: payload.sub,
+      },
 
-          select: {
-            id: true,
-            nombre: true,
-            email: true,
-            rolGlobal: true,
-            mfaActivado: true,
-            mfaSecret: true,
-            negocios: true,
-          },
-        },
-      );
+      select: {
+        id: true,
+        nombre: true,
+        email: true,
+        rolGlobal: true,
+        mfaActivado: true,
+        mfaSecret: true,
+        negocios: true,
+      },
+    });
 
     if (!usuario) {
-      throw new NotFoundException(
-        'Usuario no encontrado',
-      );
+      throw new NotFoundException('Usuario no encontrado');
     }
 
-    if (
-      usuario.rolGlobal !==
-      'MASTER'
-    ) {
+    if (usuario.rolGlobal !== 'MASTER') {
       throw new ForbiddenException(
         'Solo los usuarios MASTER pueden activar MFA',
       );
     }
 
     if (usuario.mfaActivado) {
-      throw new ConflictException(
-        'El MFA de esta cuenta ya está activado',
-      );
+      throw new ConflictException('El MFA de esta cuenta ya está activado');
     }
 
     if (!usuario.mfaSecret) {
@@ -1881,15 +1515,11 @@ export class AuthService {
     }
 
     // Valida el código y, en la misma escritura, activa el MFA.
-    await this.comprobarCodigoMfa(
-      usuario.id,
-      usuario.mfaSecret,
-      codigo,
-      { activar: true },
-    );
+    await this.comprobarCodigoMfa(usuario.id, usuario.mfaSecret, codigo, {
+      activar: true,
+    });
 
-    const usuarioNegocio =
-      usuario.negocios[0];
+    const usuarioNegocio = usuario.negocios[0];
 
     // ----------------------------------------------------------
     // JWT DEFINITIVO
@@ -1898,10 +1528,8 @@ export class AuthService {
     return this.buildAuthResponse(
       usuario.id,
       usuario.nombre,
-      usuarioNegocio?.negocioId ??
-        null,
-      usuarioNegocio?.role ??
-        null,
+      usuarioNegocio?.negocioId ?? null,
+      usuarioNegocio?.role ?? null,
       usuario.rolGlobal,
     );
   }
@@ -1923,41 +1551,29 @@ export class AuthService {
     token: string,
     codigo: string,
   ): Promise<AuthenticatedUserResponse> {
-    const payload =
-      this.verifyMfaPendingToken(
-        token,
-        'login',
-      );
+    const payload = this.verifyMfaPendingToken(token, 'login');
 
-    const usuario =
-      await this.prisma.usuario.findUnique(
-        {
-          where: {
-            id: payload.sub,
-          },
+    const usuario = await this.prisma.usuario.findUnique({
+      where: {
+        id: payload.sub,
+      },
 
-          select: {
-            id: true,
-            nombre: true,
-            email: true,
-            rolGlobal: true,
-            mfaActivado: true,
-            mfaSecret: true,
-            negocios: true,
-          },
-        },
-      );
+      select: {
+        id: true,
+        nombre: true,
+        email: true,
+        rolGlobal: true,
+        mfaActivado: true,
+        mfaSecret: true,
+        negocios: true,
+      },
+    });
 
     if (!usuario) {
-      throw new NotFoundException(
-        'Usuario no encontrado',
-      );
+      throw new NotFoundException('Usuario no encontrado');
     }
 
-    if (
-      usuario.rolGlobal !==
-      'MASTER'
-    ) {
+    if (usuario.rolGlobal !== 'MASTER') {
       throw new ForbiddenException(
         'Este flujo de MFA solo está disponible para usuarios MASTER',
       );
@@ -1975,14 +1591,9 @@ export class AuthService {
       );
     }
 
-    await this.comprobarCodigoMfa(
-      usuario.id,
-      usuario.mfaSecret,
-      codigo,
-    );
+    await this.comprobarCodigoMfa(usuario.id, usuario.mfaSecret, codigo);
 
-    const usuarioNegocio =
-      usuario.negocios[0];
+    const usuarioNegocio = usuario.negocios[0];
 
     /**
      * ESTE es el primer punto del flujo MASTER en el que
@@ -1991,10 +1602,8 @@ export class AuthService {
     return this.buildAuthResponse(
       usuario.id,
       usuario.nombre,
-      usuarioNegocio?.negocioId ??
-        null,
-      usuarioNegocio?.role ??
-        null,
+      usuarioNegocio?.negocioId ?? null,
+      usuarioNegocio?.role ?? null,
       usuario.rolGlobal,
     );
   }
@@ -2027,11 +1636,9 @@ export class AuthService {
   ): Promise<void> {
     // Formato y configuración primero: un error aquí no es un intento
     // del usuario y no debe gastarle cupo.
-    const normalizedCode =
-      this.normalizeMfaCode(codigo);
+    const normalizedCode = this.normalizeMfaCode(codigo);
 
-    const secret =
-      this.decryptMfaSecret(mfaSecret);
+    const secret = this.decryptMfaSecret(mfaSecret);
 
     const ahora = new Date();
 
@@ -2070,8 +1677,7 @@ export class AuthService {
       // P2025: el usuario existe (se acaba de leer), así que lo que no
       // coincidió es `mfaBloqueadoHasta: null`. Está bloqueado.
       if (
-        error instanceof
-          Prisma.PrismaClientKnownRequestError &&
+        error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2025'
       ) {
         throw this.errorMfaBloqueado();
@@ -2081,71 +1687,53 @@ export class AuthService {
     }
 
     // Solo pasa si un bloqueo anterior no llegó a escribirse.
-    if (
-      reserva.mfaIntentosFallidos >
-      MFA_MAX_INTENTOS
-    ) {
+    if (reserva.mfaIntentosFallidos > MFA_MAX_INTENTOS) {
       await this.bloquearMfa(usuarioId);
       throw this.errorMfaBloqueado();
     }
 
-    let verification:
-      | { valid: false }
-      | { valid: true; timeStep?: number };
+    let verification: { valid: false } | { valid: true; timeStep?: number };
 
     try {
       verification = await verifyTotp({
         secret,
         token: normalizedCode,
-        epochTolerance:
-          MFA_EPOCH_TOLERANCE_SECONDS,
-        afterTimeStep:
-          reserva.mfaUltimoPaso ?? undefined,
+        epochTolerance: MFA_EPOCH_TOLERANCE_SECONDS,
+        afterTimeStep: reserva.mfaUltimoPaso ?? undefined,
       });
     } catch {
       verification = { valid: false };
     }
 
-    if (
-      verification.valid &&
-      verification.timeStep !== undefined
-    ) {
+    if (verification.valid && verification.timeStep !== undefined) {
       const timeStep = verification.timeStep;
 
       // Condicional: si otra petición consumió este mismo código un
       // instante antes, esta no escribe nada y cuenta como fallida.
-      const consumido =
-        await this.prisma.usuario.updateMany({
-          where: {
-            id: usuarioId,
-            OR: [
-              { mfaUltimoPaso: null },
-              { mfaUltimoPaso: { lt: timeStep } },
-            ],
-            ...(opciones.activar
-              ? { mfaActivado: false }
-              : {}),
-          },
-          data: {
-            mfaIntentosFallidos: 0,
-            mfaUltimoPaso: timeStep,
-            ...(opciones.activar
-              ? {
-                  mfaActivado: true,
-                  mfaActivadoEn: new Date(),
-                }
-              : {}),
-          },
-        });
+      const consumido = await this.prisma.usuario.updateMany({
+        where: {
+          id: usuarioId,
+          OR: [{ mfaUltimoPaso: null }, { mfaUltimoPaso: { lt: timeStep } }],
+          ...(opciones.activar ? { mfaActivado: false } : {}),
+        },
+        data: {
+          mfaIntentosFallidos: 0,
+          mfaUltimoPaso: timeStep,
+          ...(opciones.activar
+            ? {
+                mfaActivado: true,
+                mfaActivadoEn: new Date(),
+              }
+            : {}),
+        },
+      });
 
       if (consumido.count === 1) {
         return;
       }
     }
 
-    const restantes =
-      MFA_MAX_INTENTOS -
-      reserva.mfaIntentosFallidos;
+    const restantes = MFA_MAX_INTENTOS - reserva.mfaIntentosFallidos;
 
     if (restantes <= 0) {
       await this.bloquearMfa(usuarioId);
@@ -2154,23 +1742,16 @@ export class AuthService {
 
     throw new UnauthorizedException(
       `El código MFA es incorrecto, expiró o ya fue usado. Te ${
-        restantes === 1
-          ? 'queda 1 intento'
-          : `quedan ${restantes} intentos`
+        restantes === 1 ? 'queda 1 intento' : `quedan ${restantes} intentos`
       }.`,
     );
   }
 
-  private async bloquearMfa(
-    usuarioId: string,
-  ): Promise<void> {
+  private async bloquearMfa(usuarioId: string): Promise<void> {
     await this.prisma.usuario.updateMany({
       where: { id: usuarioId },
       data: {
-        mfaBloqueadoHasta: new Date(
-          Date.now() +
-            MFA_BLOQUEO_MINUTOS * 60_000,
-        ),
+        mfaBloqueadoHasta: new Date(Date.now() + MFA_BLOQUEO_MINUTOS * 60_000),
         mfaIntentosFallidos: 0,
       },
     });
@@ -2196,9 +1777,7 @@ export class AuthService {
   private errorDeConfiguracionMfa(
     detalle: string,
   ): InternalServerErrorException {
-    this.logger.error(
-      `Configuración MFA: ${detalle}`,
-    );
+    this.logger.error(`Configuración MFA: ${detalle}`);
 
     return new InternalServerErrorException(
       'No fue posible completar la verificación MFA. Contacta al equipo de soporte.',
@@ -2209,19 +1788,10 @@ export class AuthService {
   // MFA — NORMALIZAR CÓDIGO
   // ============================================================
 
-  private normalizeMfaCode(
-    codigo: string,
-  ): string {
-    const normalized =
-      (codigo ?? '')
-        .trim()
-        .replace(/\s+/g, '');
+  private normalizeMfaCode(codigo: string): string {
+    const normalized = (codigo ?? '').trim().replace(/\s+/g, '');
 
-    if (
-      !/^\d{6}$/.test(
-        normalized,
-      )
-    ) {
+    if (!/^\d{6}$/.test(normalized)) {
       throw new BadRequestException(
         'El código MFA debe tener exactamente 6 dígitos',
       );
@@ -2265,11 +1835,7 @@ export class AuthService {
     };
 
     return {
-      access_token:
-        this.jwtService.sign(
-          payload,
-          firmaDe('session'),
-        ),
+      access_token: this.jwtService.sign(payload, firmaDe('session')),
 
       user: {
         id: usuarioId,
@@ -2289,20 +1855,12 @@ export class AuthService {
   // REENVIAR VERIFICACIÓN
   // ============================================================
 
-  async reenviarVerificacion(
-    dto: ReenviarVerificacionDto,
-  ) {
-    const usuario =
-      await this.prisma.usuario.findUnique(
-        {
-          where: {
-            email:
-              dto.email
-                .trim()
-                .toLowerCase(),
-          },
-        },
-      );
+  async reenviarVerificacion(dto: ReenviarVerificacionDto) {
+    const usuario = await this.prisma.usuario.findUnique({
+      where: {
+        email: dto.email.trim().toLowerCase(),
+      },
+    });
 
     if (!usuario) {
       throw new NotFoundException(
@@ -2310,16 +1868,15 @@ export class AuthService {
       );
     }
 
-    const verificationToken =
-      this.jwtService.sign(
-        {
-          sub: usuario.id,
-          type: 'email-verification',
-        },
-        firmaDe('email-verification', {
-          expiresIn: '24h',
-        }),
-      );
+    const verificationToken = this.jwtService.sign(
+      {
+        sub: usuario.id,
+        type: 'email-verification',
+      },
+      firmaDe('email-verification', {
+        expiresIn: '24h',
+      }),
+    );
 
     void this.mailService.sendVerificationEmail(
       usuario.email,
@@ -2337,56 +1894,49 @@ export class AuthService {
   // PERFIL
   // ============================================================
 
-  async getPerfil(
-    usuarioId: string,
-  ) {
-    const usuario =
-      await this.prisma.usuario.findUnique(
-        {
-          where: {
-            id: usuarioId,
-          },
+  async getPerfil(usuarioId: string) {
+    const usuario = await this.prisma.usuario.findUnique({
+      where: {
+        id: usuarioId,
+      },
 
+      select: {
+        id: true,
+        nombre: true,
+        email: true,
+        telefono: true,
+        emailVerificado: true,
+        rolGlobal: true,
+        plan: true,
+        createdAt: true,
+
+        negocios: {
           select: {
-            id: true,
-            nombre: true,
-            email: true,
-            telefono: true,
-            emailVerificado: true,
-            rolGlobal: true,
-            plan: true,
-            createdAt: true,
-
-            negocios: {
+            negocio: {
               select: {
-                negocio: {
-                  select: {
-                    id: true,
-                    nombre: true,
-                  },
-                },
-              },
-            },
-
-            sedes: {
-              select: {
-                sede: {
-                  select: {
-                    id: true,
-                    nombre: true,
-                    negocioId: true,
-                  },
-                },
+                id: true,
+                nombre: true,
               },
             },
           },
         },
-      );
+
+        sedes: {
+          select: {
+            sede: {
+              select: {
+                id: true,
+                nombre: true,
+                negocioId: true,
+              },
+            },
+          },
+        },
+      },
+    });
 
     if (!usuario) {
-      throw new NotFoundException(
-        'Usuario no encontrado',
-      );
+      throw new NotFoundException('Usuario no encontrado');
     }
 
     return usuario;
@@ -2396,31 +1946,23 @@ export class AuthService {
   // BUSCAR USUARIO POR EMAIL
   // ============================================================
 
-  async buscarPorEmail(
-    email?: string,
-  ) {
+  async buscarPorEmail(email?: string) {
     if (!email) {
       throw new BadRequestException(
         'Debes indicar el email que quieres buscar',
       );
     }
 
-    const usuario =
-      await this.prisma.usuario.findUnique(
-        {
-          where: {
-            email:
-              email
-                .trim()
-                .toLowerCase(),
-          },
+    const usuario = await this.prisma.usuario.findUnique({
+      where: {
+        email: email.trim().toLowerCase(),
+      },
 
-          select: {
-            id: true,
-            nombre: true,
-          },
-        },
-      );
+      select: {
+        id: true,
+        nombre: true,
+      },
+    });
 
     if (!usuario) {
       throw new NotFoundException(
@@ -2435,50 +1977,36 @@ export class AuthService {
   // ACTUALIZAR USUARIO
   // ============================================================
 
-  async updateUsuario(
-    usuarioId: string,
-    dto: UpdateUsuarioDto,
-  ) {
-    return this.prisma.usuario.update(
-      {
-        where: {
-          id: usuarioId,
-        },
-
-        data: {
-          nombre: dto.nombre,
-          telefono:
-            dto.telefono,
-        },
-
-        select: {
-          id: true,
-          nombre: true,
-          email: true,
-          telefono: true,
-        },
+  async updateUsuario(usuarioId: string, dto: UpdateUsuarioDto) {
+    return this.prisma.usuario.update({
+      where: {
+        id: usuarioId,
       },
-    );
+
+      data: {
+        nombre: dto.nombre,
+        telefono: dto.telefono,
+      },
+
+      select: {
+        id: true,
+        nombre: true,
+        email: true,
+        telefono: true,
+      },
+    });
   }
 
   // ============================================================
   // RECUPERAR CONTRASEÑA
   // ============================================================
 
-  async forgotPassword(
-    dto: ForgotPasswordDto,
-  ) {
-    const usuario =
-      await this.prisma.usuario.findUnique(
-        {
-          where: {
-            email:
-              dto.email
-                .trim()
-                .toLowerCase(),
-          },
-        },
-      );
+  async forgotPassword(dto: ForgotPasswordDto) {
+    const usuario = await this.prisma.usuario.findUnique({
+      where: {
+        email: dto.email.trim().toLowerCase(),
+      },
+    });
 
     /**
      * Se firma y se envía solo si existe,
@@ -2486,28 +2014,25 @@ export class AuthService {
      * en ambos casos para evitar enumeración de cuentas.
      */
     if (usuario) {
-      const resetToken =
-        this.jwtService.sign(
-          {
-            sub: usuario.id,
-            type: 'password-reset',
+      const resetToken = this.jwtService.sign(
+        {
+          sub: usuario.id,
+          type: 'password-reset',
 
-            /**
-             * Huella de la contraseña vigente cuando se pidió el enlace.
-             *
-             * Es lo que hace el enlace de un solo uso: al cambiar la
-             * contraseña cambia el hash, y con él la huella, así que este
-             * token —y cualquier otro pedido antes— deja de coincidir. No
-             * hace falta guardar los tokens usados en ninguna parte.
-             */
-            pwd: huellaDeContrasena(
-              usuario.password,
-            ),
-          },
-          firmaDe('password-reset', {
-            expiresIn: '1h',
-          }),
-        );
+          /**
+           * Huella de la contraseña vigente cuando se pidió el enlace.
+           *
+           * Es lo que hace el enlace de un solo uso: al cambiar la
+           * contraseña cambia el hash, y con él la huella, así que este
+           * token —y cualquier otro pedido antes— deja de coincidir. No
+           * hace falta guardar los tokens usados en ninguna parte.
+           */
+          pwd: huellaDeContrasena(usuario.password),
+        },
+        firmaDe('password-reset', {
+          expiresIn: '1h',
+        }),
+      );
 
       void this.mailService.sendPasswordResetEmail(
         usuario.email,
@@ -2526,9 +2051,7 @@ export class AuthService {
   // RESTABLECER CONTRASEÑA
   // ============================================================
 
-  async resetPassword(
-    dto: ResetPasswordDto,
-  ) {
+  async resetPassword(dto: ResetPasswordDto) {
     let payload: {
       sub: string;
       type: string;
@@ -2536,46 +2059,31 @@ export class AuthService {
     };
 
     try {
-      payload =
-        this.jwtService.verify(
-          dto.token,
-          verificacionDe(
-            'password-reset',
-          ),
-        );
+      payload = this.jwtService.verify(
+        dto.token,
+        verificacionDe('password-reset'),
+      );
     } catch {
-      throw new UnauthorizedException(
-        'El enlace es inválido o expiró',
-      );
+      throw new UnauthorizedException('El enlace es inválido o expiró');
     }
 
-    if (
-      payload.type !==
-      'password-reset'
-    ) {
-      throw new UnauthorizedException(
-        'Token inválido para esta operación',
-      );
+    if (payload.type !== 'password-reset') {
+      throw new UnauthorizedException('Token inválido para esta operación');
     }
 
-    const usuario =
-      await this.prisma.usuario.findUnique(
-        {
-          where: {
-            id: payload.sub,
-          },
+    const usuario = await this.prisma.usuario.findUnique({
+      where: {
+        id: payload.sub,
+      },
 
-          select: {
-            id: true,
-            password: true,
-          },
-        },
-      );
+      select: {
+        id: true,
+        password: true,
+      },
+    });
 
     if (!usuario) {
-      throw new NotFoundException(
-        'Usuario no encontrado',
-      );
+      throw new NotFoundException('Usuario no encontrado');
     }
 
     /**
@@ -2586,66 +2094,48 @@ export class AuthService {
      * coincidir: el mismo correo reenviado, guardado o interceptado después
      * ya no sirve, y pedir un enlace nuevo mata al anterior.
      */
-    if (
-      payload.pwd !==
-      huellaDeContrasena(
-        usuario.password,
-      )
-    ) {
-      throw new UnauthorizedException(
-        ENLACE_YA_USADO,
-      );
+    if (payload.pwd !== huellaDeContrasena(usuario.password)) {
+      throw new UnauthorizedException(ENLACE_YA_USADO);
     }
 
-    const hashedPassword =
-      await bcrypt.hash(
-        dto.newPassword,
-        BCRYPT_ROUNDS,
-      );
+    const hashedPassword = await bcrypt.hash(dto.newPassword, BCRYPT_ROUNDS);
 
     /**
      * La contraseña vieja viaja en el WHERE: si dos peticiones con el mismo
      * enlace entran a la vez, las dos pasan la comprobación de arriba pero
      * solo una encuentra el hash que esperaba.
      */
-    const cambiada =
-      await this.prisma.usuario.updateMany(
-        {
-          where: {
-            id: usuario.id,
-            password:
-              usuario.password,
-          },
+    const cambiada = await this.prisma.usuario.updateMany({
+      where: {
+        id: usuario.id,
+        password: usuario.password,
+      },
 
-          data: {
-            password:
-              hashedPassword,
+      data: {
+        password: hashedPassword,
 
-            /**
-             * Marca del cambio: JwtStrategy la compara contra la fecha de
-             * emisión de cada token de sesión, así que todo lo abierto antes
-             * deja de valer.
-             */
-            passwordChangedAt:
-              new Date(),
+        /**
+         * Marca del cambio: JwtStrategy la compara contra la fecha de
+         * emisión de cada token de sesión, así que todo lo abierto antes
+         * deja de valer.
+         */
+        passwordChangedAt: new Date(),
 
-            // Quien cambia su contraseña recupera el acceso de una vez: dejar
-            // el bloqueo puesto castigaría a la víctima de los intentos ajenos.
-            intentosFallidos: 0,
-            bloqueadoHasta: null,
-          },
-        },
-      );
+        // Quien cambia su contraseña recupera el acceso de una vez: dejar
+        // el bloqueo puesto castigaría a la víctima de los intentos ajenos.
+        intentosFallidos: 0,
+        bloqueadoHasta: null,
+      },
+    });
 
     if (cambiada.count === 0) {
-      throw new UnauthorizedException(
-        ENLACE_YA_USADO,
-      );
+      throw new UnauthorizedException(ENLACE_YA_USADO);
     }
 
+    this.userCache?.invalidateUser(usuario.id);
+
     return {
-      mensaje:
-        'Contraseña actualizada correctamente',
+      mensaje: 'Contraseña actualizada correctamente',
     };
   }
 
@@ -2653,69 +2143,45 @@ export class AuthService {
   // CAMBIAR EMAIL
   // ============================================================
 
-  async cambiarEmail(
-    usuarioId: string,
-    dto: CambiarEmailDto,
-  ) {
-    const usuario =
-      await this.prisma.usuario.findUnique(
-        {
-          where: {
-            id: usuarioId,
-          },
-        },
-      );
+  async cambiarEmail(usuarioId: string, dto: CambiarEmailDto) {
+    const usuario = await this.prisma.usuario.findUnique({
+      where: {
+        id: usuarioId,
+      },
+    });
 
     if (!usuario) {
-      throw new NotFoundException(
-        'Usuario no encontrado',
-      );
+      throw new NotFoundException('Usuario no encontrado');
     }
 
-    const passwordValida =
-      await bcrypt.compare(
-        dto.password,
-        usuario.password,
-      );
+    const passwordValida = await bcrypt.compare(dto.password, usuario.password);
 
     if (!passwordValida) {
-      throw new UnauthorizedException(
-        'Contraseña incorrecta',
-      );
+      throw new UnauthorizedException('Contraseña incorrecta');
     }
 
-    const nuevoEmail =
-      dto.nuevoEmail
-        .trim()
-        .toLowerCase();
+    const nuevoEmail = dto.nuevoEmail.trim().toLowerCase();
 
-    const emailExistente =
-      await this.prisma.usuario.findUnique(
-        {
-          where: {
-            email:
-              nuevoEmail,
-          },
-        },
-      );
+    const emailExistente = await this.prisma.usuario.findUnique({
+      where: {
+        email: nuevoEmail,
+      },
+    });
 
     if (emailExistente) {
-      throw new ConflictException(
-        'Ese correo ya está en uso por otra cuenta',
-      );
+      throw new ConflictException('Ese correo ya está en uso por otra cuenta');
     }
 
-    const changeToken =
-      this.jwtService.sign(
-        {
-          sub: usuario.id,
-          nuevoEmail,
-          type: 'email-change',
-        },
-        firmaDe('email-change', {
-          expiresIn: '1h',
-        }),
-      );
+    const changeToken = this.jwtService.sign(
+      {
+        sub: usuario.id,
+        nuevoEmail,
+        type: 'email-change',
+      },
+      firmaDe('email-change', {
+        expiresIn: '1h',
+      }),
+    );
 
     void this.mailService.sendEmailChangeConfirmation(
       nuevoEmail,
@@ -2724,8 +2190,7 @@ export class AuthService {
     );
 
     return {
-      mensaje:
-        'Enviamos un correo de confirmación a tu nueva dirección',
+      mensaje: 'Enviamos un correo de confirmación a tu nueva dirección',
     };
   }
 
@@ -2733,9 +2198,7 @@ export class AuthService {
   // CONFIRMAR CAMBIO DE EMAIL
   // ============================================================
 
-  async confirmarCambioEmail(
-    dto: ConfirmarCambioEmailDto,
-  ) {
+  async confirmarCambioEmail(dto: ConfirmarCambioEmailDto) {
     let payload: {
       sub: string;
       nuevoEmail: string;
@@ -2743,40 +2206,25 @@ export class AuthService {
     };
 
     try {
-      payload =
-        this.jwtService.verify(
-          dto.token,
-          verificacionDe('email-change'),
-        );
+      payload = this.jwtService.verify(
+        dto.token,
+        verificacionDe('email-change'),
+      );
     } catch {
-      throw new UnauthorizedException(
-        'El enlace es inválido o expiró',
-      );
+      throw new UnauthorizedException('El enlace es inválido o expiró');
     }
 
-    if (
-      payload.type !==
-      'email-change'
-    ) {
-      throw new UnauthorizedException(
-        'Token inválido para esta operación',
-      );
+    if (payload.type !== 'email-change') {
+      throw new UnauthorizedException('Token inválido para esta operación');
     }
 
-    const nuevoEmail =
-      payload.nuevoEmail
-        .trim()
-        .toLowerCase();
+    const nuevoEmail = payload.nuevoEmail.trim().toLowerCase();
 
-    const emailExistente =
-      await this.prisma.usuario.findUnique(
-        {
-          where: {
-            email:
-              nuevoEmail,
-          },
-        },
-      );
+    const emailExistente = await this.prisma.usuario.findUnique({
+      where: {
+        email: nuevoEmail,
+      },
+    });
 
     if (emailExistente) {
       throw new ConflictException(
@@ -2784,22 +2232,18 @@ export class AuthService {
       );
     }
 
-    await this.prisma.usuario.update(
-      {
-        where: {
-          id: payload.sub,
-        },
-
-        data: {
-          email:
-            nuevoEmail,
-        },
+    await this.prisma.usuario.update({
+      where: {
+        id: payload.sub,
       },
-    );
+
+      data: {
+        email: nuevoEmail,
+      },
+    });
 
     return {
-      mensaje:
-        'Correo actualizado correctamente',
+      mensaje: 'Correo actualizado correctamente',
     };
   }
 }

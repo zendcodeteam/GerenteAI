@@ -19,6 +19,7 @@ import { JwtPayload } from '../src/auth/interfaces/jwt-payload.interface';
 import { NegociosService } from '../src/services/negocios.service';
 import { PlanesService } from '../src/services/planes.service';
 import { PrismaService } from '../src/services/prisma.service';
+import { UserContextCacheService } from '../src/services/user-context-cache.service';
 import { limpiar } from './helpers/contexto';
 
 const CLAVE_DE_PRUEBA = 'a'.repeat(64);
@@ -62,6 +63,7 @@ describe('MFA obligatorio para MASTER (contra Postgres real)', () => {
   let auth: AuthService;
   let jwt: JwtService;
   let cerrar: () => Promise<void>;
+  let cache: UserContextCacheService;
   let masterId: string;
 
   beforeAll(async () => {
@@ -72,6 +74,7 @@ describe('MFA obligatorio para MASTER (contra Postgres real)', () => {
         AuthService,
         PrismaService,
         NegociosService,
+        UserContextCacheService,
         PlanesService,
         {
           provide: JwtService,
@@ -88,7 +91,9 @@ describe('MFA obligatorio para MASTER (contra Postgres real)', () => {
     auth = moduleRef.get(AuthService);
     jwt = moduleRef.get(JwtService);
     await prisma.$connect();
+    cache = new UserContextCacheService();
     cerrar = async () => {
+      cache.onModuleDestroy();
       await prisma.$disconnect();
       await moduleRef.close();
     };
@@ -161,7 +166,7 @@ describe('MFA obligatorio para MASTER (contra Postgres real)', () => {
       const payload = jwt.verify<JwtPayload>(token);
 
       await expect(
-        new JwtStrategy(prisma).validate(payload),
+        new JwtStrategy(prisma, cache).validate(payload),
       ).rejects.toThrow(UnauthorizedException);
     });
 
@@ -284,9 +289,7 @@ describe('MFA obligatorio para MASTER (contra Postgres real)', () => {
         ),
       );
 
-      expect(
-        estados.filter((s) => s === HttpStatus.UNAUTHORIZED).length,
-      ).toBeLessThanOrEqual(4);
+      expect(estados.filter((s) => s === 401).length).toBeLessThanOrEqual(4);
       expect(estados.every((s) => s !== 200)).toBe(true);
 
       const usuario = await prisma.usuario.findUniqueOrThrow({

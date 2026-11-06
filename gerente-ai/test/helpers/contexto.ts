@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../../src/services/prisma.service';
 import { NegociosService } from '../../src/services/negocios.service';
+import { UserContextCacheService } from '../../src/services/user-context-cache.service';
 import { PlanesService } from '../../src/services/planes.service';
 import { ProductosService } from '../../src/services/productos.service';
 import { VentasService } from '../../src/services/ventas.service';
@@ -11,6 +12,7 @@ import { SedesService } from '../../src/services/sedes.service';
 import { ReportesService } from '../../src/services/reportes.service';
 import { ClientesService } from '../../src/services/clientes.service';
 import { ProveedoresService } from '../../src/services/proveedores.service';
+import { CuentasProveedoresService } from '../../src/services/cuentas-proveedores.service';
 import { GastosService } from '../../src/services/gastos.service';
 import { PagosService } from '../../src/services/pagos.service';
 
@@ -27,6 +29,7 @@ export interface Contexto {
   reportes: ReportesService;
   clientes: ClientesService;
   proveedores: ProveedoresService;
+  cuentasProveedores: CuentasProveedoresService;
   gastos: GastosService;
   pagos: PagosService;
 }
@@ -39,6 +42,7 @@ export async function crearContexto(): Promise<Contexto> {
     providers: [
       PrismaService,
       NegociosService,
+      UserContextCacheService,
       PlanesService,
       ProductosService,
       VentasService,
@@ -49,6 +53,7 @@ export async function crearContexto(): Promise<Contexto> {
       ReportesService,
       ClientesService,
       ProveedoresService,
+      CuentasProveedoresService,
       GastosService,
       PagosService,
     ],
@@ -70,6 +75,7 @@ export async function crearContexto(): Promise<Contexto> {
     reportes: moduleRef.get(ReportesService),
     clientes: moduleRef.get(ClientesService),
     proveedores: moduleRef.get(ProveedoresService),
+    cuentasProveedores: moduleRef.get(CuentasProveedoresService),
     gastos: moduleRef.get(GastosService),
     pagos: moduleRef.get(PagosService),
   };
@@ -185,6 +191,7 @@ export async function sembrar(prisma: PrismaService): Promise<Semilla> {
   const gaseosa = await prisma.producto.create({
     data: {
       nombre: 'Gaseosa',
+      categoria: 'Bebidas',
       stock: 10,
       precioCompra: 1000,
       precioVenta: 1500.5,
@@ -194,6 +201,7 @@ export async function sembrar(prisma: PrismaService): Promise<Semilla> {
   const pan = await prisma.producto.create({
     data: {
       nombre: 'Pan',
+      categoria: 'Panaderia',
       stock: 5,
       precioCompra: 200,
       precioVenta: 500,
@@ -203,6 +211,7 @@ export async function sembrar(prisma: PrismaService): Promise<Semilla> {
   const arroz = await prisma.producto.create({
     data: {
       nombre: 'Arroz',
+      categoria: 'Abarrotes',
       stock: 10,
       precioCompra: 2000,
       precioVenta: 3000,

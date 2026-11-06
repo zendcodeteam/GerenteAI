@@ -40,6 +40,10 @@ la plata que hay en el cajón.
 `Venta.saldoPendiente` es lo que permite calcular la **antigüedad** de la deuda:
 `Cliente.saldoPendiente` dice cuánto debe, pero no desde cuándo.
 
+El plazo estándar es de **30 días desde la fecha de la venta**. El recordatorio
+automático se programa cuando faltan cinco días o menos para el vencimiento; los
+avisos ya guardados en `RecordatorioFiado` no se vuelven a enviar.
+
 Un pago se reparte **de la venta más antigua a la más reciente**. Si no, un
 fiado viejo se quedaría abierto para siempre mientras se abonan los recientes.
 
@@ -83,6 +87,11 @@ Si la segunda consulta no devuelve filas, no hace falta correr la primera.
 
 No es una migración de esquema: no cambia ninguna tabla, solo recalcula un
 campo. No hay que tocar `prisma db push`.
+
+La migración `20261105130000_payment_plans_and_credit_due_dates` asigna a los
+fiados históricos que no tienen vencimiento la fecha de venta más 30 días. No
+borra sus registros de `RecordatorioFiado`, por lo que un aviso ya enviado no se
+repite. Se aplica junto con el resto de migraciones con `npx prisma migrate deploy`.
 
 ## Recomendaciones de IA
 

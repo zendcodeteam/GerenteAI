@@ -52,6 +52,71 @@ export interface PaymentRequest {
 }
 
 /** Como quedo la deuda despues de aplicar un pago. */
+/**
+ * Un pago de nomina ya confirmado y listo para guardar.
+ *
+ * `percentage` y `amount` viajan juntos a proposito: el porcentaje es lo que
+ * se pacto y el monto lo que de verdad se entrego, y no siempre coinciden
+ * (una quincena, un adelanto). Guardar solo uno de los dos deja la nomina sin
+ * poder explicarse despues.
+ */
+export interface PayrollPayment {
+  id: string;
+  businessId: string;
+  workerName: string;
+  /** De 0 a 100. */
+  percentage: number;
+  amount: number;
+  /** Fecha del pago en YYYY-MM-DD. */
+  date: string;
+  currency: string;
+}
+
+/**
+ * Una deuda con proveedor lista para guardar.
+ *
+ * El proveedor viaja por NOMBRE, no por id: quien escribe por WhatsApp dice
+ * "Molinos del Valle", no un uuid. El adaptador lo busca en la sede y lo crea
+ * si no existe, igual que hace con los clientes de los fiados.
+ */
+export interface SupplyDebt {
+  businessId: string;
+  supplierName: string;
+  supply: string;
+  amount: number;
+  /** Fecha limite en YYYY-MM-DD. Con cuotas, la de la ULTIMA. */
+  dueDate: string;
+  mode: 'unico' | 'cuotas';
+  /** Numero de cuotas; 1 en el pago unico. */
+  installments: number;
+  /** Interes mensual en porcentaje. 0 = sin interes. */
+  interestRate: number;
+}
+
+/**
+ * Un producto listo para entrar al catalogo.
+ *
+ * `category` nunca viaja vacia: la columna es obligatoria desde SCRUM-27 y
+ * quien no la dice se queda en "Sin categoria", igual que hizo el relleno de
+ * aquella migracion. Asi el producto entra y se clasifica despues, en vez de
+ * no entrar.
+ */
+export interface ProductRegistration {
+  businessId: string;
+  name: string;
+  salePrice: number;
+  costPrice: number;
+  category: string;
+  stock: number;
+}
+
+/** Como quedo el alta de un producto. */
+export interface ProductRegistrationResult {
+  /** false = ya existia uno con ese nombre en la sede; no se creo nada. */
+  created: boolean;
+  product: ProductRegistration;
+}
+
 export interface PaymentResult {
   /** false = no habia a que aplicarlo; nada se guardo. */
   applied: boolean;
@@ -119,10 +184,38 @@ export interface FinanceDataPort {
     actor?: string,
   ): Promise<Transaction[]>;
 
+  /**
+   * Guarda un suministro que queda a deber.
+   *
+   * No pasa por `DeudasProveedoresService`: aquel pide `userId` y `rolGlobal`
+   * para comprobar permisos, y por WhatsApp no hay usuario autenticado sino
+   * una sede ya resuelta desde el telefono.
+   */
+  saveSupplyDebt(debt: SupplyDebt): Promise<SupplyDebt>;
+
+  /**
+   * Da de alta un producto en el catalogo de la sede.
+   *
+   * No crea duplicados: si ya hay uno con ese nombre devuelve
+   * `created: false` y no toca nada. Dos productos con el mismo nombre en la
+   * misma sede dejan la venta sin saber a cual descontarle el stock.
+   */
+  saveProduct(product: ProductRegistration): Promise<ProductRegistrationResult>;
+
   /** Guarda un reparto de utilidades. */
   saveProfitDistribution(
     distribution: ProfitDistribution,
   ): Promise<ProfitDistribution>;
+
+  /**
+   * Guarda un pago de nomina.
+   *
+   * No pasa por `NominaService`: aquel pide `userId` y `rolGlobal` para
+   * comprobar permisos, y por WhatsApp no hay usuario autenticado sino una
+   * sede ya resuelta a partir del telefono. La autorizacion ocurrio antes, al
+   * enrutar el mensaje.
+   */
+  savePayroll(payment: PayrollPayment): Promise<PayrollPayment>;
 
   /**
    * Corrige un movimiento ya registrado.

@@ -1,3 +1,4 @@
+import { NominaModule } from './modules/nomina.module';
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
@@ -29,6 +30,7 @@ import { AuthModule } from './auth/auth.module';
 import { DashboardConfigModule } from './modules/dashboard-config.module';
 import { CuentasProveedoresModule } from './modules/cuentas-proveedores.module';
 import { EstadisticasPublicasModule } from './modules/estadisticas-publicas.module';
+import { DeudasProveedoresModule } from './modules/deudas-proveedores.module';
 
 @Module({
   imports: [
@@ -85,9 +87,7 @@ import { EstadisticasPublicasModule } from './modules/estadisticas-publicas.modu
         {
           name: 'default',
           ttl: 60_000,
-          limit: Number(
-            process.env.RATE_LIMIT_GLOBAL ?? 600,
-          ),
+          limit: Number(process.env.RATE_LIMIT_GLOBAL ?? 600),
         },
       ],
       errorMessage:
@@ -100,6 +100,8 @@ import { EstadisticasPublicasModule } from './modules/estadisticas-publicas.modu
     DashboardConfigModule,
     CuentasProveedoresModule,
     EstadisticasPublicasModule,
+    NominaModule,
+    DeudasProveedoresModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],

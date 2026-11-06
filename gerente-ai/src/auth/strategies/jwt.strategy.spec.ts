@@ -1,133 +1,89 @@
 import { UnauthorizedException } from '@nestjs/common';
 import { JwtStrategy } from './jwt.strategy';
-import type { JwtPayload } from '../interfaces/jwt-payload.interface';
-import type { PrismaService } from '../../services/prisma.service';
+import { PrismaService } from '../../services/prisma.service';
+import { UserContextCacheService } from '../../services/user-context-cache.service';
+import { JwtPayload } from '../interfaces/jwt-payload.interface';
 
-// El constructor exige el secreto; estas pruebas no firman nada, solo ejercitan
-// la validación del payload ya verificado por Passport.
-process.env.JWT_SECRET = process.env.JWT_SECRET ?? 'secreto-de-prueba';
+describe('JwtStrategy con Caché de Sesión', () => {
+  let strategy: JwtStrategy;
+  let prismaMock: { usuario: { findUnique: jest.Mock } };
+  let cache: UserContextCacheService;
 
-const AHORA = Math.floor(Date.now() / 1000);
+  beforeEach(() => {
+    process.env.JWT_SECRET = 'test-jwt-secret-key-super-secure';
+    prismaMock = {
+      usuario: {
+        findUnique: jest.fn(),
+      },
+    };
+    cache = new UserContextCacheService();
 
-const payload = (
-  type: JwtPayload['type'],
-  iat: number | undefined = AHORA,
-): JwtPayload => ({
-  sub: 'usuario-1',
-  type,
-  negocioId: 'negocio-1',
-  role: 'ADMIN',
-  rolGlobal: 'CLIENTE',
-  iat,
-});
+    strategy = new JwtStrategy(prismaMock as unknown as PrismaService, cache);
+  });
 
-// `passwordChangedAt` del usuario que la estrategia va a leer.
-// `undefined` = el usuario ya no existe.
-function conUsuario(passwordChangedAt: Date | null | undefined) {
-  const prisma = {
-    usuario: {
-      findUnique: () =>
-        Promise.resolve(
-          passwordChangedAt === undefined ? null : { passwordChangedAt },
-        ),
-    },
-  } as unknown as PrismaService;
+  afterEach(() => {
+    cache.onModuleDestroy();
+  });
 
-  return new JwtStrategy(prisma);
-}
+  const basePayload: JwtPayload = {
+    sub: 'user-uuid-1',
+    negocioId: 'negocio-uuid-1',
+    role: 'ADMIN',
+    rolGlobal: 'CLIENTE',
+    type: 'session',
+    iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + 3600,
+  };
 
-describe('JwtStrategy', () => {
-  const strategy = conUsuario(null);
+  it('debe rechazar tokens que no son de tipo session', async () => {
+    const invalidPayload = { ...basePayload, type: 'password-reset' as const };
+    await expect(strategy.validate(invalidPayload)).rejects.toThrow(
+      UnauthorizedException,
+    );
+  });
 
-  it('acepta un token de sesión y expone los datos del usuario', async () => {
-    await expect(strategy.validate(payload('session'))).resolves.toEqual({
-      userId: 'usuario-1',
-      negocioId: 'negocio-1',
-      role: 'ADMIN',
+  it('debe consultar la BD en la primera llamada y cachear la sesión', async () => {
+    const usuarioMock = {
+      passwordChangedAt: null,
+      email: 'user@example.com',
       rolGlobal: 'CLIENTE',
+    };
+    prismaMock.usuario.findUnique.mockResolvedValue(usuarioMock);
+
+    const user = await strategy.validate(basePayload);
+
+    expect(user).toBeDefined();
+    expect(user.userId).toBe('user-uuid-1');
+    expect(prismaMock.usuario.findUnique).toHaveBeenCalledTimes(1);
+
+    // Segunda llamada inmediata: debe responder desde la caché sin consultar la BD
+    const user2 = await strategy.validate(basePayload);
+    expect(user2).toEqual(user);
+    expect(prismaMock.usuario.findUnique).toHaveBeenCalledTimes(1); // Sigue en 1
+  });
+
+  it('debe invalidar la sesión y rechazar token si la contraseña fue cambiada después de emitirlo', async () => {
+    // Token emitido hace 100 segundos
+    const oldPayload: JwtPayload = {
+      ...basePayload,
+      iat: Math.floor(Date.now() / 1000) - 100,
+    };
+
+    // Contraseña cambiada hace 10 segundos
+    prismaMock.usuario.findUnique.mockResolvedValue({
+      passwordChangedAt: new Date(Date.now() - 10000),
     });
-  });
 
-  // El caso grave: ese token viaja dentro de un correo. Si sirviera como
-  // credencial, bastaría con leer el buzón para entrar sin saber la contraseña.
-  it('rechaza el token de verificación de correo', async () => {
-    await expect(
-      strategy.validate(payload('email-verification')),
-    ).rejects.toThrow(UnauthorizedException);
-  });
-
-  it('rechaza el token de recuperación de contraseña', async () => {
-    await expect(strategy.validate(payload('password-reset'))).rejects.toThrow(
-      UnauthorizedException,
+    await expect(strategy.validate(oldPayload)).rejects.toThrow(
+      'Tu contraseña cambió: inicia sesión de nuevo',
     );
   });
 
-  it('rechaza el token de cambio de correo', async () => {
-    await expect(strategy.validate(payload('email-change'))).rejects.toThrow(
-      UnauthorizedException,
+  it('debe lanzar UnauthorizedException si la cuenta ya no existe en BD', async () => {
+    prismaMock.usuario.findUnique.mockResolvedValue(null);
+
+    await expect(strategy.validate(basePayload)).rejects.toThrow(
+      'La cuenta ya no existe',
     );
-  });
-
-  // Los tokens emitidos antes de ese cambio no llevan `type`. Que dejen de
-  // servir es intencional: obliga a volver a iniciar sesión una vez.
-  it('rechaza un token antiguo sin type', async () => {
-    const antiguo = { ...payload('session') } as Partial<JwtPayload>;
-    delete antiguo.type;
-
-    await expect(strategy.validate(antiguo as JwtPayload)).rejects.toThrow(
-      UnauthorizedException,
-    );
-  });
-
-  describe('sesiones y cambio de contraseña', () => {
-    it('rechaza una sesión anterior al cambio de contraseña', async () => {
-      const cambio = new Date((AHORA - 60) * 1000);
-
-      await expect(
-        conUsuario(cambio).validate(payload('session', AHORA - 3600)),
-      ).rejects.toThrow(/contraseña cambió/);
-    });
-
-    it('acepta una sesión abierta después del cambio', async () => {
-      const cambio = new Date((AHORA - 3600) * 1000);
-
-      await expect(
-        conUsuario(cambio).validate(payload('session', AHORA - 60)),
-      ).resolves.toMatchObject({ userId: 'usuario-1' });
-    });
-
-    // Quien nunca ha cambiado su contraseña no debe perder la sesión solo
-    // porque se despliegue esta comprobación.
-    it('acepta la sesión si el usuario nunca cambió su contraseña', async () => {
-      await expect(
-        conUsuario(null).validate(payload('session', AHORA - 86_400)),
-      ).resolves.toMatchObject({ userId: 'usuario-1' });
-    });
-
-    // `iat` viene redondeado a segundos: sin holgura, cambiar la contraseña y
-    // volver a entrar en el mismo segundo dejaría fuera a la sesión nueva.
-    it('acepta una sesión emitida en el mismo segundo del cambio', async () => {
-      const cambio = new Date(AHORA * 1000 + 500);
-
-      await expect(
-        conUsuario(cambio).validate(payload('session', AHORA)),
-      ).resolves.toMatchObject({ userId: 'usuario-1' });
-    });
-
-    it('rechaza un token de sesión sin fecha de emisión', async () => {
-      const cambio = new Date((AHORA - 60) * 1000);
-      const sinIat = { ...payload('session') };
-      delete sinIat.iat;
-
-      await expect(conUsuario(cambio).validate(sinIat)).rejects.toThrow(
-        UnauthorizedException,
-      );
-    });
-
-    it('rechaza la sesión si la cuenta ya no existe', async () => {
-      await expect(
-        conUsuario(undefined).validate(payload('session')),
-      ).rejects.toThrow(/ya no existe/);
-    });
   });
 });

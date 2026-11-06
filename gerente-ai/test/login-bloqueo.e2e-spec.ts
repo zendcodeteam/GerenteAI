@@ -5,6 +5,7 @@ import * as bcrypt from 'bcrypt';
 import { AuthService } from '../src/auth/auth.service';
 import { MailService } from '../src/auth/mail/mail.service';
 import { NegociosService } from '../src/services/negocios.service';
+import { UserContextCacheService } from '../src/services/user-context-cache.service';
 import { PlanesService } from '../src/services/planes.service';
 import { PrismaService } from '../src/services/prisma.service';
 import { limpiar } from './helpers/contexto';
@@ -47,6 +48,7 @@ describe('Bloqueo de login (contra Postgres real)', () => {
         AuthService,
         PrismaService,
         NegociosService,
+        UserContextCacheService,
         PlanesService,
         {
           provide: JwtService,

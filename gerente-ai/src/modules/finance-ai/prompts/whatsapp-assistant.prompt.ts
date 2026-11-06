@@ -21,6 +21,51 @@ import {
  * API, asi se puede saber que version produjo cada registro.
  *
  * ---------------------------------------------------------------------------
+ * v19: periodos hacia atras que cruzan el cambio de mes.
+ *
+ * Solo existian hoy, esta semana y este mes, todos contados hasta hoy. El 4 de
+ * noviembre, "¿como me fue la semana pasada?" terminaba en "week" o "month"
+ * y los registros de finales de octubre no aparecian. Ahora hay periodos para
+ * ayer, la semana pasada, el mes pasado y los ultimos N dias, y una correccion
+ * puede decir de cuando es el movimiento. Una busqueda por concepto tambien
+ * ("¿cuanto gaste en transporte la semana pasada?"). El rango lo calcula el
+ * backend.
+ *
+ * ---------------------------------------------------------------------------
+ * v23: dar de alta un producto por conversacion.
+ *
+ * "Voy a vender arroz a 5.000, me cuesta 3.500" es un producto nuevo del
+ * catalogo, no una venta ni un gasto. Se extrae lo que venga y el backend
+ * pregunta lo que falte, de a un dato por mensaje, y ensena un resumen con el
+ * margen antes de guardar.
+ *
+ * ---------------------------------------------------------------------------
+ * v22: un suministro que queda a deber tiene plan de pagos.
+ *
+ * "La harina de Molinos quedo a deber" no es un gasto cualquiera: es una
+ * deuda con proveedor, con fecha limite, modalidad, cuotas e interes. Se
+ * extrae lo que venga y el backend pregunta lo que falte, de a un dato por
+ * mensaje, y ensena el plan de cuotas antes de guardar.
+ *
+ * ---------------------------------------------------------------------------
+ * v21: pagos de nomina por conversacion.
+ *
+ * "Pagale el 40% a Carlos" no es un reparto de utilidades ni un gasto
+ * cualquiera: es un pago de nomina, con su trabajador, su porcentaje y su
+ * monto. Se extrae lo que venga y el backend pregunta lo que falte, de a un
+ * dato por mensaje, y ensena un resumen antes de guardar.
+ *
+ * ---------------------------------------------------------------------------
+ * v20: todo fiado nace con fecha maxima de pago.
+ *
+ * Antes el plazo se inventaba: el sistema le sumaba unos dias fijos a la
+ * fecha de la venta. Como nadie habia acordado ese plazo, el recordatorio de
+ * cobro salia cuando no tocaba y el dueno no se fiaba de el. Ahora el modelo
+ * extrae la fecha que el usuario diga, en el lenguaje en que la diga ("el
+ * viernes", "fin de mes", "el 15"), y si no dice ninguna el sistema la
+ * pregunta antes de guardar.
+ *
+ * ---------------------------------------------------------------------------
  * v18: una posicion nombrada nunca significa "todo".
  *
  * Tras un "borra todo lo de hoy", el usuario contestaba "el 1" y Luka volvia
@@ -104,7 +149,7 @@ import {
  * ---------------------------------------------------------------------------
  */
 
-export const WHATSAPP_ASSISTANT_PROMPT_VERSION = 'asistente-whatsapp/v18';
+export const WHATSAPP_ASSISTANT_PROMPT_VERSION = 'asistente-whatsapp/v23';
 
 /**
  * Forma CRUDA de la respuesta del modelo.
@@ -115,6 +160,28 @@ export const WHATSAPP_ASSISTANT_PROMPT_VERSION = 'asistente-whatsapp/v18';
  */
 export interface WhatsAppIntentOutput {
   type?: string;
+  product?: {
+    name?: string | null;
+    salePrice?: number | string | null;
+    costPrice?: number | string | null;
+    category?: string | null;
+    stock?: number | string | null;
+  } | null;
+  payroll?: {
+    workerName?: string | null;
+    percentage?: number | string | null;
+    amount?: number | string | null;
+    date?: string | null;
+  } | null;
+  supplyDebt?: {
+    supplierName?: string | null;
+    supply?: string | null;
+    amount?: number | string | null;
+    dueDate?: string | null;
+    mode?: string | null;
+    installments?: number | string | null;
+    interestRate?: number | string | null;
+  } | null;
   movements?: {
     type?: string;
     amount?: number | string | null;
@@ -126,6 +193,7 @@ export interface WhatsAppIntentOutput {
     isSupplierCredit?: boolean | null;
     paymentMethod?: string | null;
     isCredit?: boolean | null;
+    dueDate?: string | null;
     customerName?: string | null;
     quantity?: number | string | null;
     date?: string | null;
@@ -219,7 +287,7 @@ código, sin markdown. El JSON debe tener esta estructura exacta:
   } | null,
   "concept": string | null,
   "queryKind": "summary" | "list" | "search" | "receivables" | null,
-  "queryPeriod": "day" | "week" | "month" | null,
+  "queryPeriod": "day" | "yesterday" | "week" | "last_week" | "month" | "last_month" | "last_7_days" | "last_15_days" | "last_30_days" | null,
   "confirmed": boolean | null,
   "confirmedCount": number | null,
   "responseText": "texto de respuesta para el usuario",
@@ -330,6 +398,26 @@ REGLAS DE INTERPRETACIÓN:
      a quién, usa type "unclear" y pregunta el nombre: un fiado sin dueño es una
      deuda que después nadie puede cobrar ni descontar cuando le paguen.
 
+   FECHA MÁXIMA DE PAGO (dueDate), obligatoria en todo fiado:
+
+   - Es el día en que el cliente quedó de pagar. Va en "dueDate", formato
+     YYYY-MM-DD, resuelta contra la fecha de hoy que tienes en el contexto.
+   - Entiéndela en el idioma en que la diga, no le pidas un formato:
+         "el viernes"        -> el próximo viernes
+         "el 15"             -> el 15 de este mes; si ya pasó, el del mes que viene
+         "fin de mes"        -> el último día de este mes
+         "en 15 días"        -> hoy + 15 días
+         "la otra semana"    -> hoy + 7 días
+         "el 30 de noviembre"-> ese día
+   - SIEMPRE tiene que ser futura. Si lo que dice ya pasó ("el lunes" cuando
+     hoy es miércoles y se refería al lunes anterior), interprétalo como la
+     próxima vez que caiga ese día.
+   - Si NO dijo ninguna fecha, deja dueDate en null. NO la inventes y NO uses
+     type "unclear" por eso: el sistema se la pregunta él mismo y conserva el
+     resto del movimiento. Inventar un plazo que nadie acordó es lo que se
+     está corrigiendo.
+   - En lo que no es fiado, dueDate va null siempre.
+
 6B. LE PAGARON UN FIADO (type: "payment"):
    Esto es lo contrario de fiar: el cliente que debia viene y paga.
 
@@ -365,12 +453,124 @@ REGLAS DE INTERPRETACIÓN:
      inventes: usa type "unclear" y pregunta qué porcentaje le toca a cada uno.
    - Los montos los calcula el sistema: tú solo entregas los porcentajes.
 
+7B. PAGO DE NOMINA (type: "payroll"):
+   El dueño le paga a un trabajador lo que le corresponde.
+
+   - "Págale el 40% a Carlos, son 800.000"  -> payroll completo
+   - "Voy a pagarle a María"                -> payroll con solo workerName
+   - "Registra el pago de nómina"           -> payroll con todo en null
+   - "A Carlos le toca el 30%"              -> payroll con nombre y porcentaje
+
+   REGLAS:
+   - Pon en "payroll" lo que el mensaje diga y deja en null lo que no diga. NO
+     inventes el porcentaje ni el monto, y NO uses type "unclear" porque
+     falten: el sistema pregunta lo que haga falta, de a un dato por mensaje,
+     y se acuerda de lo que ya le dijeron.
+   - "movements" va SIEMPRE vacío: []. Un pago de nómina no es un gasto más;
+     si lo registras como expense queda contado dos veces.
+   - El porcentaje va de 0 a 100: "el 40%" es 40, no 0.4.
+   - Cuando el usuario viene contestando una pregunta tuya, devuelve otra vez
+     type "payroll" con el dato que acaba de dar. Si contesta "Carlos" a
+     "¿a quién le vas a pagar?", eso es payroll con workerName "Carlos", no un
+     mensaje sin sentido.
+   - El resumen y la confirmación los arma el sistema. En responseText escribe
+     algo breve: se reemplaza.
+
+   NO lo confundas con el reparto de utilidades (regla 7):
+     "De las ganancias, 60% mío y 40% de los trabajadores" -> profit_share
+       (se reparte una bolsa entre varios, el sistema calcula los montos)
+     "Págale el 40% a Carlos, son 800.000"                 -> payroll
+       (un pago concreto a una persona, con su monto)
+7C. SUMINISTRO QUE QUEDA A DEBER (type: "supply_debt"):
+   El negocio recibe mercancía de un proveedor y queda debiéndola.
+
+   - "La harina de Molinos quedó a deber"
+   - "Me trajeron 2 millones en bebidas y los pago en diciembre"
+   - "Quedé debiendo el pedido de Postobón, en 6 cuotas con 2% de interés"
+
+   Pon en "supplyDebt" lo que el mensaje diga y deja en null lo que no diga:
+
+   - supplierName: a quién se le debe.
+   - supply: qué le compró ("harina y levadura", "bebidas").
+   - amount: cuánto debe en total, SIN intereses.
+   - dueDate: la fecha límite en YYYY-MM-DD, resuelta contra la fecha de hoy.
+     Entiéndela como venga: "el 30 de noviembre", "en 15 días", "fin de mes",
+     "el otro mes". SIEMPRE futura. Si paga en cuotas, es la de la ÚLTIMA.
+   - mode: "unico" si paga de una sola vez, "cuotas" si va en varias.
+   - installments: cuántas cuotas, solo cuando mode es "cuotas".
+   - interestRate: el interés MENSUAL en porcentaje. Si dice que no le cobran
+     interés, pon 0 —no null—: 0 es "ya contestó que no" y null es "todavía no
+     se lo he preguntado", y el sistema los trata distinto.
+
+   REGLAS:
+   - NO inventes ningún dato. El sistema pregunta lo que falte, de a uno por
+     mensaje, y se acuerda de lo que ya le dijeron. No uses "unclear" por eso.
+   - "movements" va SIEMPRE vacío: []. La deuda no es un gasto del día: la
+     plata sale cuando se pague. Registrarla además como expense la contaría
+     dos veces.
+   - Cuando el usuario viene contestando una pregunta tuya, devuelve otra vez
+     type "supply_debt" con el dato que acaba de dar. "En 6 cuotas" es
+     supplyDebt con mode "cuotas" e installments 6, no un mensaje suelto.
+   - El resumen, el plan de cuotas y la confirmación los arma el sistema. En
+     responseText escribe algo breve: se reemplaza.
+
+   NO lo confundas con una compra a crédito normal (regla 4): si solo dice "a
+   30 días" sin hablar de cuotas ni intereses, eso sigue siendo un gasto con
+   isSupplierCredit. Esto es para cuando hay un PLAN de pago detrás.
+
+7D. DAR DE ALTA UN PRODUCTO (type: "product"):
+   El dueño agrega un producto a su catálogo.
+
+   - "Voy a vender arroz a 5.000, me cuesta 3.500"
+   - "Agrega un producto nuevo: gaseosa"
+   - "Mete al catálogo el jabón Rey, lo compro en 2.000 y lo vendo en 3.000"
+
+   Pon en "product" lo que el mensaje diga y deja en null lo que no diga:
+
+   - name: el nombre del producto.
+   - salePrice: a cuánto LO VENDE.
+   - costPrice: a cuánto LE CUESTA.
+   - category: si la menciona. Opcional.
+   - stock: unidades con las que arranca. Opcional, y el 0 es válido.
+
+   REGLAS:
+   - NO inventes precios. El sistema pregunta lo que falte, de a uno por
+     mensaje, y se acuerda de lo que ya le dijeron. No uses "unclear" por eso.
+   - Cuidado con cuál precio es cuál: "lo vendo en X" y "me cuesta X" no son
+     lo mismo, y confundirlos deja el margen al revés.
+   - "movements" va SIEMPRE vacío: []. Dar de alta un producto NO mueve plata:
+     no se compró ni se vendió nada todavía. Si lo registras como gasto o como
+     venta, inventas un movimiento que nunca ocurrió.
+   - Cuando el usuario viene contestando una pregunta tuya, devuelve otra vez
+     type "product" con el dato que acaba de dar. Una cifra suelta ahí es un
+     precio del producto, no una venta.
+   - El resumen y la confirmación los arma el sistema. En responseText escribe
+     algo breve: se reemplaza.
+
+   NO lo confundas con una compra (regla 2): "compré 20 arroces en 70.000" es
+   un gasto de mercancía que SÍ movió plata. Esto es solo registrar que el
+   producto existe y a qué precios.
+
 8. CONSULTAS (type: "query"):
    Elige el "queryKind" según lo que pidió:
 
    a) "summary" -> totales del periodo. concept: null
       - "¿Cómo voy?", "¿Cuánto llevo?", "¿Cuánto he gastado este mes?"
-      - Indica el periodo en queryPeriod: day, week o month.
+      - Indica el periodo en queryPeriod:
+          "hoy"                               -> "day"
+          "ayer"                              -> "yesterday"
+          "esta semana"                       -> "week" (del lunes a hoy)
+          "la semana pasada"                  -> "last_week" (lunes a domingo)
+          "este mes"                          -> "month"
+          "el mes pasado"                     -> "last_month"
+          "los últimos 7 / 15 / 30 días"      -> "last_7_days" / "last_15_days" / "last_30_days"
+          "la última semana", "estos 8 días"  -> "last_7_days"
+          "la última quincena"                -> "last_15_days"
+      - "La semana pasada" NO es "week" ni "month": si hoy es 4 de noviembre,
+        la semana pasada va del 26 de octubre al 1 de noviembre, y usar "week"
+        o "month" dejaría fuera los días de octubre. El sistema calcula las
+        fechas exactas aunque crucen el cambio de mes o de año; tú solo nombra
+        el periodo.
 
    b) "list" -> el detalle de los movimientos, uno por uno. concept: null
       - "¿Cuáles son esos movimientos?", "muéstrame la lista",
@@ -388,6 +588,13 @@ REGLAS DE INTERPRETACIÓN:
       - Funciona igual para gastos y para ingresos: si preguntan cuánto ganaron
         en algo, es una búsqueda, no un resumen.
       - Pon en concept SOLO la palabra clave, sin "cuánto" ni "qué día".
+      - Si dice CUÁNDO, pon el periodo en queryPeriod con los mismos valores
+        del resumen; si no lo dice, queryPeriod va null y se busca en los
+        últimos meses:
+          "¿Cuánto gasté en transporte la semana pasada?"
+              -> concept "transporte", queryPeriod "last_week"
+          "¿Cuánto vendí de pan ayer?"   -> concept "pan", queryPeriod "yesterday"
+          "¿Qué día compré jabones?"     -> concept "jabones", queryPeriod null
 
    d) "receivables" -> la cartera completa: quiénes le deben. concept: null
       - "¿Quién me debe?", "¿quiénes me deben?", "reporte de fiados",
@@ -473,6 +680,16 @@ REGLAS DE INTERPRETACIÓN:
    - "reference": una palabra del concepto ("transporte", "jabones", "Meza").
    - "referenceAmount": el monto que sirve para NOMBRARLO ("la de 1.530.000").
    - "referenceDate": la fecha que lo nombra, en YYYY-MM-DD ("la del 3 de sept").
+     Puede ser de un mes anterior: "el del 28" dicho el 4 de noviembre es
+     "2026-10-28", porque el 28 de noviembre todavía no ha llegado.
+   - "queryPeriod": CUÁNDO fue, si lo dice sin una fecha exacta. Usa los mismos
+     valores de las consultas ("yesterday", "last_week", "last_month"...):
+         "corrige el transporte de la semana pasada a 60.000"
+             -> reference "transporte", newAmount 60000, queryPeriod "last_week"
+         "borra la venta de ayer de 20.000"
+             -> referenceAmount 20000, queryPeriod "yesterday"
+     Si no dice cuándo, queryPeriod va null (salvo en un "borra todo" de la
+     regla d). Si da una fecha exacta, usa referenceDate y deja queryPeriod null.
    - "referenceIndexes": las posiciones de la lista que TÚ acabas de mostrar.
      Es una LISTA, y tienes que meter TODAS las que el usuario nombre:
          "la primera"                  -> [1]
@@ -694,6 +911,8 @@ FECHAS DE LOS MOVIMIENTOS:
       "el 23 de agosto vendí..."      -> "2026-08-23"
       "ayer pagué..."                 -> "2026-09-01"
       "el lunes compré..."            -> el lunes MÁS RECIENTE ya pasado
+      "el 28 vendí..." (hoy 2026-11-04) -> "2026-10-28": el 28 de este mes
+                                         aún no llega, así que es el del mes pasado
       "la semana pasada gasté..."     -> deja null: no es una fecha concreta
 - Si el usuario da una fecha sin año, asume el año que haga que la fecha ya haya
   ocurrido. "23 de agosto" dicho en septiembre de 2026 es 2026-08-23, no 2027.
@@ -737,7 +956,13 @@ Mensaje: "Vendí $2.000.000: $1.500.000 en efectivo y $200.000 en transferencia"
 Respuesta: {"type":"income","movements":[{"type":"income","amount":1500000,"category":"ventas","concept":"Ventas en efectivo","paymentMethod":"efectivo","isCredit":false,"customerName":null},{"type":"income","amount":200000,"category":"ventas","concept":"Ventas por transferencia","paymentMethod":"transferencia","isCredit":false,"customerName":null}],"declaredTotal":2000000,"profitShares":[],"concept":null,"queryKind":null,"queryPeriod":null,"responseText":"Déjame revisar esos números.","confidence":0.9}
 
 Mensaje: "Le fié $50.000 a doña Rosa"
-Respuesta: {"type":"income","movements":[{"type":"income","amount":50000,"category":"ventas","concept":"Venta fiada a doña Rosa","paymentMethod":null,"isCredit":true,"customerName":"Doña Rosa"}],"declaredTotal":null,"profitShares":[],"concept":null,"queryKind":null,"queryPeriod":null,"responseText":"✅ Registré el fiado de $50.000 a doña Rosa.","confidence":0.95}
+Respuesta: {"type":"income","movements":[{"type":"income","amount":50000,"category":"ventas","concept":"Venta fiada a doña Rosa","paymentMethod":null,"isCredit":true,"customerName":"Doña Rosa","dueDate":null}],"declaredTotal":null,"profitShares":[],"concept":null,"queryKind":null,"queryPeriod":null,"responseText":"Registro el fiado de doña Rosa.","confidence":0.95}
+
+Mensaje: "Le fié 50.000 a doña Rosa, me paga el viernes"  (hoy es miércoles 4 de noviembre de 2026)
+Respuesta: {"type":"income","movements":[{"type":"income","amount":50000,"category":"ventas","concept":"Venta fiada a doña Rosa","paymentMethod":null,"isCredit":true,"customerName":"Doña Rosa","dueDate":"2026-11-06"}],"declaredTotal":null,"profitShares":[],"concept":null,"queryKind":null,"queryPeriod":null,"responseText":"✅ Registré el fiado de $50.000 a doña Rosa.","confidence":0.95}
+
+Mensaje: "el 15"  (venías de preguntarle para cuándo quedó de pagar el fiado; hoy es 4 de noviembre de 2026)
+Respuesta: {"type":"income","movements":[{"type":"income","amount":50000,"category":"ventas","concept":"Venta fiada a doña Rosa","paymentMethod":null,"isCredit":true,"customerName":"Doña Rosa","dueDate":"2026-11-15"}],"declaredTotal":null,"profitShares":[],"concept":null,"queryKind":null,"queryPeriod":null,"responseText":"Listo, queda anotado.","confidence":0.95}
 
 Mensaje: "Doña Rosa me abonó $20.000"
 Respuesta: {"type":"payment","movements":[],"declaredTotal":null,"profitShares":[],"correction":null,"payment":{"customerName":"Doña Rosa","amount":20000,"settlesDebt":false,"date":null},"concept":null,"queryKind":null,"queryPeriod":null,"responseText":"Listo, registro el abono de doña Rosa.","confidence":0.95}
@@ -801,6 +1026,12 @@ Respuesta: {"type":"unclear","movements":[],"declaredTotal":null,"profitShares":
 
 Mensaje: "¿Cómo voy esta semana?"
 Respuesta: {"type":"query","movements":[],"declaredTotal":null,"profitShares":[],"concept":null,"queryKind":"summary","queryPeriod":"week","responseText":"Dame un momento, voy a consultar tu resumen de la semana.","confidence":0.95}
+
+Mensaje: "¿Cómo me fue la semana pasada?"
+Respuesta: {"type":"query","movements":[],"declaredTotal":null,"profitShares":[],"concept":null,"queryKind":"summary","queryPeriod":"last_week","responseText":"Dame un momento, reviso la semana pasada.","confidence":0.95}
+
+Mensaje: "Corrige el gasto de transporte de la semana pasada, eran 60.000"
+Respuesta: {"type":"correction","movements":[],"declaredTotal":null,"profitShares":[],"correction":{"action":"update","reference":"transporte","referenceAmount":null,"referenceDate":null,"referenceIndexes":[],"newAmount":60000,"newConcept":null,"deleteAll":false,"matchAll":false},"payment":null,"concept":null,"queryKind":null,"queryPeriod":"last_week","responseText":"Voy a corregirlo.","confidence":0.9}
 
 Mensaje: "¿Cuáles son esos 8 movimientos?"
 Respuesta: {"type":"query","movements":[],"declaredTotal":null,"profitShares":[],"concept":null,"queryKind":"list","queryPeriod":"month","responseText":"Claro, te los detallo.","confidence":0.95}
@@ -885,7 +1116,7 @@ CONTEXTO DE ESTA CONVERSACIÓN:
 - Negocio: ${context.businessName}
 - Moneda: ${context.currency}
 - Fecha de hoy: ${context.referenceDate}
-- Usa esta fecha para resolver "hoy", "ayer", "esta semana" y "este mes".
+- Usa esta fecha para resolver "hoy", "ayer", "esta semana", "la semana pasada", "este mes" y "el mes pasado". Los periodos hacia atrás pueden caer en el mes o el año anterior: es normal y se nombran igual.
 - Cuando te presentes, nombra el negocio tal como aparece arriba.
 - Plan contratado: ${context.planName ?? 'Asistente'}${
     context.planIsFree === false
@@ -933,6 +1164,9 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
     'profitShares',
     'correction',
     'payment',
+    'payroll',
+    'supplyDebt',
+    'product',
     'confirmed',
     'confirmedCount',
     'concept',
@@ -951,6 +1185,9 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
         'payment',
         'breakdown',
         'profit_share',
+        'payroll',
+        'supply_debt',
+        'product',
         'query',
         'correction',
         'confirmation',
@@ -975,6 +1212,7 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
           'paymentMethod',
           'isCredit',
           'date',
+          'dueDate',
           'customerName',
           'quantity',
           'productName',
@@ -1033,16 +1271,23 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
           },
           supplierCreditDays: {
             type: ['number', 'null'],
-            description: 'Días hasta pagar al proveedor, si la compra es a crédito.',
+            description:
+              'Días hasta pagar al proveedor, si la compra es a crédito.',
           },
           isSupplierCredit: {
             type: 'boolean',
-            description: 'true si la compra quedó pendiente de pago al proveedor.',
+            description:
+              'true si la compra quedó pendiente de pago al proveedor.',
           },
           date: {
             type: ['string', 'null'],
             description:
               'Fecha del movimiento en YYYY-MM-DD si el usuario la dijo. null si no la menciono.',
+          },
+          dueDate: {
+            type: ['string', 'null'],
+            description:
+              'Solo en fiados (isCredit true): fecha maxima de pago acordada, en YYYY-MM-DD y siempre futura. null si el usuario no la dijo.',
           },
         },
       },
@@ -1171,6 +1416,110 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
         },
       },
     },
+    payroll: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      required: ['workerName', 'percentage', 'amount', 'date'],
+      description:
+        'Pago de nomina a un trabajador. null si el mensaje no habla de nomina.',
+      properties: {
+        workerName: {
+          type: ['string', 'null'],
+          description: 'A quien se le paga. null si no lo dijo todavia.',
+        },
+        percentage: {
+          type: ['number', 'null'],
+          description:
+            'Porcentaje acordado, de 0 a 100. null si no lo dijo todavia.',
+        },
+        amount: {
+          type: ['number', 'null'],
+          description:
+            'Lo que se le paga, en pesos. null si no lo dijo todavia.',
+        },
+        date: {
+          type: ['string', 'null'],
+          description: 'Fecha del pago en YYYY-MM-DD. null = hoy.',
+        },
+      },
+    },
+    supplyDebt: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      required: [
+        'supplierName',
+        'supply',
+        'amount',
+        'dueDate',
+        'mode',
+        'installments',
+        'interestRate',
+      ],
+      description:
+        'Suministro que queda a deber al proveedor. null si el mensaje no habla de eso.',
+      properties: {
+        supplierName: {
+          type: ['string', 'null'],
+          description: 'A quien se le debe. null si no lo dijo todavia.',
+        },
+        supply: {
+          type: ['string', 'null'],
+          description: 'Que se compro. null si no lo dijo todavia.',
+        },
+        amount: {
+          type: ['number', 'null'],
+          description: 'Monto total de la deuda, sin intereses.',
+        },
+        dueDate: {
+          type: ['string', 'null'],
+          description:
+            'Fecha limite en YYYY-MM-DD, siempre futura. Con cuotas, la de la ULTIMA.',
+        },
+        mode: {
+          type: ['string', 'null'],
+          enum: ['unico', 'cuotas', null],
+          description: '"unico" = un solo pago; "cuotas" = varias mensuales.',
+        },
+        installments: {
+          type: ['number', 'null'],
+          description: 'Numero de cuotas cuando mode es "cuotas".',
+        },
+        interestRate: {
+          type: ['number', 'null'],
+          description:
+            'Interes mensual en porcentaje. 0 si dijo que no le cobran. null si no lo ha dicho.',
+        },
+      },
+    },
+    product: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      required: ['name', 'salePrice', 'costPrice', 'category', 'stock'],
+      description:
+        'Producto que se da de alta en el catalogo. null si el mensaje no habla de eso.',
+      properties: {
+        name: {
+          type: ['string', 'null'],
+          description: 'Nombre del producto. null si no lo dijo todavia.',
+        },
+        salePrice: {
+          type: ['number', 'null'],
+          description: 'A cuanto lo vende. null si no lo dijo todavia.',
+        },
+        costPrice: {
+          type: ['number', 'null'],
+          description: 'A cuanto lo compra. null si no lo dijo todavia.',
+        },
+        category: {
+          type: ['string', 'null'],
+          description: 'Categoria, si la menciona. Es opcional.',
+        },
+        stock: {
+          type: ['number', 'null'],
+          description: 'Unidades con las que arranca. Opcional; 0 es valido.',
+        },
+      },
+    },
     concept: {
       type: ['string', 'null'],
       description:
@@ -1184,8 +1533,19 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
     },
     queryPeriod: {
       type: ['string', 'null'],
-      enum: ['day', 'week', 'month'],
-      description: 'Periodo consultado. Solo para type "query".',
+      enum: [
+        'day',
+        'yesterday',
+        'week',
+        'last_week',
+        'month',
+        'last_month',
+        'last_7_days',
+        'last_15_days',
+        'last_30_days',
+      ],
+      description:
+        'Periodo consultado en type "query" (en "search", null si no dice cuándo), o de cuándo es el movimiento en type "correction". El sistema calcula las fechas.',
     },
     confirmedCount: {
       type: ['number', 'null'],

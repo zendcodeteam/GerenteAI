@@ -66,6 +66,7 @@ describe('Modelo de permisos por sede (contra Postgres real)', () => {
       await expect(
         ctx.productos.create(s.adminSedeAId, 'CLIENTE', {
           nombre: 'Intruso',
+          categoria: 'General',
           precioCompra: 1,
           precioVenta: 2,
           sedeId: s.sedeBId,
@@ -81,6 +82,7 @@ describe('Modelo de permisos por sede (contra Postgres real)', () => {
       await expect(
         ctx.productos.create(s.adminSedeAId, 'CLIENTE', {
           nombre: 'Café',
+          categoria: 'Bebidas',
           precioCompra: 800,
           precioVenta: 1200,
           sedeId: s.sedeAId,

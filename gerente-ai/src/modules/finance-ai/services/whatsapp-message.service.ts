@@ -29,6 +29,9 @@ import {
   type MovementDraft,
   type PaymentDraft,
   type PaymentMethod,
+  type PayrollDraft,
+  type ProductDraft,
+  type SupplyDebtDraft,
   type PeriodSummary,
   type ProfitBeneficiary,
   type ProfitShare,
@@ -43,17 +46,28 @@ import {
   FINANCE_DATA_PORT,
   type FinanceDataPort,
   type PaymentResult,
+  type PayrollPayment,
+  type ProductRegistration,
+  type SupplyDebt,
 } from '../ports/finance-data.port';
+import {
+  planDeDeudaProveedor,
+  type PlanDeDeuda,
+} from '../../../services/plan-deuda-proveedor';
 import {
   ConversationStateService,
   type PendingAction,
   type PendingCorrection,
   type PendingDeletion,
+  type PendingPayroll,
   type PendingRegistration,
+  type PendingProduct,
+  type PendingSupplyDebt,
 } from './conversation-state.service';
 import {
   WHATSAPP_ASSISTANT_PROMPT_VERSION,
   WHATSAPP_INTENT_SCHEMA,
+  WHATSAPP_ASSISTANT_SYSTEM_PROMPT,
   buildWhatsAppAssistantSystemPrompt,
   type WhatsAppIntentOutput,
 } from '../prompts/whatsapp-assistant.prompt';
@@ -227,6 +241,11 @@ export class WhatsAppMessageService {
     const { data, response } =
       await this.llm.completeJson<WhatsAppIntentOutput>(
         {
+          // Los ~14.500 tokens del prompt viajan identicos en cada mensaje;
+          // solo cambia el bloque de contexto que va al final. Marcandolos
+          // como prefijo cacheable, el proveedor los cobra al 10% y responde
+          // antes. El texto que lee el modelo no cambia.
+          cacheableSystemPrefix: WHATSAPP_ASSISTANT_SYSTEM_PROMPT,
           system: buildWhatsAppAssistantSystemPrompt({
             businessName: request.businessName ?? 'el negocio',
             currency,
@@ -295,10 +314,17 @@ export class WhatsAppMessageService {
     // Cambiar de tema cierra la pregunta abierta. Dejarla viva haria que una
     // correccion de dentro de un rato se resolviera contra una lista que ya no
     // tiene nada que ver con lo que se esta hablando.
+    // "payroll" tambien conserva: una nomina se arma en varios turnos y cada
+    // respuesta del usuario llega como un payroll nuevo con un solo dato. Si
+    // se olvidara aqui, el borrador moriria entre mensaje y mensaje y Luka
+    // volveria a preguntar el nombre despues de que se lo dijeron.
     if (
       intent.type !== 'correction' &&
       intent.type !== 'confirmation' &&
-      intent.type !== 'unclear'
+      intent.type !== 'unclear' &&
+      intent.type !== 'payroll' &&
+      intent.type !== 'supply_debt' &&
+      intent.type !== 'product'
     ) {
       this.state.olvidar(request.businessId);
     }
@@ -326,7 +352,28 @@ export class WhatsAppMessageService {
         );
 
       case 'confirmation':
-        return this.handleConfirmation(intent, request, currency, meta);
+        return this.handleConfirmation(
+          intent,
+          request,
+          currency,
+          referenceDate,
+          meta,
+        );
+
+      case 'payroll':
+        return this.handlePayroll(
+          intent,
+          request,
+          currency,
+          referenceDate,
+          meta,
+        );
+
+      case 'supply_debt':
+        return this.handleSupplyDebt(intent, request, currency, meta);
+
+      case 'product':
+        return this.handleProduct(intent, request, currency, meta);
 
       case 'income':
       case 'expense':
@@ -402,6 +449,22 @@ export class WhatsAppMessageService {
       return this.needsClarification(
         intent,
         '¿A quién le fiaste? Necesito el nombre para saber después quién te debe.',
+        meta,
+      );
+    }
+
+    // Un fiado sin plazo es una deuda sin fecha de cobro: el recordatorio no
+    // tiene contra que comparar y el dueno nunca sabe cuando reclamar. Antes
+    // el sistema le inventaba unos dias fijos; ahora se pregunta, porque el
+    // plazo lo acuerdan el y su cliente, no el software.
+    const fiadoSinPlazo = intent.movements.find(
+      (movimiento) => movimiento.isCredit && !movimiento.dueDate,
+    );
+
+    if (fiadoSinPlazo) {
+      return this.needsClarification(
+        intent,
+        `¿Para cuándo quedó de pagarte ${fiadoSinPlazo.customerName}? Puedes decirme "el viernes", "el 15" o "fin de mes".`,
         meta,
       );
     }
@@ -506,10 +569,12 @@ export class WhatsAppMessageService {
       summary: null,
       // Con un solo movimiento se respeta el texto del modelo, que suena
       // natural. Con varios lo arma el backend: son cifras, y las cifras las
-      // pone quien tiene los datos.
+      // pone quien tiene los datos. El plazo del fiado se agrega aparte por lo
+      // mismo: que salga o no en la confirmacion no puede depender de que al
+      // modelo se le ocurra mencionarlo.
       replyText:
         transactions.length === 1 && !intent.discount
-          ? intent.responseText
+          ? intent.responseText + lineaDePlazo(transactions[0])
           : renderMovementsRegistered(transactions, currency, intent.discount),
       meta,
     };
@@ -530,6 +595,9 @@ export class WhatsAppMessageService {
         profitShares: [],
         correction: null,
         payment: null,
+        payroll: null,
+        supplyDebt: null,
+        product: null,
         confirmed: null,
         confirmedCount: null,
         discount: null,
@@ -557,8 +625,46 @@ export class WhatsAppMessageService {
     intent: MessageIntent,
     request: WhatsAppMessageRequest,
     currency: string,
+    referenceDate: string,
     meta: WhatsAppMessageResult['meta'],
   ): Promise<WhatsAppMessageResult> {
+    const producto = this.state.productoPendiente(request.businessId);
+
+    if (producto?.stage === 'confirmacion') {
+      return this.confirmarProducto(
+        producto,
+        intent,
+        request,
+        currency,
+        meta,
+      );
+    }
+
+    const deuda = this.state.deudaProveedorPendiente(request.businessId);
+
+    if (deuda?.stage === 'confirmacion') {
+      return this.confirmarDeudaProveedor(
+        deuda,
+        intent,
+        request,
+        currency,
+        meta,
+      );
+    }
+
+    const nomina = this.state.nominaPendiente(request.businessId);
+
+    if (nomina?.stage === 'confirmacion') {
+      return this.confirmarNomina(
+        nomina,
+        intent,
+        request,
+        currency,
+        referenceDate,
+        meta,
+      );
+    }
+
     const registro = this.state.registroPendiente(request.businessId);
 
     // Un descuadre no se resuelve con un si: lo que se pidio ahi fue la cifra
@@ -954,22 +1060,30 @@ export class WhatsAppMessageService {
         // Dio un identificador que no cuadra con la lista: esta hablando de
         // otra cosa. Se cierra la pregunta y se busca de cero.
         this.state.olvidar(request.businessId);
-        candidatos = await this.buscarParaCorregir(request, correccion);
+        candidatos = await this.buscarParaCorregir(
+          request,
+          correccion,
+          intent.queryPeriod,
+        );
       }
     } else {
-      candidatos = await this.buscarParaCorregir(request, correccion);
+      candidatos = await this.buscarParaCorregir(
+        request,
+        correccion,
+        intent.queryPeriod,
+      );
     }
 
     if (candidatos.length === 0) {
       // Se deja traza de lo que se busco: cuando alguien reporta un "no
       // encontre" que no deberia serlo, esto es lo unico que dice por que.
       this.logger.warn(
-        `Correccion sin resultados en sede ${request.businessId}: ${describirBusqueda(correccion)}`,
+        `Correccion sin resultados en sede ${request.businessId}: ${describirBusqueda(correccion, intent.queryPeriod)}`,
       );
 
       return this.plainResult(
         intent,
-        renderCorrectionNotFound(correccion, currency),
+        renderCorrectionNotFound(correccion, currency, intent.queryPeriod),
         meta,
       );
     }
@@ -1116,7 +1230,7 @@ export class WhatsAppMessageService {
     if (!movimientos.length) {
       return this.plainResult(
         intent,
-        `No tienes movimientos registrados ${PERIOD_LABELS[period]} para borrar.`,
+        `No tienes movimientos registrados ${etiquetaPeriodo(period)} para borrar.`,
         meta,
       );
     }
@@ -1248,13 +1362,22 @@ export class WhatsAppMessageService {
   private async buscarParaCorregir(
     request: WhatsAppMessageRequest,
     correccion: CorrectionRequest,
+    periodo: QueryPeriod | null,
   ): Promise<Transaction[]> {
-    const hoy = todayIso();
+    const { from, to } = rangoParaCorregir(
+      correccion,
+      periodo,
+      new Date(),
+      diaInicioDe(request),
+    );
     const todo = await this.financeData.listTransactions({
       businessId: request.businessId,
-      from: sumarDias(hoy, -CORRECTION_WINDOW_DAYS),
-      to: hoy,
-      limit: 200,
+      from,
+      to,
+      // Mismo tope que el resto de consultas. Con 200 se traian solo los mas
+      // recientes y, en un negocio con movimiento, lo de hace dos o tres
+      // semanas —lo del mes anterior— ya no entraba al filtro.
+      limit: 1_000,
     });
 
     // Los abonos quedan fuera: no son movimientos que se corrijan, son el
@@ -1380,10 +1503,16 @@ export class WhatsAppMessageService {
         request.businessId,
         intent.concept,
         diaInicio,
+        intent.queryPeriod,
       );
       return {
         ...this.plainResult(intent, '', meta),
-        replyText: renderSearch(intent.concept, encontrados, currency),
+        replyText: renderSearch(
+          intent.concept,
+          encontrados,
+          currency,
+          intent.queryPeriod,
+        ),
       };
     }
 
@@ -1417,6 +1546,268 @@ export class WhatsAppMessageService {
       summary,
       replyText: renderSummary(summary),
     };
+  }
+
+  // ------------------------------------------------------------------ nomina
+
+  /**
+   * Registra el pago de nomina de un trabajador.
+   *
+   * Son tres datos —a quien, que porcentaje y cuanto— y se piden de a uno: un
+   * mensaje de WhatsApp que pregunta tres cosas a la vez se contesta a medias,
+   * y el usuario termina repitiendose. El borrador se guarda entre turnos, asi
+   * que cada respuesta rellena un hueco sin perder lo ya dicho.
+   *
+   * Nada se guarda sin visto bueno. Una nomina mal registrada no se nota en el
+   * momento: aparece a fin de mes, cuando las cuentas del trabajador no
+   * cuadran con las del dueno.
+   */
+  private handlePayroll(
+    intent: MessageIntent,
+    request: WhatsAppMessageRequest,
+    currency: string,
+    referenceDate: string,
+    meta: WhatsAppMessageResult['meta'],
+  ): Promise<WhatsAppMessageResult> {
+    const abierta = this.state.nominaPendiente(request.businessId);
+    const borrador = mezclarNomina(abierta?.draft, intent.payroll);
+
+    const falta = primerDatoQueFalta(borrador);
+
+    if (falta) {
+      this.state.recordarNomina(request.businessId, {
+        draft: borrador,
+        stage: 'datos',
+      });
+
+      return Promise.resolve(
+        this.plainResult(intent, preguntaDeNomina(falta, borrador), meta),
+      );
+    }
+
+    // Completo: se le ensena y se espera el si. El borrador queda guardado tal
+    // cual, para que la confirmacion registre exactamente lo que se mostro.
+    this.state.recordarNomina(request.businessId, {
+      draft: borrador,
+      stage: 'confirmacion',
+    });
+
+    return Promise.resolve(
+      this.plainResult(
+        intent,
+        renderPayrollSummary(borrador, currency, referenceDate),
+        meta,
+      ),
+    );
+  }
+
+  /** Guarda la nomina que el usuario acaba de confirmar. */
+  private async confirmarNomina(
+    pendiente: PendingPayroll,
+    intent: MessageIntent,
+    request: WhatsAppMessageRequest,
+    currency: string,
+    referenceDate: string,
+    meta: WhatsAppMessageResult['meta'],
+  ): Promise<WhatsAppMessageResult> {
+    this.state.olvidar(request.businessId);
+
+    if (intent.confirmed !== true) {
+      return this.plainResult(
+        intent,
+        'Listo, no registré ese pago. Si quieres lo hacemos de nuevo 😊',
+        meta,
+      );
+    }
+
+    const pago: PayrollPayment = {
+      id: randomUUID(),
+      businessId: request.businessId,
+      workerName: pendiente.draft.workerName ?? '',
+      percentage: pendiente.draft.percentage ?? 0,
+      amount: pendiente.draft.amount ?? 0,
+      date: pendiente.draft.date ?? referenceDate,
+      currency,
+    };
+
+    if (request.persist) {
+      await this.financeData.savePayroll(pago);
+    }
+
+    return this.plainResult(
+      intent,
+      renderPayrollRegistered(pago, currency),
+      meta,
+    );
+  }
+
+  // ------------------------------------------------- suministros a credito
+
+  /**
+   * Marca un suministro como pendiente de pago al proveedor.
+   *
+   * Son siete datos y por WhatsApp nunca llegan juntos: el mensaje tipico es
+   * "la harina de Molinos quedo a deber" y ahi acaba la informacion. Se piden
+   * de a uno, en el orden en que una persona los piensa —a quien, que, cuanto,
+   * para cuando, como— y el borrador se conserva entre mensajes.
+   *
+   * Antes de guardar se le ensena el plan de cuotas ya calculado. Es el unico
+   * momento en que puede ver lo que de verdad va a pagar: el interes mensual
+   * sobre saldo no se adivina de cabeza, y descubrir en la tercera cuota que
+   * el total era otro es exactamente lo que hay que evitar.
+   */
+  private handleSupplyDebt(
+    intent: MessageIntent,
+    request: WhatsAppMessageRequest,
+    currency: string,
+    meta: WhatsAppMessageResult['meta'],
+  ): Promise<WhatsAppMessageResult> {
+    const abierta = this.state.deudaProveedorPendiente(request.businessId);
+    const borrador = mezclarDeuda(abierta?.draft, intent.supplyDebt);
+
+    const falta = primerDatoDeDeudaQueFalta(borrador);
+
+    if (falta) {
+      this.state.recordarDeudaProveedor(request.businessId, {
+        draft: borrador,
+        stage: 'datos',
+      });
+
+      return Promise.resolve(
+        this.plainResult(intent, preguntaDeDeuda(falta, borrador), meta),
+      );
+    }
+
+    this.state.recordarDeudaProveedor(request.businessId, {
+      draft: borrador,
+      stage: 'confirmacion',
+    });
+
+    return Promise.resolve(
+      this.plainResult(
+        intent,
+        renderSupplyDebtSummary(borrador, currency),
+        meta,
+      ),
+    );
+  }
+
+  /** Guarda la deuda con proveedor que el usuario acaba de confirmar. */
+  private async confirmarDeudaProveedor(
+    pendiente: PendingSupplyDebt,
+    intent: MessageIntent,
+    request: WhatsAppMessageRequest,
+    currency: string,
+    meta: WhatsAppMessageResult['meta'],
+  ): Promise<WhatsAppMessageResult> {
+    this.state.olvidar(request.businessId);
+
+    if (intent.confirmed !== true) {
+      return this.plainResult(
+        intent,
+        'Listo, no registré esa deuda. Si quieres lo hacemos de nuevo 😊',
+        meta,
+      );
+    }
+
+    const deuda = aDeudaDeProveedor(pendiente.draft, request.businessId);
+
+    if (request.persist) {
+      await this.financeData.saveSupplyDebt(deuda);
+    }
+
+    return this.plainResult(
+      intent,
+      renderSupplyDebtRegistered(deuda, currency),
+      meta,
+    );
+  }
+
+  // ----------------------------------------------------------- catalogo
+
+  /**
+   * Da de alta un producto del catalogo.
+   *
+   * Tres datos obligatorios —nombre, a cuanto lo vende y a cuanto lo compra—
+   * que se piden de a uno, igual que en el resto de altas por conversacion. El
+   * precio de compra no se salta: sin el no hay margen, y el margen es lo
+   * unico que el dueno le va a preguntar despues a este catalogo.
+   *
+   * Categoria y stock son opcionales a proposito. Se completan desde el panel
+   * cuando haga falta, y pedirlos aqui alargaria la conversacion para datos
+   * que no cambian lo que el producto hace.
+   */
+  private handleProduct(
+    intent: MessageIntent,
+    request: WhatsAppMessageRequest,
+    currency: string,
+    meta: WhatsAppMessageResult['meta'],
+  ): Promise<WhatsAppMessageResult> {
+    const abierta = this.state.productoPendiente(request.businessId);
+    const borrador = mezclarProducto(abierta?.draft, intent.product);
+
+    const falta = primerDatoDeProductoQueFalta(borrador);
+
+    if (falta) {
+      this.state.recordarProducto(request.businessId, {
+        draft: borrador,
+        stage: 'datos',
+      });
+
+      return Promise.resolve(
+        this.plainResult(intent, preguntaDeProducto(falta, borrador), meta),
+      );
+    }
+
+    this.state.recordarProducto(request.businessId, {
+      draft: borrador,
+      stage: 'confirmacion',
+    });
+
+    return Promise.resolve(
+      this.plainResult(intent, renderProductSummary(borrador, currency), meta),
+    );
+  }
+
+  /** Guarda el producto que el usuario acaba de confirmar. */
+  private async confirmarProducto(
+    pendiente: PendingProduct,
+    intent: MessageIntent,
+    request: WhatsAppMessageRequest,
+    currency: string,
+    meta: WhatsAppMessageResult['meta'],
+  ): Promise<WhatsAppMessageResult> {
+    this.state.olvidar(request.businessId);
+
+    if (intent.confirmed !== true) {
+      return this.plainResult(
+        intent,
+        'Listo, no lo agregué al catálogo. Si quieres lo hacemos de nuevo 😊',
+        meta,
+      );
+    }
+
+    const producto = aProductoDelCatalogo(pendiente.draft, request.businessId);
+
+    // Sin persistencia no hay a quien preguntarle si ya existe: se responde
+    // como si hubiera entrado, que es lo que espera quien esta probando.
+    if (!request.persist) {
+      return this.plainResult(
+        intent,
+        renderProductRegistered(producto, currency),
+        meta,
+      );
+    }
+
+    const resultado = await this.financeData.saveProduct(producto);
+
+    return this.plainResult(
+      intent,
+      resultado.created
+        ? renderProductRegistered(producto, currency)
+        : renderProductDuplicado(producto),
+      meta,
+    );
   }
 
   // -------------------------------------------------------------- resultados
@@ -1494,6 +1885,9 @@ export class WhatsAppMessageService {
     const conceptoEfectivo =
       movements.length === 1 ? (movements[0].concept ?? concept) : concept;
 
+    const queryKind =
+      type === 'query' ? normalizeQueryKind(output?.queryKind, concept) : null;
+
     return {
       type,
       movements,
@@ -1502,6 +1896,9 @@ export class WhatsAppMessageService {
       profitShares: normalizeProfitShares(output?.profitShares),
       correction: normalizeCorrection(output?.correction),
       payment,
+      payroll: normalizePayroll(output?.payroll),
+      supplyDebt: normalizeSupplyDebt(output?.supplyDebt),
+      product: normalizeProduct(output?.product),
       confirmed: normalizeConfirmed(output?.confirmed),
       confirmedCount: normalizePosition(output?.confirmedCount),
       amount,
@@ -1510,14 +1907,19 @@ export class WhatsAppMessageService {
       responseText:
         cleanText(output?.responseText) ??
         'Recibí tu mensaje, pero no logré interpretarlo. ¿Me lo repites?',
-      queryKind:
-        type === 'query'
-          ? normalizeQueryKind(output?.queryKind, concept)
-          : null,
+      queryKind,
+      // En una correccion o una busqueda el periodo es opcional: acota donde
+      // buscar ("el transporte de la semana pasada") y, si no viene, se busca
+      // en la ventana amplia de siempre. Por eso aqui no se le pone "month"
+      // por defecto, que convertiria "¿que dia compre jabones?" en "este mes".
+      // En la correccion es tambien lo que dice que borrar con "borra todo lo
+      // de esta semana"; antes se descartaba y ese borrado caia en "hoy".
       queryPeriod:
-        type === 'query' || type === 'profit_share'
-          ? normalizePeriod(output?.queryPeriod)
-          : null,
+        type === 'correction' || queryKind === 'search'
+          ? periodoValido(output?.queryPeriod)
+          : type === 'query' || type === 'profit_share'
+            ? normalizePeriod(output?.queryPeriod)
+            : null,
       confidence: normalizeConfidence(output?.confidence, {
         type,
         amount,
@@ -1565,6 +1967,7 @@ export class WhatsAppMessageService {
       paymentMethod: movement.paymentMethod,
       isCredit: movement.isCredit,
       customerName: movement.customerName,
+      dueDate: movement.dueDate,
       productName: movement.productName,
       quantity: movement.quantity,
       supplierName: movement.supplierName,
@@ -1588,12 +1991,13 @@ export class WhatsAppMessageService {
     businessId: string,
     termino: string,
     diaInicioPeriodo: number,
+    periodo: QueryPeriod | null,
   ): Promise<Transaction[]> {
-    const { from, to } = periodRange('month', new Date(), diaInicioPeriodo);
+    const { from, to } = rangoDeBusqueda(periodo, new Date(), diaInicioPeriodo);
 
     const rows = await this.financeData.listTransactions({
       businessId,
-      from: sumarDias(from, -SEARCH_WINDOW_DAYS),
+      from,
       to,
       limit: 1_000,
     });
@@ -1601,9 +2005,12 @@ export class WhatsAppMessageService {
     const buscado = normalizeText(termino);
     if (!buscado) return [];
 
-    return rows
-      .filter((row) => normalizeText(row.description).includes(buscado))
-      .slice(0, SEARCH_MAX_RESULTS);
+    // Se devuelven TODAS las que coinciden y el renderizador recorta la
+    // lista: "¿cuanto gaste en transporte?" pide el total, y sumar solo las
+    // que caben en el mensaje daba una cifra menor a la real.
+    return rows.filter((row) =>
+      normalizeText(row.description).includes(buscado),
+    );
   }
 
   /**
@@ -1721,6 +2128,9 @@ const INTENT_TYPES: MessageIntentType[] = [
   'investment',
   'breakdown',
   'profit_share',
+  'payroll',
+  'supply_debt',
+  'product',
   'query',
   'correction',
   'unclear',
@@ -1796,6 +2206,38 @@ function normalizeMovementDate(value: unknown): string | null {
 
 const DIA_MS = 24 * 60 * 60 * 1000;
 
+/** Mas alla de esto no es un fiado, es otra cosa: se descarta y se repregunta. */
+const MAX_DIAS_DE_PLAZO = 366;
+
+/**
+ * Fecha maxima de pago de un fiado.
+ *
+ * Es el espejo de `normalizeMovementDate`: aquella rechaza el futuro porque
+ * nadie registra lo que no ha pasado; esta rechaza el pasado porque un plazo
+ * que ya vencio no es un plazo. Devolver null no pierde nada: el servicio lo
+ * lee como "no la dijo" y se la vuelve a preguntar, que es mejor que guardar
+ * una fecha que el modelo resolvio mal.
+ */
+function normalizeDueDate(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+
+  const texto = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(texto)) return null;
+
+  const fecha = new Date(`${texto}T12:00:00.000Z`);
+  if (Number.isNaN(fecha.getTime())) return null;
+  // "2026-11-31" pasa el regex pero se desborda a diciembre.
+  if (fecha.toISOString().slice(0, 10) !== texto) return null;
+
+  // Se compara contra el dia colombiano, no contra el del contenedor: a las
+  // 8 p.m. en Colombia ya es manana en UTC, y "me paga manana" se habria
+  // leido como una fecha de hoy.
+  if (texto <= todayIso()) return null;
+  if (texto > sumarDias(todayIso(), MAX_DIAS_DE_PLAZO)) return null;
+
+  return texto;
+}
+
 function normalizeMovements(value: unknown): MovementDraft[] {
   if (!Array.isArray(value)) return [];
 
@@ -1819,12 +2261,562 @@ function normalizeMovements(value: unknown): MovementDraft[] {
         paymentMethod: normalizePaymentMethod(row.paymentMethod),
         isCredit: row.isCredit === true,
         customerName: cleanText(row.customerName),
+        dueDate: normalizeDueDate(row.dueDate),
         quantity: normalizeQuantity(row.quantity),
         date: normalizeMovementDate(row.date),
       };
     })
     .filter((movement): movement is MovementDraft => movement !== null)
     .slice(0, MAX_MOVEMENTS_PER_MESSAGE);
+}
+
+// --------------------------------------------------------------------- nomina
+
+/** Los tres datos de una nomina, en el orden en que se preguntan. */
+type DatoDeNomina = 'workerName' | 'percentage' | 'amount';
+
+/**
+ * Funde lo que ya se sabia con lo que acaba de decir el usuario.
+ *
+ * Lo nuevo manda, pero solo cuando viene: si el modelo devuelve el porcentaje
+ * en null porque este turno el usuario solo dijo el monto, el porcentaje de
+ * antes se conserva. Sin esto, cada respuesta borraria la anterior y la
+ * conversacion no avanzaria nunca.
+ */
+function mezclarNomina(
+  previo: PayrollDraft | undefined,
+  nuevo: PayrollDraft | null,
+): PayrollDraft {
+  return {
+    workerName: nuevo?.workerName ?? previo?.workerName ?? null,
+    percentage: nuevo?.percentage ?? previo?.percentage ?? null,
+    amount: nuevo?.amount ?? previo?.amount ?? null,
+    date: nuevo?.date ?? previo?.date ?? null,
+  };
+}
+
+/** El primer dato que falta, o null si ya esta completa. */
+function primerDatoQueFalta(draft: PayrollDraft): DatoDeNomina | null {
+  if (!draft.workerName) return 'workerName';
+  if (draft.percentage === null) return 'percentage';
+  if (draft.amount === null) return 'amount';
+  return null;
+}
+
+/**
+ * La pregunta por el dato que falta.
+ *
+ * Nombra al trabajador en cuanto se sabe quien es: "¿Qué porcentaje?" a secas,
+ * tres mensajes despues de haberlo dicho, obliga al usuario a acordarse de
+ * que estaba haciendo.
+ */
+function preguntaDeNomina(falta: DatoDeNomina, draft: PayrollDraft): string {
+  if (falta === 'workerName') {
+    return '¿A quién le vas a pagar? Dime el nombre del trabajador.';
+  }
+
+  const quien = draft.workerName ?? 'esta persona';
+
+  if (falta === 'percentage') {
+    return `¿Qué porcentaje le corresponde a ${quien}? Dímelo en números, por ejemplo 40%.`;
+  }
+
+  return `¿Cuánto le vas a pagar a ${quien} en total?`;
+}
+
+/**
+ * El resumen que se le ensena antes de guardar.
+ *
+ * Lleva los tres datos juntos aunque los haya dicho de a uno: es la unica
+ * oportunidad de ver si lo que entendio Luka es lo que el acordo.
+ */
+export function renderPayrollSummary(
+  draft: PayrollDraft,
+  currency: string,
+  referenceDate: string,
+): string {
+  const fecha = FECHA_CORTA.format(
+    new Date(`${draft.date ?? referenceDate}T12:00:00.000Z`),
+  );
+
+  return [
+    'Voy a registrar este pago de nómina:',
+    `• Trabajador: ${draft.workerName}`,
+    `• Porcentaje: ${formatPercentage(draft.percentage ?? 0)}`,
+    `• Monto: ${formatMoney(draft.amount ?? 0, currency)}`,
+    `• Fecha: ${fecha}`,
+    '',
+    '¿Lo registro así? Responde sí o no.',
+  ].join('\n');
+}
+
+/** Confirmacion de la nomina ya guardada. */
+export function renderPayrollRegistered(
+  pago: PayrollPayment,
+  currency: string,
+): string {
+  const fecha = FECHA_CORTA.format(new Date(`${pago.date}T12:00:00.000Z`));
+
+  return [
+    `✅ Registré el pago de nómina de ${pago.workerName}:`,
+    `${formatMoney(pago.amount, currency)} (${formatPercentage(pago.percentage)}) · ${fecha}`,
+  ].join('\n');
+}
+
+/** "40%" y "12,5%": sin decimales cuando son redondos, que es lo normal. */
+function formatPercentage(valor: number): string {
+  return `${Number.isInteger(valor) ? valor : valor.toFixed(2).replace('.', ',')}%`;
+}
+
+/**
+ * El borrador de nomina tal como lo devolvio el modelo.
+ *
+ * Los tres datos pueden venir sueltos o de a uno: el usuario dice "pagale a
+ * Carlos" y el porcentaje llega dos mensajes despues. Lo que no se entienda
+ * va en null y el servicio lo pregunta.
+ */
+function normalizePayroll(value: unknown): PayrollDraft | null {
+  if (!value || typeof value !== 'object') return null;
+
+  const crudo = value as Record<string, unknown>;
+
+  return {
+    workerName: cleanText(crudo.workerName),
+    percentage: normalizePercentage(crudo.percentage),
+    amount: normalizeAmount(crudo.amount),
+    date: normalizeMovementDate(crudo.date),
+  };
+}
+
+/**
+ * Un porcentaje de 0 a 100.
+ *
+ * El 0 se descarta junto con lo que no es numero: "le pago el 0%" no es un
+ * pago de nomina, es un error de dictado, y preguntar de nuevo cuesta menos
+ * que guardar un porcentaje que nadie quiso decir.
+ */
+function normalizePercentage(value: unknown): number | null {
+  const numero = Number(value);
+  if (!Number.isFinite(numero) || numero <= 0 || numero > 100) return null;
+  return round2(numero);
+}
+
+// ------------------------------------------------- suministros a credito
+
+/** Los datos de una deuda, en el orden en que se preguntan. */
+type DatoDeDeuda =
+  | 'supplierName'
+  | 'supply'
+  | 'amount'
+  | 'dueDate'
+  | 'mode'
+  | 'installments'
+  | 'interestRate';
+
+/**
+ * Funde lo que ya se sabia con lo que acaba de decir el usuario.
+ *
+ * Lo nuevo manda, pero solo cuando viene: el modelo devuelve en null lo que
+ * este mensaje no menciona, y eso no puede borrar lo de antes.
+ */
+function mezclarDeuda(
+  previo: SupplyDebtDraft | undefined,
+  nuevo: SupplyDebtDraft | null,
+): SupplyDebtDraft {
+  return {
+    supplierName: nuevo?.supplierName ?? previo?.supplierName ?? null,
+    supply: nuevo?.supply ?? previo?.supply ?? null,
+    amount: nuevo?.amount ?? previo?.amount ?? null,
+    dueDate: nuevo?.dueDate ?? previo?.dueDate ?? null,
+    mode: nuevo?.mode ?? previo?.mode ?? null,
+    installments: nuevo?.installments ?? previo?.installments ?? null,
+    interestRate: nuevo?.interestRate ?? previo?.interestRate ?? null,
+  };
+}
+
+/** El primer dato que falta, o null si la deuda ya se puede guardar. */
+function primerDatoDeDeudaQueFalta(
+  draft: SupplyDebtDraft,
+): DatoDeDeuda | null {
+  if (!draft.supplierName) return 'supplierName';
+  if (!draft.supply) return 'supply';
+  if (draft.amount === null) return 'amount';
+  if (!draft.dueDate) return 'dueDate';
+  if (!draft.mode) return 'mode';
+  // Las cuotas solo se preguntan si va a pagar en cuotas; en el pago unico la
+  // pregunta no tiene sentido y seria un turno regalado.
+  if (draft.mode === 'cuotas' && draft.installments === null) {
+    return 'installments';
+  }
+  if (draft.interestRate === null) return 'interestRate';
+  return null;
+}
+
+/** La pregunta por el dato que falta, nombrando lo que ya se sabe. */
+function preguntaDeDeuda(falta: DatoDeDeuda, draft: SupplyDebtDraft): string {
+  const quien = draft.supplierName ?? 'ese proveedor';
+
+  switch (falta) {
+    case 'supplierName':
+      return '¿A qué proveedor le quedaste debiendo?';
+    case 'supply':
+      return `¿Qué le compraste a ${quien}?`;
+    case 'amount':
+      return `¿Cuánto le quedaste debiendo a ${quien} en total?`;
+    case 'dueDate':
+      return `¿Para cuándo tienes que pagarle? Puedes decirme "el 30 de noviembre", "en 15 días" o "fin de mes".`;
+    case 'mode':
+      return '¿Lo vas a pagar de una sola vez o en cuotas?';
+    case 'installments':
+      return '¿En cuántas cuotas?';
+    default:
+      return '¿Te cobra interés? Dime el porcentaje mensual, o "sin interés" si no te cobra.';
+  }
+}
+
+/** El borrador, ya completo, como deuda lista para guardar. */
+function aDeudaDeProveedor(
+  draft: SupplyDebtDraft,
+  businessId: string,
+): SupplyDebt {
+  const mode = draft.mode ?? 'unico';
+
+  return {
+    businessId,
+    supplierName: draft.supplierName ?? '',
+    supply: draft.supply ?? '',
+    amount: draft.amount ?? 0,
+    dueDate: draft.dueDate ?? '',
+    mode,
+    installments: mode === 'cuotas' ? (draft.installments ?? 1) : 1,
+    interestRate: draft.interestRate ?? 0,
+  };
+}
+
+/**
+ * El resumen con el plan de cuotas, antes de guardar nada.
+ *
+ * El plan lo calcula `planDeDeudaProveedor`, el mismo que usa el panel: si
+ * aqui se recalculara aparte, WhatsApp y la pantalla acabarian diciendo
+ * cifras distintas de la misma deuda.
+ */
+export function renderSupplyDebtSummary(
+  draft: SupplyDebtDraft,
+  currency: string,
+): string {
+  const deuda = aDeudaDeProveedor(draft, '');
+  const plan = planDeLaDeuda(deuda);
+
+  const lineas = [
+    'Voy a registrar este suministro como pendiente de pago:',
+    `• Proveedor: ${deuda.supplierName}`,
+    `• Suministro: ${deuda.supply}`,
+    `• Monto: ${formatMoney(deuda.amount, currency)}`,
+    `• Fecha límite: ${formatearFechaCorta(deuda.dueDate)}`,
+    deuda.mode === 'cuotas'
+      ? `• Modalidad: ${deuda.installments} cuotas mensuales`
+      : '• Modalidad: un solo pago',
+    deuda.interestRate > 0
+      ? `• Interés: ${formatPercentage(deuda.interestRate)} mensual`
+      : '• Interés: sin interés',
+  ];
+
+  if (deuda.interestRate > 0) {
+    lineas.push(
+      `• Total con interés: ${formatMoney(plan.total, currency)} (${formatMoney(plan.interesTotal, currency)} de interés)`,
+    );
+  }
+
+  if (deuda.mode === 'cuotas') {
+    lineas.push('', 'Plan de cuotas:');
+    for (const cuota of plan.cuotas) {
+      lineas.push(
+        `${cuota.numero}) ${formatearFecha(cuota.fechaVencimiento)} · ${formatMoney(cuota.monto, currency)}`,
+      );
+    }
+  }
+
+  lineas.push('', '¿Lo registro así? Responde sí o no.');
+  return lineas.join('\n');
+}
+
+/** Confirmacion de la deuda ya guardada. */
+export function renderSupplyDebtRegistered(
+  deuda: SupplyDebt,
+  currency: string,
+): string {
+  const plan = planDeLaDeuda(deuda);
+  const cierre =
+    deuda.mode === 'cuotas'
+      ? `${deuda.installments} cuotas de ${formatMoney(plan.cuotas[0]?.monto ?? 0, currency)}`
+      : `un pago de ${formatMoney(plan.total, currency)}`;
+
+  return [
+    `✅ Anoté que le debes ${formatMoney(deuda.amount, currency)} a ${deuda.supplierName} por ${deuda.supply}.`,
+    `${cierre} · última fecha ${formatearFechaCorta(deuda.dueDate)}`,
+  ].join('\n');
+}
+
+/** El plan de pagos, calculado por el mismo motor que usa el panel. */
+function planDeLaDeuda(deuda: SupplyDebt): PlanDeDeuda {
+  return planDeDeudaProveedor({
+    montoTotal: deuda.amount,
+    fechaLimite: new Date(`${deuda.dueDate}T12:00:00.000Z`),
+    modalidad: deuda.mode === 'cuotas' ? 'CUOTAS' : 'UNICO',
+    numeroCuotas: deuda.mode === 'cuotas' ? deuda.installments : null,
+    aplicaInteres: deuda.interestRate > 0,
+    porcentajeInteres: deuda.interestRate,
+  });
+}
+
+function formatearFechaCorta(fecha: string): string {
+  return FECHA_CORTA.format(new Date(`${fecha}T12:00:00.000Z`));
+}
+
+function formatearFecha(fecha: Date): string {
+  return FECHA_CORTA.format(fecha);
+}
+
+/**
+ * El borrador de deuda tal como lo devolvio el modelo.
+ *
+ * Todo puede venir en null: el usuario va contestando de a uno y el servicio
+ * pregunta lo que falte.
+ */
+function normalizeSupplyDebt(value: unknown): SupplyDebtDraft | null {
+  if (!value || typeof value !== 'object') return null;
+
+  const crudo = value as Record<string, unknown>;
+  const mode = crudo.mode;
+
+  return {
+    supplierName: cleanText(crudo.supplierName),
+    supply: cleanText(crudo.supply),
+    amount: normalizeAmount(crudo.amount),
+    dueDate: normalizeSupplyDueDate(crudo.dueDate),
+    mode: mode === 'cuotas' || mode === 'unico' ? mode : null,
+    installments: normalizeInstallments(crudo.installments),
+    interestRate: normalizeInterestRate(crudo.interestRate),
+  };
+}
+
+/**
+ * Fecha limite de pago al proveedor: tiene que ser futura.
+ *
+ * Es el espejo de `normalizeMovementDate`, que rechaza el futuro porque nadie
+ * registra lo que no ha pasado. Aqui se rechaza el pasado: una fecha limite
+ * vencida no es un plazo, y el plan de cuotas que saldria de ella nace mal.
+ *
+ * Separada de `normalizeDueDate`, la de los fiados, porque el tope no es el
+ * mismo: un fiado a mas de un año es un error de dictado, pero una deuda con
+ * proveedor en cuotas puede pasar de ahi con toda normalidad.
+ */
+function normalizeSupplyDueDate(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+
+  const texto = value.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(texto)) return null;
+
+  const fecha = new Date(`${texto}T12:00:00.000Z`);
+  if (Number.isNaN(fecha.getTime())) return null;
+  // "2026-11-31" pasa el regex pero se desborda a diciembre.
+  if (fecha.toISOString().slice(0, 10) !== texto) return null;
+
+  // Se compara contra el dia colombiano, no el del contenedor.
+  if (texto <= todayIso()) return null;
+  if (texto > sumarDias(todayIso(), MAX_DIAS_DE_PLAZO_PROVEEDOR)) return null;
+
+  return texto;
+}
+
+/** Mas de tres años no es un plazo de proveedor, es un error de dictado. */
+const MAX_DIAS_DE_PLAZO_PROVEEDOR = 1_096;
+
+/** Entre 2 y 60 cuotas. Una sola cuota es un pago unico, no un plan. */
+function normalizeInstallments(value: unknown): number | null {
+  const numero = Number(value);
+  if (!Number.isFinite(numero) || numero < 2 || numero > 60) return null;
+  return Math.round(numero);
+}
+
+/**
+ * Interes mensual en porcentaje.
+ *
+ * El 0 SI es valido y significa "no me cobra interes": es la unica forma de
+ * que quien compra sin recargo salga de la pregunta. Lo que se descarta es lo
+ * que no es numero o no cabe en un interes mensual.
+ */
+function normalizeInterestRate(value: unknown): number | null {
+  const numero = Number(value);
+  if (!Number.isFinite(numero) || numero < 0 || numero > 100) return null;
+  return round2(numero);
+}
+
+
+// ----------------------------------------------------------------- catalogo
+
+/** Lo obligatorio de un producto, en el orden en que se pregunta. */
+type DatoDeProducto = 'name' | 'salePrice' | 'costPrice';
+
+/** Lo que se guarda cuando el usuario no dijo categoria. */
+const CATEGORIA_SIN_CLASIFICAR = 'Sin categoría';
+
+/**
+ * Funde lo que ya se sabia con lo que acaba de decir el usuario.
+ *
+ * Lo nuevo manda, pero solo cuando viene: el modelo devuelve en null lo que
+ * este mensaje no menciona, y eso no puede borrar lo de antes.
+ */
+function mezclarProducto(
+  previo: ProductDraft | undefined,
+  nuevo: ProductDraft | null,
+): ProductDraft {
+  return {
+    name: nuevo?.name ?? previo?.name ?? null,
+    salePrice: nuevo?.salePrice ?? previo?.salePrice ?? null,
+    costPrice: nuevo?.costPrice ?? previo?.costPrice ?? null,
+    category: nuevo?.category ?? previo?.category ?? null,
+    stock: nuevo?.stock ?? previo?.stock ?? null,
+  };
+}
+
+/** El primer dato obligatorio que falta, o null si ya se puede guardar. */
+function primerDatoDeProductoQueFalta(
+  draft: ProductDraft,
+): DatoDeProducto | null {
+  if (!draft.name) return 'name';
+  if (draft.salePrice === null) return 'salePrice';
+  if (draft.costPrice === null) return 'costPrice';
+  return null;
+}
+
+/** La pregunta por el dato que falta, nombrando el producto si ya se sabe. */
+function preguntaDeProducto(
+  falta: DatoDeProducto,
+  draft: ProductDraft,
+): string {
+  if (falta === 'name') {
+    return '¿Qué producto quieres agregar? Dime el nombre.';
+  }
+
+  const que = draft.name ?? 'ese producto';
+
+  if (falta === 'salePrice') {
+    return `¿En cuánto vendes ${que}?`;
+  }
+
+  return `¿En cuánto te cuesta ${que}? Lo necesito para saber cuánto te deja.`;
+}
+
+/** El borrador completo, como producto listo para el catalogo. */
+function aProductoDelCatalogo(
+  draft: ProductDraft,
+  businessId: string,
+): ProductRegistration {
+  return {
+    businessId,
+    name: draft.name ?? '',
+    salePrice: draft.salePrice ?? 0,
+    costPrice: draft.costPrice ?? 0,
+    category: draft.category ?? CATEGORIA_SIN_CLASIFICAR,
+    stock: draft.stock ?? 0,
+  };
+}
+
+/**
+ * El resumen que se le ensena antes de guardar.
+ *
+ * Lleva el margen calculado: es el dato por el que se registra un producto, y
+ * verlo aqui es lo que permite cazar un precio mal dictado antes de que entre
+ * al catalogo y contamine los reportes.
+ */
+export function renderProductSummary(
+  draft: ProductDraft,
+  currency: string,
+): string {
+  const producto = aProductoDelCatalogo(draft, '');
+  const margen = round2(producto.salePrice - producto.costPrice);
+
+  const lineas = [
+    'Voy a agregar este producto a tu catálogo:',
+    `• Producto: ${producto.name}`,
+    `• Lo vendes en: ${formatMoney(producto.salePrice, currency)}`,
+    `• Te cuesta: ${formatMoney(producto.costPrice, currency)}`,
+    `• Te deja: ${formatMoney(margen, currency)} por unidad`,
+    `• Categoría: ${producto.category}`,
+    `• Stock inicial: ${producto.stock}`,
+  ];
+
+  if (margen <= 0) {
+    // No se bloquea —hay quien vende a perdida a proposito— pero no puede
+    // pasar inadvertido: lo normal es que sea un precio mal dictado.
+    lineas.push(
+      '',
+      '⚠️ Ojo: con esos precios no ganas nada. ¿Están bien?',
+    );
+  }
+
+  lineas.push('', '¿Lo agrego así? Responde sí o no.');
+  return lineas.join('\n');
+}
+
+/** Confirmacion del producto ya guardado. */
+export function renderProductRegistered(
+  producto: ProductRegistration,
+  currency: string,
+): string {
+  const margen = round2(producto.salePrice - producto.costPrice);
+
+  return [
+    `✅ Agregué ${producto.name} a tu catálogo.`,
+    `Lo vendes en ${formatMoney(producto.salePrice, currency)} y te deja ${formatMoney(margen, currency)} por unidad.`,
+  ].join('\n');
+}
+
+/**
+ * Lo que se responde cuando el producto ya estaba.
+ *
+ * No se crea un segundo: dos productos con el mismo nombre en la misma sede
+ * dejan la venta sin saber a cual descontarle el stock. Se dice que ya existe
+ * y donde cambiarlo, que es lo accionable.
+ */
+export function renderProductDuplicado(producto: ProductRegistration): string {
+  return [
+    `Ya tienes un producto llamado "${producto.name}" en tu catálogo, así que no lo agregué de nuevo.`,
+    'Si querías cambiarle el precio, puedes hacerlo desde el panel.',
+  ].join('\n');
+}
+
+/**
+ * El borrador de producto tal como lo devolvio el modelo.
+ *
+ * Todo puede venir en null: el usuario va contestando de a uno y el servicio
+ * pregunta lo que falte.
+ */
+function normalizeProduct(value: unknown): ProductDraft | null {
+  if (!value || typeof value !== 'object') return null;
+
+  const crudo = value as Record<string, unknown>;
+
+  return {
+    name: cleanText(crudo.name),
+    salePrice: normalizeAmount(crudo.salePrice),
+    costPrice: normalizeAmount(crudo.costPrice),
+    category: cleanText(crudo.category),
+    stock: normalizeStock(crudo.stock),
+  };
+}
+
+/**
+ * Unidades iniciales: un entero de 0 en adelante.
+ *
+ * El 0 es valido y distinto de null: "no tengo ninguno todavia" es una
+ * respuesta, y `normalizeQuantity` no sirve aqui porque descarta el 0.
+ */
+function normalizeStock(value: unknown): number | null {
+  const numero = Number(value);
+  if (!Number.isFinite(numero) || numero < 0) return null;
+  return Math.round(numero);
 }
 
 /** Unidades: un entero positivo, o nada. */
@@ -1991,9 +2983,13 @@ function normalizePositions(value: unknown): number[] {
  * Cuando alguien reporta que Luka "no encontro" algo que si existe, esto es lo
  * unico que dice si el problema fue el identificador, la fecha o el texto.
  */
-function describirBusqueda(correccion: CorrectionRequest): string {
+function describirBusqueda(
+  correccion: CorrectionRequest,
+  periodo: QueryPeriod | null = null,
+): string {
   const partes = [
     correccion.reference ? `texto="${correccion.reference}"` : null,
+    periodo ? `periodo=${periodo}` : null,
     correccion.referenceAmount !== null
       ? `monto=${correccion.referenceAmount}`
       : null,
@@ -2214,9 +3210,18 @@ function normalizeConfidence(
 }
 
 function normalizePeriod(value: unknown): QueryPeriod {
-  return value === 'day' || value === 'week' || value === 'month'
-    ? value
-    : 'month';
+  return periodoValido(value) ?? 'month';
+}
+
+/** El periodo si es uno que se sabe calcular; null si no vino o no sirve. */
+function periodoValido(value: unknown): QueryPeriod | null {
+  if (typeof value !== 'string') return null;
+  if (Object.hasOwn(PERIOD_LABELS, value)) return value as QueryPeriod;
+
+  const dias = diasDelPeriodo(value as QueryPeriod);
+  return dias !== null && dias >= 1 && dias <= MAX_DIAS_ATRAS
+    ? `last_${dias}_days`
+    : null;
 }
 
 function cleanText(value: unknown): string | null {
@@ -2280,7 +3285,13 @@ function todayIso(): string {
   return fechaColombiana(new Date());
 }
 
-/** Rangos de fecha para las consultas: hoy, semana en curso, mes en curso. */
+/**
+ * Rango de fechas real de un periodo, en dias colombianos, ambos inclusive.
+ *
+ * Se arma siempre restando dias a la fecha de hoy, nunca fijando el mes o el
+ * año: asi "la semana pasada" del 4 de noviembre va del 26 de octubre al 1 de
+ * noviembre, y la del 3 de enero arranca en diciembre del año anterior.
+ */
 export function periodRange(
   period: QueryPeriod,
   now: Date = new Date(),
@@ -2288,26 +3299,82 @@ export function periodRange(
 ): { from: string; to: string } {
   // Todo se calcula sobre el dia colombiano, no sobre la hora del contenedor:
   // asi el periodo es el mismo corra donde corra el proceso.
-  const { fecha: to, diaDeLaSemana } = partesDelDia(now);
+  const { fecha: hoy, diaDeLaSemana } = partesDelDia(now);
+  // 0 = domingo. La semana laboral arranca el lunes.
+  const lunes = sumarDias(hoy, -(diaDeLaSemana === 0 ? 6 : diaDeLaSemana - 1));
 
-  if (period === 'day') return { from: to, to };
+  const dias = diasDelPeriodo(period);
+  if (dias !== null) return { from: sumarDias(hoy, -(dias - 1)), to: hoy };
 
-  if (period === 'week') {
-    // 0 = domingo. La semana laboral arranca el lunes.
-    const desdeElLunes = diaDeLaSemana === 0 ? 6 : diaDeLaSemana - 1;
-    return { from: sumarDias(to, -desdeElLunes), to };
+  switch (period) {
+    case 'day':
+      return { from: hoy, to: hoy };
+    case 'yesterday': {
+      const ayer = sumarDias(hoy, -1);
+      return { from: ayer, to: ayer };
+    }
+    case 'week':
+      return { from: lunes, to: hoy };
+    case 'last_week':
+      // Lunes a domingo completos de la semana anterior.
+      return { from: sumarDias(lunes, -7), to: sumarDias(lunes, -1) };
+    case 'last_month': {
+      // El periodo contable anterior completo: el que termina el dia antes de
+      // que arranque el actual. Con corte el 21 es del 21 al 20, no del 1 al 30.
+      const actual = periodoContableDe(hoy, diaInicioPeriodo);
+      const anterior = periodoContableDe(
+        sumarDias(actual.desde, -1),
+        diaInicioPeriodo,
+      );
+      return { from: anterior.desde, to: anterior.hasta };
+    }
+    default: {
+      // "Este mes" es el periodo contable del negocio, que no siempre arranca
+      // el 1.
+      const periodo = periodoContableDe(hoy, diaInicioPeriodo);
+      return { from: periodo.desde, to: hoy };
+    }
   }
-
-  // "Este mes" es el periodo contable del negocio, que no siempre arranca el 1.
-  const periodo = periodoContableDe(to, diaInicioPeriodo);
-  return { from: periodo.desde, to };
 }
 
-const PERIOD_LABELS: Record<QueryPeriod, string> = {
+/** Tope de "ultimos N dias": un año cubre cualquier pregunta razonable. */
+const MAX_DIAS_ATRAS = 366;
+
+/** N de "last_N_days", o null si el periodo no es de ese tipo. */
+function diasDelPeriodo(period: QueryPeriod): number | null {
+  const encontrado = /^last_(\d+)_days$/.exec(period);
+  return encontrado ? Number(encontrado[1]) : null;
+}
+
+type PeriodoConNombre = Exclude<QueryPeriod, `last_${number}_days`>;
+
+const PERIOD_LABELS: Record<PeriodoConNombre, string> = {
   day: 'hoy',
+  yesterday: 'ayer',
   week: 'esta semana',
+  last_week: 'la semana pasada',
   month: 'este mes',
+  last_month: 'el mes pasado',
 };
+
+/** Como se nombra el periodo en una frase: "tus movimientos de ayer". */
+function etiquetaPeriodo(period: QueryPeriod): string {
+  const dias = diasDelPeriodo(period);
+  return dias !== null
+    ? `en los últimos ${dias} días`
+    : PERIOD_LABELS[period as PeriodoConNombre];
+}
+
+/** El periodo como complemento del titulo: "Resumen del mes pasado". */
+function tituloPeriodo(period: QueryPeriod): string {
+  const dias = diasDelPeriodo(period);
+  if (dias !== null) return `de los últimos ${dias} días`;
+
+  const etiqueta = PERIOD_LABELS[period as PeriodoConNombre];
+  return etiqueta.startsWith('el ')
+    ? `del ${etiqueta.slice(3)}`
+    : `de ${etiqueta}`;
+}
 
 /**
  * Arma la respuesta de una consulta con cifras reales.
@@ -2319,11 +3386,11 @@ export function renderSummary(summary: PeriodSummary): string {
   const money = (value: number) => formatMoney(value, summary.currency);
 
   if (summary.transactionCount === 0) {
-    return `Todavía no tienes movimientos registrados ${PERIOD_LABELS[summary.period]}.`;
+    return `Todavía no tienes movimientos registrados ${etiquetaPeriodo(summary.period)}.`;
   }
 
   const lines = [
-    `📊 Resumen de ${PERIOD_LABELS[summary.period]}:`,
+    `📊 Resumen ${tituloPeriodo(summary.period)}:`,
     `Ingresos: ${money(summary.income)}`,
     `Gastos: ${money(summary.expense)}`,
   ];
@@ -2341,12 +3408,12 @@ export function renderSummary(summary: PeriodSummary): string {
     );
   }
 
-  const paymentLines = PAYMENT_METHODS
-    .filter((method) => (summary.byPaymentMethod?.[method] ?? 0) > 0)
-    .map(
-      (method) =>
-        `${PAYMENT_METHOD_LABELS[method]}: ${money(summary.byPaymentMethod?.[method] ?? 0)}`,
-    );
+  const paymentLines = PAYMENT_METHODS.filter(
+    (method) => (summary.byPaymentMethod?.[method] ?? 0) > 0,
+  ).map(
+    (method) =>
+      `${PAYMENT_METHOD_LABELS[method]}: ${money(summary.byPaymentMethod?.[method] ?? 0)}`,
+  );
 
   if (paymentLines.length > 0) {
     lines.push('Ingresos por forma de pago:', ...paymentLines);
@@ -2424,10 +3491,36 @@ const BREAKDOWN_WINDOW_DAYS = 2;
 const LIST_MAX_RESULTS = 20;
 
 /**
- * Cuanto se mira hacia atras para encontrar el movimiento a corregir.
- * Un mes cubre de sobra: nadie corrige por WhatsApp algo de hace un trimestre.
+ * Cuanto se mira hacia atras para encontrar el movimiento a corregir cuando
+ * el usuario no dice de cuando es. Con fecha o periodo se busca ahi, sea de
+ * hace una semana o de hace tres meses.
  */
 const CORRECTION_WINDOW_DAYS = 31;
+
+/**
+ * Donde buscar el movimiento a corregir.
+ *
+ * Lo mas concreto manda: una fecha exacta ("el del 28 de octubre") se busca
+ * en ese dia aunque quede fuera de la ventana; un periodo ("el de la semana
+ * pasada") en su rango; y sin ninguno de los dos, los ultimos 31 dias. Antes
+ * siempre era la ventana, asi que una fecha de hace mas de un mes nunca se
+ * encontraba.
+ */
+export function rangoParaCorregir(
+  correccion: CorrectionRequest,
+  periodo: QueryPeriod | null,
+  now: Date = new Date(),
+  diaInicioPeriodo: number = DIA_INICIO_POR_DEFECTO,
+): { from: string; to: string } {
+  if (correccion.referenceDate) {
+    return { from: correccion.referenceDate, to: correccion.referenceDate };
+  }
+
+  if (periodo) return periodRange(periodo, now, diaInicioPeriodo);
+
+  const hoy = fechaColombiana(now);
+  return { from: sumarDias(hoy, -CORRECTION_WINDOW_DAYS), to: hoy };
+}
 
 /** Mas candidatos que esto no se listan: la pregunta se vuelve ilegible. */
 /**
@@ -2451,6 +3544,24 @@ const QUOTED_WINDOW_DAYS = 400;
 const CORRECTION_MAX_CANDIDATES = 5;
 
 const SEARCH_WINDOW_DAYS = 120;
+
+/**
+ * Donde se busca por concepto.
+ *
+ * Con periodo ("¿cuanto gaste en transporte la semana pasada?"), en ese rango
+ * aunque cruce de mes. Sin el, la ventana amplia: quien pregunta "¿que dia
+ * compre jabones?" busca un hecho, no un periodo, y suele ser de hace semanas.
+ */
+export function rangoDeBusqueda(
+  periodo: QueryPeriod | null,
+  now: Date = new Date(),
+  diaInicioPeriodo: number = DIA_INICIO_POR_DEFECTO,
+): { from: string; to: string } {
+  if (periodo) return periodRange(periodo, now, diaInicioPeriodo);
+
+  const { from, to } = periodRange('month', now, diaInicioPeriodo);
+  return { from: sumarDias(from, -SEARCH_WINDOW_DAYS), to };
+}
 /** Mas de esto no se lee comodo en un WhatsApp. */
 const SEARCH_MAX_RESULTS = 8;
 
@@ -2531,26 +3642,40 @@ export function renderSearch(
   termino: string,
   encontrados: Transaction[],
   currency: string,
+  periodo: QueryPeriod | null = null,
 ): string {
+  const cuando = periodo ? etiquetaPeriodo(periodo) : 'en los últimos 4 meses';
+
   if (encontrados.length === 0) {
-    return `No encontré movimientos que mencionen "${termino}" en los últimos 4 meses. Si lo registraste con otro nombre, dime cuál y lo busco.`;
+    return `No encontré movimientos que mencionen "${termino}" ${cuando}. Si lo registraste con otro nombre, dime cuál y lo busco.`;
   }
 
+  // El total es de todas las que coinciden, no solo de las que se muestran.
   const total = encontrados.reduce((suma, row) => suma + row.amount, 0);
-  const lineas = encontrados.map((row) => {
+  const mostrados = encontrados.slice(0, SEARCH_MAX_RESULTS);
+  const lineas = mostrados.map((row) => {
     const signo = row.type === 'income' ? '+' : '-';
     const fecha = FECHA_CORTA.format(new Date(`${row.date}T12:00:00.000Z`));
     return `• ${fecha} · ${row.description} · ${signo}${formatMoney(row.amount, currency)}`;
   });
 
+  const enElPeriodo = periodo ? ` ${cuando}` : '';
   const encabezado =
     encontrados.length === 1
-      ? `🔎 Encontré 1 movimiento con "${termino}":`
-      : `🔎 Encontré ${encontrados.length} movimientos con "${termino}":`;
+      ? `🔎 Encontré 1 movimiento con "${termino}"${enElPeriodo}:`
+      : `🔎 Encontré ${encontrados.length} movimientos con "${termino}"${enElPeriodo}:`;
 
-  return [encabezado, ...lineas, `Total: ${formatMoney(total, currency)}`].join(
-    '\n',
-  );
+  const resto =
+    encontrados.length > mostrados.length
+      ? [`...y ${encontrados.length - mostrados.length} más.`]
+      : [];
+
+  return [
+    encabezado,
+    ...lineas,
+    ...resto,
+    `Total: ${formatMoney(total, currency)}`,
+  ].join('\n');
 }
 
 // ----------------------------------------------- respuestas de correcciones
@@ -2742,7 +3867,7 @@ export function renderDeleteConfirmation(
   );
 
   const encabezado = period
-    ? `⚠️ Voy a borrar TODOS tus movimientos ${PERIOD_LABELS[period]} (${objetivos.length}):`
+    ? `⚠️ Voy a borrar TODOS tus movimientos ${etiquetaPeriodo(period)} (${objetivos.length}):`
     : `⚠️ Voy a borrar estos ${objetivos.length} movimientos:`;
 
   const resto =
@@ -2820,12 +3945,17 @@ export function renderQuotedMessage(quoted: {
 export function renderCorrectionNotFound(
   correccion: CorrectionRequest,
   currency: string,
+  periodo: QueryPeriod | null = null,
 ): string {
   // Se nombran TODOS los criterios, no solo el primero: buscar por fecha Y por
   // texto a la vez y no encontrar nada se explicaba antes como si solo hubiera
   // fallado la fecha, y el usuario no entendia por que.
   const criterios = [
-    correccion.referenceDate ? `del ${correccion.referenceDate}` : null,
+    correccion.referenceDate
+      ? `del ${correccion.referenceDate}`
+      : periodo
+        ? etiquetaPeriodo(periodo)
+        : null,
     correccion.referenceAmount !== null
       ? `por ${formatMoney(correccion.referenceAmount, currency)}`
       : null,
@@ -2857,7 +3987,152 @@ export function renderPendingQuestion(
     return renderPendingRegistration(pendiente, currency);
   }
 
+  if (pendiente.kind === 'payroll') {
+    return renderPendingPayroll(pendiente, currency);
+  }
+
+  if (pendiente.kind === 'supply-debt') {
+    return renderPendingSupplyDebt(pendiente, currency);
+  }
+
+  if (pendiente.kind === 'product') {
+    return renderPendingProduct(pendiente, currency);
+  }
+
   return renderPendingCorrection(pendiente, currency);
+}
+
+/**
+ * La nomina a medio armar, contada para el modelo.
+ *
+ * Es la pieza que hace que la conversacion funcione: sin esto, el usuario
+ * contesta "Carlos" y el modelo no tiene forma de saber que eso es el nombre
+ * del trabajador de un pago que se esta armando, asi que lo lee como un
+ * mensaje suelto y vuelve a empezar.
+ */
+function renderPendingPayroll(
+  pendiente: PendingPayroll,
+  currency: string,
+): string {
+  const { workerName, percentage, amount } = pendiente.draft;
+
+  const sabido = [
+    `- trabajador: ${workerName ?? 'todavia no lo dijo'}`,
+    `- porcentaje: ${percentage === null ? 'todavia no lo dijo' : `${percentage}%`}`,
+    `- monto: ${amount === null ? 'todavia no lo dijo' : formatMoney(amount, currency)}`,
+  ];
+
+  if (pendiente.stage === 'confirmacion') {
+    return [
+      'PREGUNTA ABIERTA (lo mas importante de este turno):',
+      'Le acabas de enseñar este pago de nomina y le preguntaste si lo registras:',
+      ...sabido,
+      'Si dice que si, devuelve type "confirmation" con confirmed true.',
+      'Si dice que no, confirmed false.',
+      'Si te CORRIGE un dato ("no, son 900.000"), no es una confirmacion:',
+      'devuelve type "payroll" con ese dato ya corregido.',
+    ].join('\n');
+  }
+
+  return [
+    'PREGUNTA ABIERTA (lo mas importante de este turno):',
+    'Estas armando un pago de nomina y le preguntaste por el dato que falta.',
+    'Esto es lo que ya sabes:',
+    ...sabido,
+    'Lo que conteste es ese dato: devuelve type "payroll" con el puesto donde',
+    'corresponde. NO vuelvas a pedir lo que ya esta arriba y NO lo trates como',
+    'un gasto ni como una venta.',
+  ].join('\n');
+}
+
+/**
+ * La deuda a medio armar, contada para el modelo.
+ *
+ * Sin esto, el usuario contesta "en 6 cuotas" y el modelo no tiene forma de
+ * saber que eso pertenece a una deuda que se esta armando: lo lee como un
+ * mensaje suelto y la conversacion vuelve a empezar.
+ */
+function renderPendingSupplyDebt(
+  pendiente: PendingSupplyDebt,
+  currency: string,
+): string {
+  const d = pendiente.draft;
+  const sabido = [
+    `- proveedor: ${d.supplierName ?? 'todavia no lo dijo'}`,
+    `- suministro: ${d.supply ?? 'todavia no lo dijo'}`,
+    `- monto: ${d.amount === null ? 'todavia no lo dijo' : formatMoney(d.amount, currency)}`,
+    `- fecha limite: ${d.dueDate ?? 'todavia no la dijo'}`,
+    `- modalidad: ${d.mode ?? 'todavia no lo dijo'}`,
+    `- cuotas: ${d.installments ?? 'todavia no lo dijo'}`,
+    `- interes mensual: ${d.interestRate === null ? 'todavia no lo dijo' : `${d.interestRate}%`}`,
+  ];
+
+  if (pendiente.stage === 'confirmacion') {
+    return [
+      'PREGUNTA ABIERTA (lo mas importante de este turno):',
+      'Le acabas de enseñar esta deuda con su plan de cuotas y le preguntaste',
+      'si la registras:',
+      ...sabido,
+      'Si dice que si, devuelve type "confirmation" con confirmed true.',
+      'Si dice que no, confirmed false.',
+      'Si te CORRIGE un dato ("no, son 8 cuotas"), no es una confirmacion:',
+      'devuelve type "supply_debt" con ese dato ya corregido.',
+    ].join('\n');
+  }
+
+  return [
+    'PREGUNTA ABIERTA (lo mas importante de este turno):',
+    'Estas armando una deuda con un proveedor y le preguntaste por el dato',
+    'que falta. Esto es lo que ya sabes:',
+    ...sabido,
+    'Lo que conteste es ese dato: devuelve type "supply_debt" con el puesto',
+    'donde corresponde. NO vuelvas a pedir lo que ya esta arriba y NO lo',
+    'trates como un gasto nuevo.',
+  ].join('\n');
+}
+
+/**
+ * El producto a medio armar, contado para el modelo.
+ *
+ * Sin esto, el usuario contesta "5.000" y el modelo no sabe que eso es el
+ * precio de un producto que se esta dando de alta: lo lee como un ingreso y
+ * registra una venta que nadie hizo.
+ */
+function renderPendingProduct(
+  pendiente: PendingProduct,
+  currency: string,
+): string {
+  const d = pendiente.draft;
+  const sabido = [
+    `- producto: ${d.name ?? 'todavia no lo dijo'}`,
+    `- precio de venta: ${d.salePrice === null ? 'todavia no lo dijo' : formatMoney(d.salePrice, currency)}`,
+    `- precio de compra: ${d.costPrice === null ? 'todavia no lo dijo' : formatMoney(d.costPrice, currency)}`,
+    `- categoria: ${d.category ?? 'no la dijo (es opcional)'}`,
+    `- stock inicial: ${d.stock ?? 'no lo dijo (es opcional)'}`,
+  ];
+
+  if (pendiente.stage === 'confirmacion') {
+    return [
+      'PREGUNTA ABIERTA (lo mas importante de este turno):',
+      'Le acabas de enseñar este producto y le preguntaste si lo agregas al',
+      'catalogo:',
+      ...sabido,
+      'Si dice que si, devuelve type "confirmation" con confirmed true.',
+      'Si dice que no, confirmed false.',
+      'Si te CORRIGE un dato ("no, lo vendo en 6.000"), no es una',
+      'confirmacion: devuelve type "product" con ese dato ya corregido.',
+    ].join('\n');
+  }
+
+  return [
+    'PREGUNTA ABIERTA (lo mas importante de este turno):',
+    'Estas dando de alta un producto y le preguntaste por el dato que falta.',
+    'Esto es lo que ya sabes:',
+    ...sabido,
+    'Lo que conteste es ese dato: devuelve type "product" con el puesto donde',
+    'corresponde. Una cifra suelta aqui es un precio del producto, NO una',
+    'venta ni un gasto.',
+  ].join('\n');
 }
 
 /** Espera un si, un no, o directamente la correccion. */
@@ -2964,6 +4239,22 @@ function renderPendingCorrection(
 // ------------------------------------------------- respuestas de movimientos
 
 /** Una linea por movimiento: "• 15 ago · Transporte · -$50.000 COP". */
+/**
+ * El recordatorio del plazo, para pegarlo al texto que escribio el modelo.
+ *
+ * Vacio en todo lo que no sea un fiado con fecha: no hay nada que recordar.
+ */
+function lineaDePlazo(transaction: Transaction | undefined): string {
+  if (!transaction?.isCredit || !transaction.dueDate) return '';
+
+  const fecha = FECHA_CORTA.format(
+    new Date(`${transaction.dueDate}T12:00:00.000Z`),
+  );
+
+  return `
+📅 Te paga el ${fecha}.`;
+}
+
 function movementLine(
   row: Transaction,
   currency: string,
@@ -2973,7 +4264,13 @@ function movementLine(
   const fecha = FECHA_CORTA.format(new Date(`${row.date}T12:00:00.000Z`));
   const extras = [
     row.paymentMethod ? PAYMENT_METHOD_LABELS[row.paymentMethod] : null,
-    row.isCredit ? 'fiado' : null,
+    // El plazo va pegado al "fiado" y no en una linea aparte: es lo que el
+    // dueno necesita ver para saber si lo que entendio Luka es lo que acordo.
+    row.isCredit
+      ? row.dueDate
+        ? `fiado, paga el ${FECHA_CORTA.format(new Date(`${row.dueDate}T12:00:00.000Z`))}`
+        : 'fiado'
+      : null,
   ].filter(Boolean);
 
   return (
@@ -3107,15 +4404,15 @@ export function renderMovementList(
   currency: string,
 ): string {
   if (movimientos.length === 0) {
-    return `No tienes movimientos registrados ${PERIOD_LABELS[period]}.`;
+    return `No tienes movimientos registrados ${etiquetaPeriodo(period)}.`;
   }
 
   const mostrados = movimientos.slice(0, LIST_MAX_RESULTS);
   const lineas = mostrados.map((row) => movementLine(row, currency));
   const encabezado =
     movimientos.length === 1
-      ? `📋 Tienes 1 movimiento ${PERIOD_LABELS[period]}:`
-      : `📋 Tus ${movimientos.length} movimientos ${PERIOD_LABELS[period]}:`;
+      ? `📋 Tienes 1 movimiento ${etiquetaPeriodo(period)}:`
+      : `📋 Tus ${movimientos.length} movimientos ${etiquetaPeriodo(period)}:`;
 
   const pie =
     movimientos.length > mostrados.length

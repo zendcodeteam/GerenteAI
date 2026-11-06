@@ -119,6 +119,7 @@ export class AnthropicProvider implements LlmProvider {
     const message = await this.call(
       this.buildParams(request, maxTokens),
       maxTokens,
+      request.timeoutMs,
     );
     return this.mapResponse(message, Date.now() - startedAt);
   }
@@ -162,7 +163,12 @@ export class AnthropicProvider implements LlmProvider {
     };
 
     const system = this.buildSystemPrompt(request);
-    if (system) params.system = system;
+    if (system) {
+      params.system = this.toSystemBlocks(
+        system,
+        request.cacheableSystemPrefix,
+      );
+    }
 
     // Muestreo: prohibido en los modelos nuevos, permitido en los antiguos.
     if (
@@ -202,6 +208,39 @@ export class AnthropicProvider implements LlmProvider {
     }
 
     return params;
+  }
+
+  /**
+   * El system prompt, partido en dos bloques cuando hay algo que cachear.
+   *
+   * El prompt del asistente de WhatsApp son ~14.500 tokens que viajan
+   * IDENTICOS en cada mensaje; lo unico que cambia es el bloque de contexto
+   * del final (la fecha, el negocio, la pregunta abierta). Marcando el primer
+   * bloque con `cache_control`, Anthropic lo cobra al 10% y lo sirve mucho mas
+   * rapido a partir de la segunda llamada.
+   *
+   * El texto que acaba leyendo el modelo es el mismo byte a byte: dos bloques
+   * seguidos se concatenan igual que la cadena de antes. Si el prefijo no
+   * encaja —porque alguien cambio el orden— se manda como siempre, sin cache,
+   * en vez de arriesgar un prompt distinto.
+   */
+  private toSystemBlocks(system: string, prefix: string | undefined): unknown {
+    if (
+      !prefix ||
+      !system.startsWith(prefix) ||
+      prefix.length === system.length
+    ) {
+      return system;
+    }
+
+    return [
+      {
+        type: 'text',
+        text: prefix,
+        cache_control: { type: 'ephemeral' },
+      },
+      { type: 'text', text: system.slice(prefix.length) },
+    ];
   }
 
   private buildSystemPrompt(request: LlmRequest): string | undefined {
@@ -291,12 +330,14 @@ export class AnthropicProvider implements LlmProvider {
   private async call(
     params: Record<string, unknown>,
     maxTokens: number,
+    timeoutMs?: number,
   ): Promise<AnthropicMessage> {
     try {
       return await this.dispatch(
         params,
         maxTokens,
         this.serverFallbackAvailable,
+        timeoutMs,
       );
     } catch (error) {
       // Si la cuenta no tiene habilitada la beta de fallback, reintentamos sin ella
@@ -304,7 +345,7 @@ export class AnthropicProvider implements LlmProvider {
       if (this.serverFallbackAvailable && isBetaRejection(error)) {
         this.serverFallbackAvailable = false;
         try {
-          return await this.dispatch(params, maxTokens, false);
+          return await this.dispatch(params, maxTokens, false, timeoutMs);
         } catch (retryError) {
           throw this.toLlmError(retryError);
         }
@@ -317,6 +358,7 @@ export class AnthropicProvider implements LlmProvider {
     params: Record<string, unknown>,
     maxTokens: number,
     withServerFallback: boolean,
+    timeoutMs?: number,
   ): Promise<AnthropicMessage> {
     // Con max_tokens alto hay que ir por streaming o el HTTP muere por timeout.
     const useStreaming = maxTokens > STREAMING_THRESHOLD_TOKENS;
@@ -332,9 +374,14 @@ export class AnthropicProvider implements LlmProvider {
       ? { ...params, betas: [SERVER_FALLBACK_BETA], fallbacks: 'default' }
       : params;
 
+    // El timeout del constructor es el de todo el proceso; este es el de ESTA
+    // llamada. Sin el, una interpretacion de WhatsApp —con alguien esperando
+    // del otro lado— heredaba los 45 segundos pensados para los informes.
+    const opciones = timeoutMs ? { timeout: timeoutMs } : undefined;
+
     return useStreaming
-      ? surface.stream(finalParams).finalMessage()
-      : surface.create(finalParams);
+      ? surface.stream(finalParams, opciones).finalMessage()
+      : surface.create(finalParams, opciones);
   }
 
   private mapResponse(
@@ -446,10 +493,21 @@ interface AnthropicMessage {
 
 /** Punto de entrada al SDK, tipado para los parametros que aun no expone. */
 interface AnthropicMessagesSurface {
-  create(params: Record<string, unknown>): Promise<AnthropicMessage>;
-  stream(params: Record<string, unknown>): {
+  create(
+    params: Record<string, unknown>,
+    options?: AnthropicRequestOptions,
+  ): Promise<AnthropicMessage>;
+  stream(
+    params: Record<string, unknown>,
+    options?: AnthropicRequestOptions,
+  ): {
     finalMessage(): Promise<AnthropicMessage>;
   };
+}
+
+/** Opciones por peticion del SDK. El timeout va en milisegundos. */
+interface AnthropicRequestOptions {
+  timeout?: number;
 }
 
 function mapEffort(effort: LlmEffort | undefined): string {

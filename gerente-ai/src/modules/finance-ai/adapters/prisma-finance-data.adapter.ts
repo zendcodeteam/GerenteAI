@@ -12,6 +12,7 @@ import {
 } from '@prisma/client';
 
 import { PrismaService } from '../../../services/prisma.service';
+import { normalizarNombreDeProducto } from '../domain/texto-producto';
 import {
   fechaColombiana,
   finDelDia,
@@ -33,7 +34,11 @@ import type {
   FinanceDataPort,
   PaymentRequest,
   PaymentResult,
+  PayrollPayment,
+  ProductRegistration,
+  ProductRegistrationResult,
   ProfitDistribution,
+  SupplyDebt,
   TransactionChanges,
   TransactionQuery,
 } from '../ports/finance-data.port';
@@ -386,6 +391,111 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
   }
 
   /** Guarda el reparto de utilidades: una fila por beneficiario. */
+  async savePayroll(payment: PayrollPayment): Promise<PayrollPayment> {
+    await this.prisma.pagoNomina.create({
+      data: {
+        id: payment.id,
+        nombreTrabajador: payment.workerName,
+        porcentajePago: new Prisma.Decimal(payment.percentage),
+        montoExacto: new Prisma.Decimal(payment.amount),
+        // Mediodia UTC, como el resto de fechas sin hora: asi el pago no se
+        // corre de dia en ninguna zona horaria.
+        fechaPago: new Date(`${payment.date}T12:00:00.000Z`),
+        sedeId: payment.businessId,
+      },
+    });
+
+    this.logger.log(
+      `Nomina: ${payment.workerName} · ${payment.percentage}% · ${payment.amount} en sede ${payment.businessId}.`,
+    );
+
+    return payment;
+  }
+
+  async saveSupplyDebt(debt: SupplyDebt): Promise<SupplyDebt> {
+    const proveedorId = await this.ensureProveedor(
+      debt.businessId,
+      debt.supplierName,
+    );
+
+    await this.prisma.deudaProveedor.create({
+      data: {
+        proveedorId,
+        sedeId: debt.businessId,
+        suministro: debt.supply,
+        montoTotal: new Prisma.Decimal(debt.amount),
+        // Mediodia UTC, como el resto de fechas sin hora.
+        fechaLimite: new Date(`${debt.dueDate}T12:00:00.000Z`),
+        modalidad: debt.mode === 'cuotas' ? 'CUOTAS' : 'UNICO',
+        numeroCuotas: debt.mode === 'cuotas' ? debt.installments : null,
+        aplicaInteres: debt.interestRate > 0,
+        porcentajeInteres:
+          debt.interestRate > 0 ? new Prisma.Decimal(debt.interestRate) : null,
+      },
+    });
+
+    this.logger.log(
+      `Deuda con proveedor: ${debt.supplierName} · ${debt.amount} · vence ${debt.dueDate} en sede ${debt.businessId}.`,
+    );
+
+    return debt;
+  }
+
+  /** El proveedor de esa sede, creandolo si es la primera vez que aparece. */
+  private async ensureProveedor(
+    sedeId: string,
+    nombre: string,
+  ): Promise<string> {
+    const limpio = nombre.trim();
+    const existente = await this.prisma.proveedor.findFirst({
+      where: { sedeId, nombre: { equals: limpio, mode: 'insensitive' } },
+    });
+
+    if (existente) return existente.id;
+
+    const creado = await this.prisma.proveedor.create({
+      data: { nombre: limpio, sedeId },
+    });
+    return creado.id;
+  }
+
+  async saveProduct(
+    product: ProductRegistration,
+  ): Promise<ProductRegistrationResult> {
+    // Se compara sin mayusculas: quien dicta "arroz diana" y quien dicta
+    // "Arroz Diana" esta hablando del mismo producto.
+    const existente = await this.prisma.producto.findFirst({
+      where: {
+        sedeId: product.businessId,
+        nombre: { equals: product.name, mode: 'insensitive' },
+      },
+    });
+
+    if (existente) {
+      this.logger.log(
+        `Producto repetido: "${product.name}" ya existe en sede ${product.businessId}.`,
+      );
+      return { created: false, product };
+    }
+
+    await this.prisma.producto.create({
+      data: {
+        nombre: product.name,
+        categoria: product.category,
+        stock: product.stock,
+        precioCompra: new Prisma.Decimal(product.costPrice),
+        precioVenta: new Prisma.Decimal(product.salePrice),
+        sedeId: product.businessId,
+      },
+    });
+
+    this.logger.log(
+      `Producto nuevo: ${product.name} · compra ${product.costPrice} · venta ${product.salePrice} en sede ${product.businessId}.`,
+    );
+
+    return { created: true, product };
+  }
+
   async saveProfitDistribution(
     distribution: ProfitDistribution,
   ): Promise<ProfitDistribution> {
@@ -846,12 +956,11 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
               saldoPendiente: new Prisma.Decimal(
                 esFiado ? transaction.amount : 0,
               ),
-              // Sin plazo no hay deuda "vencida", y el panel no puede avisar.
+              // El plazo que el usuario acordo con su cliente. Los 30 dias
+              // quedan de red de seguridad para lo que no entra por WhatsApp:
+              // ahi Luka pregunta la fecha y nunca llega en null.
               fechaVencimiento: esFiado
-                ? sumarDiasAFecha(
-                    fechaDelMovimiento(transaction),
-                    DIAS_CREDITO_POR_DEFECTO,
-                  )
+                ? vencimientoDelFiado(transaction)
                 : null,
               descripcion: transaction.description,
               metodoPago: transaction.paymentMethod
@@ -1000,10 +1109,10 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
       const products = await this.prisma.producto.findMany({
         where: { sedeId: transaction.businessId },
       });
-      const query = normalizeProductText(transaction.productName!);
+      const query = normalizarNombreDeProducto(transaction.productName!);
       const matches = products.filter((product) =>
         [product.nombre, ...product.alias].some(
-          (value) => normalizeProductText(value) === query,
+          (value) => normalizarNombreDeProducto(value) === query,
         ),
       );
 
@@ -1092,6 +1201,26 @@ const BENEFICIARY_TO_PRISMA: Record<ProfitBeneficiary, BeneficiarioReparto> = {
 
 /** Plazo estandar de un fiado. El mismo que usa el panel en VentasService. */
 const DIAS_CREDITO_POR_DEFECTO = 30;
+
+/**
+ * Cuando vence un fiado.
+ *
+ * Manda la fecha que acordaron el dueno y su cliente. Antes se sumaban 30 dias
+ * siempre, y como ese plazo no lo habia pactado nadie, el recordatorio de
+ * cobro salia cuando no tocaba y el dueno dejo de hacerle caso. El default
+ * sobrevive para los movimientos que no traen plazo (el panel, una
+ * importacion), donde una fecha estimada sigue siendo mejor que ninguna.
+ */
+function vencimientoDelFiado(transaction: Transaction): Date {
+  if (transaction.dueDate) {
+    return new Date(`${transaction.dueDate}T12:00:00.000Z`);
+  }
+
+  return sumarDiasAFecha(
+    fechaDelMovimiento(transaction),
+    DIAS_CREDITO_POR_DEFECTO,
+  );
+}
 const UN_DIA_MS = 86_400_000;
 
 /** Clave para agrupar los fiados que se registraron sin cliente. */
@@ -1099,15 +1228,6 @@ const SIN_CLIENTE = 'sin-cliente';
 
 function sumarDiasAFecha(fecha: Date, dias: number): Date {
   return new Date(fecha.getTime() + dias * UN_DIA_MS);
-}
-
-function normalizeProductText(value: string): string {
-  return value
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, ' ');
 }
 
 /** Dias completos entre dos fechas YYYY-MM-DD. Nunca negativo. */

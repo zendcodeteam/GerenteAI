@@ -11,9 +11,13 @@ import type {
   ProfitDistribution,
   PaymentRequest,
   PaymentResult,
+  PayrollPayment,
+  ProductRegistration,
+  SupplyDebt,
   TransactionChanges,
 } from '../ports/finance-data.port';
 import type { WhatsAppIntentOutput } from '../prompts/whatsapp-assistant.prompt';
+import { fechaColombiana, sumarDias } from '../domain/dia-colombia';
 import {
   WhatsAppMessageService,
   checkBreakdown,
@@ -80,6 +84,13 @@ function movimiento(
   };
 }
 
+/**
+ * Un plazo valido para un fiado: tiene que ser futuro, asi que se calcula
+ * sobre el dia de hoy en vez de escribirse a mano. Una fecha fija habria
+ * funcionado hasta que llegara ese dia.
+ */
+const PLAZO = sumarDias(fechaColombiana(new Date()), 7);
+
 const SEED: Transaction[] = [
   {
     id: '1',
@@ -111,6 +122,12 @@ interface FakeFinanceData extends FinanceDataPort {
   saved: Transaction[];
   replaced: { id: string; parts: Transaction[] }[];
   distributions: ProfitDistribution[];
+  /** Nominas guardadas, para comprobar que se registran cuando toca. */
+  payrolls: PayrollPayment[];
+  /** Deudas con proveedor guardadas, para comprobar cuando se registran. */
+  supplyDebts: SupplyDebt[];
+  /** Productos dados de alta en el catalogo. */
+  products: ProductRegistration[];
   updated: { id: string; changes: TransactionChanges }[];
   deleted: string[];
   /** Abonos que se pidieron aplicar, para comprobar que llegan bien. */
@@ -126,6 +143,9 @@ function fakeFinanceData(rows: Transaction[] = SEED): FakeFinanceData {
   const saved: Transaction[] = [];
   const replaced: { id: string; parts: Transaction[] }[] = [];
   const distributions: ProfitDistribution[] = [];
+  const payrolls: PayrollPayment[] = [];
+  const supplyDebts: SupplyDebt[] = [];
+  const products: ProductRegistration[] = [];
   const updated: { id: string; changes: TransactionChanges }[] = [];
   const deleted: string[] = [];
 
@@ -166,6 +186,24 @@ function fakeFinanceData(rows: Transaction[] = SEED): FakeFinanceData {
     saveProfitDistribution: (distribution: ProfitDistribution) => {
       distributions.push(distribution);
       return Promise.resolve(distribution);
+    },
+    payrolls,
+    savePayroll: (pago: PayrollPayment) => {
+      payrolls.push(pago);
+      return Promise.resolve(pago);
+    },
+    supplyDebts,
+    saveSupplyDebt: (debt: SupplyDebt) => {
+      supplyDebts.push(debt);
+      return Promise.resolve(debt);
+    },
+    products,
+    saveProduct: (producto: ProductRegistration) => {
+      const repetido = products.some(
+        (fila) => fila.name.toLowerCase() === producto.name.toLowerCase(),
+      );
+      if (!repetido) products.push(producto);
+      return Promise.resolve({ created: !repetido, product: producto });
     },
     updated,
     deleted,
@@ -723,9 +761,10 @@ describe('WhatsAppMessageService - varios movimientos', () => {
     expect(result.transactions.map((row) => row.amount)).toEqual([
       50_000, 30_000,
     ]);
+    // `movimiento()` trae 1 unidad, y las unidades van en la descripcion.
     expect(result.transactions.map((row) => row.description)).toEqual([
-      'Transporte',
-      'Almuerzo',
+      'Transporte · 1 u.',
+      'Almuerzo · 1 u.',
     ]);
     expect(financeData.saved).toHaveLength(2);
   });
@@ -1014,6 +1053,7 @@ describe('WhatsAppMessageService - fiados', () => {
           concept: 'Venta fiada a dona Rosa',
           isCredit: true,
           customerName: 'Dona Rosa',
+          dueDate: PLAZO,
         }),
       ],
       responseText: 'ok',
@@ -1719,21 +1759,22 @@ describe('WhatsAppMessageService · fecha del movimiento', () => {
    * semana. Antes todo se guardaba con la fecha en que se le escribió al bot y
    * los reportes por día quedaban descuadrados.
    */
-  const HOY = new Date().toISOString().slice(0, 10);
+  // El dia colombiano, como lo registra el servicio. Con `toISOString()` esta
+  // prueba fallaba cada noche despues de las 7 p.m., cuando en UTC ya es manana.
+  const HOY = fechaColombiana(new Date());
 
+  // Una venta necesita producto y unidades para registrarse (inventario).
   const enFecha = (fecha: string | null) => ({
     type: 'income' as const,
     movements: [
-      {
-        type: 'income' as const,
+      movimiento({
+        type: 'income',
         amount: 2_000_000,
         category: 'ventas',
         concept: 'Cama nube',
-        paymentMethod: null,
-        isCredit: false,
-        customerName: null,
+        productName: 'Cama nube',
         date: fecha,
-      },
+      }),
     ],
     responseText: 'ok',
   });
@@ -2143,6 +2184,7 @@ describe('WhatsAppMessageService · un fiado necesita saber de quién es', () =>
           concept: 'Venta fiada',
           isCredit: true,
           customerName: 'Doña Rosa',
+          dueDate: PLAZO,
         }),
       ],
       responseText: 'Registré el fiado de doña Rosa.',
@@ -3984,5 +4026,983 @@ describe('SCRUM-22 · los registros se numeran', () => {
     });
 
     expect(result.replyText).not.toContain('1)');
+  });
+});
+
+// ===========================================================================
+// SCRUM-43 · todo fiado nace con fecha maxima de pago
+// ===========================================================================
+
+/**
+ * El plazo se inventaba: el adaptador le sumaba 30 dias a la venta. Como ese
+ * plazo no lo habia acordado nadie, el recordatorio de cobro salia cuando no
+ * tocaba. Ahora lo dice el usuario, y si no lo dice, Luka lo pregunta antes de
+ * guardar nada.
+ */
+describe('WhatsAppMessageService · la fecha maxima de pago de un fiado', () => {
+  const fiado = (parcial: Record<string, unknown> = {}) =>
+    buildService({
+      type: 'income',
+      movements: [
+        movimiento({
+          type: 'income',
+          amount: 50_000,
+          category: 'ventas',
+          concept: 'Venta fiada a doña Rosa',
+          isCredit: true,
+          customerName: 'Doña Rosa',
+          ...parcial,
+        }),
+      ],
+      responseText: 'ok',
+    });
+
+  it('la pregunta cuando el usuario no la dijo, y no guarda nada', async () => {
+    const { service, financeData } = fiado({ dueDate: null });
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    expect(financeData.saved).toHaveLength(0);
+    expect(result.intent.type).toBe('unclear');
+    expect(result.replyText).toContain('¿Para cuándo quedó de pagarte');
+    expect(result.replyText).toContain('Doña Rosa');
+  });
+
+  it('la pregunta sugiriendo como contestarla', async () => {
+    // Quien no sabe que formato espera el sistema contesta cualquier cosa y
+    // acaba en un ida y vuelta de tres mensajes.
+    const { service } = fiado({ dueDate: null });
+
+    const result = await service.handleMessage(BASE_REQUEST);
+
+    expect(result.replyText).toContain('el viernes');
+    expect(result.replyText).toContain('fin de mes');
+  });
+
+  it('la guarda en el fiado cuando viene', async () => {
+    const { service, financeData } = fiado({ dueDate: PLAZO });
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    expect(result.transactions[0].dueDate).toBe(PLAZO);
+    expect(financeData.saved[0].dueDate).toBe(PLAZO);
+    expect(financeData.saved[0].isCredit).toBe(true);
+  });
+
+  it('la muestra en la confirmacion', async () => {
+    // El dueño tiene que poder ver que Luka entendio el plazo que acordo; si
+    // no se lo enseña, el error se descubre el dia que va a cobrar.
+    const { service } = fiado({ dueDate: PLAZO });
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    expect(result.replyText).toContain('Te paga el');
+  });
+
+  it('una fecha que ya paso se trata como si no la hubiera dicho', async () => {
+    // Un plazo vencido no es un plazo. Preguntar de nuevo es mejor que
+    // guardar una deuda que nace con el recordatorio ya disparado.
+    const ayer = sumarDias(fechaColombiana(new Date()), -1);
+    const { service, financeData } = fiado({ dueDate: ayer });
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    expect(financeData.saved).toHaveLength(0);
+    expect(result.replyText).toContain('¿Para cuándo quedó de pagarte');
+  });
+
+  it('hoy tampoco sirve: el plazo tiene que ser futuro', async () => {
+    const { service, financeData } = fiado({
+      dueDate: fechaColombiana(new Date()),
+    });
+
+    await service.handleMessage({ ...BASE_REQUEST, persist: true });
+
+    expect(financeData.saved).toHaveLength(0);
+  });
+
+  it('descarta un dia que no existe en el calendario', async () => {
+    // "2026-11-31" pasa el formato pero se desborda a diciembre: si se
+    // guardara, el plazo quedaria un dia despues del que se acordo.
+    const { service, financeData } = fiado({ dueDate: '2026-11-31' });
+
+    await service.handleMessage({ ...BASE_REQUEST, persist: true });
+
+    expect(financeData.saved).toHaveLength(0);
+  });
+
+  it('descarta un plazo absurdo: a mas de un año no es un fiado', async () => {
+    const { service, financeData } = fiado({
+      dueDate: sumarDias(fechaColombiana(new Date()), 400),
+    });
+
+    await service.handleMessage({ ...BASE_REQUEST, persist: true });
+
+    expect(financeData.saved).toHaveLength(0);
+  });
+
+  it('una venta de contado no pide plazo ninguno', async () => {
+    const { service, financeData } = buildService({
+      type: 'income',
+      movements: [
+        movimiento({
+          type: 'income',
+          amount: 50_000,
+          category: 'ventas',
+          concept: 'Venta del dia',
+        }),
+      ],
+      responseText: 'ok',
+    });
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    expect(financeData.saved).toHaveLength(1);
+    expect(result.transactions[0].dueDate).toBeNull();
+    expect(result.replyText).not.toContain('paga el');
+  });
+
+  it('con varios fiados pregunta por el primero al que le falta el plazo', async () => {
+    const { service, financeData } = buildService({
+      type: 'income',
+      movements: [
+        movimiento({
+          type: 'income',
+          amount: 50_000,
+          category: 'ventas',
+          concept: 'Fiado a Rosa',
+          isCredit: true,
+          customerName: 'Rosa',
+          dueDate: PLAZO,
+        }),
+        movimiento({
+          type: 'income',
+          amount: 30_000,
+          category: 'ventas',
+          concept: 'Fiado a Juan',
+          isCredit: true,
+          customerName: 'Juan',
+          dueDate: null,
+        }),
+      ],
+      responseText: 'ok',
+    });
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    // Ninguno se guarda a medias: o entran los dos completos, o no entra nada.
+    expect(financeData.saved).toHaveLength(0);
+    expect(result.replyText).toContain('Juan');
+  });
+
+  it('primero pregunta de quien es, y solo despues el plazo', async () => {
+    // Las dos preguntas no se pueden hacer juntas sin marear: el nombre va
+    // primero porque sin el la deuda no tiene dueño.
+    const { service } = buildService({
+      type: 'income',
+      movements: [
+        movimiento({
+          type: 'income',
+          amount: 20_000,
+          category: 'ventas',
+          concept: 'Venta fiada',
+          isCredit: true,
+          customerName: null,
+          dueDate: null,
+        }),
+      ],
+      responseText: 'ok',
+    });
+
+    const result = await service.handleMessage(BASE_REQUEST);
+
+    expect(result.replyText).toContain('¿A quién le fiaste?');
+  });
+});
+// ===========================================================================
+// SCRUM-55 · flujo conversacional de registro de nomina
+// ===========================================================================
+
+/**
+ * Los tres datos —trabajador, porcentaje y monto— se piden de a uno y el
+ * borrador sobrevive entre turnos. Nada se guarda sin que el usuario vea el
+ * resumen y diga que si: una nomina mal registrada no se nota en el momento,
+ * aparece a fin de mes cuando las cuentas no cuadran.
+ */
+/**
+ * Una conversacion de varios turnos: el estado y la base se comparten, que es
+ * justo lo que hace falta probar aqui. `buildService` crea uno nuevo de cada
+ * vez y perderia el borrador entre mensajes.
+ */
+function conversacionDeNomina() {
+  const financeData = fakeFinanceData([]);
+  const state = new ConversationStateService();
+
+  const turno = (
+    intent: Partial<WhatsAppIntentOutput>,
+    request: Record<string, unknown> = {},
+  ) =>
+    new WhatsAppMessageService(
+      fakeLlm(intent),
+      financeData,
+      state,
+    ).handleMessage({ ...BASE_REQUEST, persist: true, ...request });
+
+  return { financeData, turno };
+}
+
+describe('WhatsAppMessageService · registro de nomina', () => {
+  const nomina = (parcial: Record<string, unknown> | null) => ({
+    type: 'payroll' as const,
+    movements: [],
+    payroll: parcial,
+    responseText: 'ok',
+  });
+
+  it('pide el nombre cuando el mensaje no dice a quien', async () => {
+    const { service, financeData } = buildService(
+      nomina({ workerName: null, percentage: null, amount: null, date: null }),
+    );
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    expect(result.replyText).toContain('¿A quién le vas a pagar?');
+    expect(financeData.payrolls).toHaveLength(0);
+  });
+
+  it('con el nombre ya dicho, pregunta el porcentaje y lo nombra', async () => {
+    const { service } = buildService(
+      nomina({
+        workerName: 'Carlos',
+        percentage: null,
+        amount: null,
+        date: null,
+      }),
+    );
+
+    const result = await service.handleMessage(BASE_REQUEST);
+
+    expect(result.replyText).toContain('porcentaje');
+    expect(result.replyText).toContain('Carlos');
+  });
+
+  it('con nombre y porcentaje, pregunta el monto', async () => {
+    const { service } = buildService(
+      nomina({
+        workerName: 'Carlos',
+        percentage: 40,
+        amount: null,
+        date: null,
+      }),
+    );
+
+    const result = await service.handleMessage(BASE_REQUEST);
+
+    expect(result.replyText).toContain('¿Cuánto le vas a pagar a Carlos');
+  });
+
+  it('no olvida lo que ya le dijeron en los turnos anteriores', async () => {
+    // El caso que justifica guardar el borrador: el usuario contesta de a un
+    // dato y el modelo solo devuelve el ultimo. Sin memoria, la conversacion
+    // volveria a empezar en cada mensaje.
+    const { turno: paso } = conversacionDeNomina();
+    const turno = (payroll: Record<string, unknown> | null) =>
+      paso(nomina(payroll));
+
+    await turno({
+      workerName: 'Carlos',
+      percentage: null,
+      amount: null,
+      date: null,
+    });
+    await turno({
+      workerName: null,
+      percentage: 40,
+      amount: null,
+      date: null,
+    });
+    const tercero = await turno({
+      workerName: null,
+      percentage: null,
+      amount: 800_000,
+      date: null,
+    });
+
+    // Con el tercer dato ya esta completa: toca resumen, no otra pregunta.
+    expect(tercero.replyText).toContain('Carlos');
+    expect(tercero.replyText).toContain('40%');
+    expect(tercero.replyText).toContain('$800.000');
+  });
+
+  it('muestra el resumen y pide confirmacion antes de guardar', async () => {
+    const { service, financeData } = buildService(
+      nomina({
+        workerName: 'Carlos',
+        percentage: 40,
+        amount: 800_000,
+        date: null,
+      }),
+    );
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    expect(result.replyText).toContain('Voy a registrar este pago de nómina');
+    expect(result.replyText).toContain('Carlos');
+    expect(result.replyText).toContain('40%');
+    expect(result.replyText).toContain('$800.000');
+    expect(result.replyText).toContain('¿Lo registro así?');
+    // Lo importante: todavia NO se guardo nada.
+    expect(financeData.payrolls).toHaveLength(0);
+  });
+
+  it('guarda solo despues del si', async () => {
+    const { financeData, turno } = conversacionDeNomina();
+
+    await turno(
+      nomina({
+        workerName: 'Carlos',
+        percentage: 40,
+        amount: 800_000,
+        date: null,
+      }),
+    );
+    const result = await turno({
+      type: 'confirmation',
+      confirmed: true,
+      responseText: 'ok',
+    });
+
+    expect(financeData.payrolls).toHaveLength(1);
+    expect(financeData.payrolls[0]).toMatchObject({
+      workerName: 'Carlos',
+      percentage: 40,
+      amount: 800_000,
+      businessId: 'b1',
+    });
+    expect(result.replyText).toContain('Registré el pago de nómina de Carlos');
+  });
+
+  it('un no descarta el pago y no guarda nada', async () => {
+    const { financeData, turno } = conversacionDeNomina();
+
+    await turno(
+      nomina({
+        workerName: 'Carlos',
+        percentage: 40,
+        amount: 800_000,
+        date: null,
+      }),
+    );
+    const result = await turno({
+      type: 'confirmation',
+      confirmed: false,
+      responseText: 'ok',
+    });
+
+    expect(financeData.payrolls).toHaveLength(0);
+    expect(result.replyText).toContain('no registré ese pago');
+  });
+
+  it('con persist en false no toca la base, pero responde igual', async () => {
+    const { financeData, turno } = conversacionDeNomina();
+
+    await turno(
+      nomina({
+        workerName: 'Carlos',
+        percentage: 40,
+        amount: 800_000,
+        date: null,
+      }),
+      { persist: false },
+    );
+    const result = await turno(
+      { type: 'confirmation', confirmed: true, responseText: 'ok' },
+      { persist: false },
+    );
+
+    expect(financeData.payrolls).toHaveLength(0);
+    expect(result.replyText).toContain('Registré el pago de nómina');
+  });
+
+  it('un porcentaje imposible se trata como si no lo hubiera dicho', async () => {
+    // "el 140%" es un error de dictado. Guardarlo descuadra la nomina y nadie
+    // lo revisa despues; preguntar de nuevo cuesta un mensaje.
+    const { service } = buildService(
+      nomina({
+        workerName: 'Carlos',
+        percentage: 140,
+        amount: null,
+        date: null,
+      }),
+    );
+
+    const result = await service.handleMessage(BASE_REQUEST);
+
+    expect(result.replyText).toContain('porcentaje');
+  });
+
+  it('un monto en cero tampoco pasa', async () => {
+    const { service, financeData } = buildService(
+      nomina({
+        workerName: 'Carlos',
+        percentage: 40,
+        amount: 0,
+        date: null,
+      }),
+    );
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    expect(result.replyText).toContain('¿Cuánto le vas a pagar');
+    expect(financeData.payrolls).toHaveLength(0);
+  });
+
+  it('una nomina no se registra como gasto: no duplica la plata', async () => {
+    const { service, financeData } = buildService(
+      nomina({
+        workerName: 'Carlos',
+        percentage: 40,
+        amount: 800_000,
+        date: null,
+      }),
+    );
+
+    await service.handleMessage({ ...BASE_REQUEST, persist: true });
+
+    expect(financeData.saved).toHaveLength(0);
+  });
+
+  it('respeta la fecha que diga el usuario', async () => {
+    const { financeData, turno } = conversacionDeNomina();
+
+    await turno(
+      nomina({
+        workerName: 'Carlos',
+        percentage: 40,
+        amount: 800_000,
+        date: '2026-10-30',
+      }),
+    );
+    await turno({
+      type: 'confirmation',
+      confirmed: true,
+      responseText: 'ok',
+    });
+
+    expect(financeData.payrolls[0].date).toBe('2026-10-30');
+  });
+});
+
+// ===========================================================================
+// SCRUM-37 · marcar un suministro como pendiente de pago
+// ===========================================================================
+
+/**
+ * Siete datos —proveedor, suministro, monto, fecha limite, modalidad, cuotas
+ * e interes— que por WhatsApp nunca llegan juntos. Se piden de a uno, el
+ * borrador sobrevive entre turnos, y antes de guardar se ensena el plan de
+ * cuotas ya calculado: el interes mensual sobre saldo no se adivina de
+ * cabeza, y descubrir en la tercera cuota que el total era otro es justo lo
+ * que hay que evitar.
+ */
+function conversacionDeDeuda() {
+  const financeData = fakeFinanceData([]);
+  const state = new ConversationStateService();
+
+  const turno = (
+    intent: Partial<WhatsAppIntentOutput>,
+    request: Record<string, unknown> = {},
+  ) =>
+    new WhatsAppMessageService(
+      fakeLlm(intent),
+      financeData,
+      state,
+    ).handleMessage({ ...BASE_REQUEST, persist: true, ...request });
+
+  return { financeData, turno };
+}
+
+/** Una fecha limite valida: tiene que ser futura. */
+const LIMITE = sumarDias(fechaColombiana(new Date()), 60);
+
+const deuda = (parcial: Record<string, unknown>) => ({
+  type: 'supply_debt' as const,
+  movements: [],
+  supplyDebt: {
+    supplierName: null,
+    supply: null,
+    amount: null,
+    dueDate: null,
+    mode: null,
+    installments: null,
+    interestRate: null,
+    ...parcial,
+  },
+  responseText: 'ok',
+});
+
+const COMPLETA = {
+  supplierName: 'Molinos del Valle',
+  supply: 'Harina y levadura',
+  amount: 1_200_000,
+  dueDate: LIMITE,
+  mode: 'unico',
+  interestRate: 0,
+};
+
+describe('WhatsAppMessageService · suministro pendiente de pago', () => {
+  it('pregunta el proveedor cuando el mensaje no lo dice', async () => {
+    const { turno, financeData } = conversacionDeDeuda();
+
+    const result = await turno(deuda({}));
+
+    expect(result.replyText).toContain(
+      '¿A qué proveedor le quedaste debiendo?',
+    );
+    expect(financeData.supplyDebts).toHaveLength(0);
+  });
+
+  it('va pidiendo de a un dato, nombrando al proveedor', async () => {
+    const { turno } = conversacionDeDeuda();
+
+    const conProveedor = await turno(
+      deuda({ supplierName: 'Molinos del Valle' }),
+    );
+    expect(conProveedor.replyText).toContain('¿Qué le compraste a Molinos');
+
+    const conSuministro = await turno(deuda({ supply: 'Harina' }));
+    expect(conSuministro.replyText).toContain('¿Cuánto le quedaste debiendo');
+
+    const conMonto = await turno(deuda({ amount: 1_200_000 }));
+    expect(conMonto.replyText).toContain('¿Para cuándo tienes que pagarle?');
+  });
+
+  it('sugiere como decir la fecha, en lenguaje de persona', async () => {
+    const { turno } = conversacionDeDeuda();
+
+    const result = await turno(
+      deuda({
+        supplierName: 'Molinos',
+        supply: 'Harina',
+        amount: 1_200_000,
+      }),
+    );
+
+    expect(result.replyText).toContain('el 30 de noviembre');
+    expect(result.replyText).toContain('en 15 días');
+  });
+
+  it('no pregunta cuantas cuotas si el pago es unico', async () => {
+    // Preguntar "¿en cuántas cuotas?" a quien acaba de decir que paga de una
+    // sola vez es un turno regalado.
+    const { turno } = conversacionDeDeuda();
+
+    const result = await turno(
+      deuda({ ...COMPLETA, interestRate: null, mode: 'unico' }),
+    );
+
+    expect(result.replyText).toContain('interés');
+    expect(result.replyText).not.toContain('cuántas cuotas');
+  });
+
+  it('en cuotas si la pregunta', async () => {
+    const { turno } = conversacionDeDeuda();
+
+    const result = await turno(
+      deuda({ ...COMPLETA, mode: 'cuotas', interestRate: null }),
+    );
+
+    expect(result.replyText).toContain('¿En cuántas cuotas?');
+  });
+
+  it('"sin interés" es una respuesta, no un dato que falte', async () => {
+    // interestRate 0 significa "ya contestó que no le cobran"; null significa
+    // "todavía no se lo he preguntado". Si no se distinguieran, quien compra
+    // sin recargo se quedaria atascado en la misma pregunta para siempre.
+    const { turno } = conversacionDeDeuda();
+
+    const result = await turno(deuda({ ...COMPLETA, interestRate: 0 }));
+
+    expect(result.replyText).toContain('¿Lo registro así?');
+    expect(result.replyText).toContain('sin interés');
+  });
+
+  it('muestra el resumen con el plan de cuotas y pide confirmacion', async () => {
+    const { turno, financeData } = conversacionDeDeuda();
+
+    const result = await turno(
+      deuda({
+        ...COMPLETA,
+        amount: 1_200_000,
+        mode: 'cuotas',
+        installments: 3,
+        interestRate: 0,
+      }),
+    );
+
+    expect(result.replyText).toContain('Plan de cuotas:');
+    expect(result.replyText).toContain('3 cuotas mensuales');
+    // Sin interes, tres cuotas iguales de 400.000.
+    expect(result.replyText).toContain('$400.000');
+    expect(result.replyText).toContain('¿Lo registro así?');
+    expect(financeData.supplyDebts).toHaveLength(0);
+  });
+
+  it('el resumen dice cuanto suma el interes', async () => {
+    const { turno } = conversacionDeDeuda();
+
+    const result = await turno(
+      deuda({
+        ...COMPLETA,
+        amount: 1_000_000,
+        mode: 'cuotas',
+        installments: 4,
+        interestRate: 2,
+      }),
+    );
+
+    expect(result.replyText).toContain('2% mensual');
+    expect(result.replyText).toContain('de interés)');
+  });
+
+  it('guarda solo despues del si', async () => {
+    const { turno, financeData } = conversacionDeDeuda();
+
+    await turno(deuda({ ...COMPLETA, mode: 'cuotas', installments: 3 }));
+    const result = await turno({
+      type: 'confirmation',
+      confirmed: true,
+      responseText: 'ok',
+    });
+
+    expect(financeData.supplyDebts).toHaveLength(1);
+    expect(financeData.supplyDebts[0]).toMatchObject({
+      businessId: 'b1',
+      supplierName: 'Molinos del Valle',
+      supply: 'Harina y levadura',
+      amount: 1_200_000,
+      dueDate: LIMITE,
+      mode: 'cuotas',
+      installments: 3,
+    });
+    expect(result.replyText).toContain('le debes');
+    expect(result.replyText).toContain('Molinos del Valle');
+  });
+
+  it('un no la descarta sin guardar nada', async () => {
+    const { turno, financeData } = conversacionDeDeuda();
+
+    await turno(deuda(COMPLETA));
+    const result = await turno({
+      type: 'confirmation',
+      confirmed: false,
+      responseText: 'ok',
+    });
+
+    expect(financeData.supplyDebts).toHaveLength(0);
+    expect(result.replyText).toContain('no registré esa deuda');
+  });
+
+  it('una fecha limite ya vencida se trata como si no la hubiera dicho', async () => {
+    // Un plazo que ya paso no es un plazo, y el plan de cuotas que saldria de
+    // el nace mal.
+    const { turno } = conversacionDeDeuda();
+
+    const result = await turno(
+      deuda({
+        ...COMPLETA,
+        dueDate: sumarDias(fechaColombiana(new Date()), -3),
+      }),
+    );
+
+    expect(result.replyText).toContain('¿Para cuándo tienes que pagarle?');
+  });
+
+  it('no la registra ademas como gasto: la plata sale cuando se pague', async () => {
+    const { turno, financeData } = conversacionDeDeuda();
+
+    await turno(deuda(COMPLETA));
+    await turno({ type: 'confirmation', confirmed: true, responseText: 'ok' });
+
+    expect(financeData.saved).toHaveLength(0);
+  });
+
+  it('con persist en false responde igual pero no toca la base', async () => {
+    const { turno, financeData } = conversacionDeDeuda();
+
+    await turno(deuda(COMPLETA), { persist: false });
+    const result = await turno(
+      { type: 'confirmation', confirmed: true, responseText: 'ok' },
+      { persist: false },
+    );
+
+    expect(financeData.supplyDebts).toHaveLength(0);
+    expect(result.replyText).toContain('le debes');
+  });
+});
+
+// ===========================================================================
+// SCRUM-28 · dar de alta un producto por conversacion
+// ===========================================================================
+
+/**
+ * Nombre, precio de venta y precio de compra son obligatorios; categoria y
+ * stock no. Nada entra al catalogo sin que el usuario vea el resumen —con el
+ * margen— y diga que si: un precio mal dictado aqui contamina despues todos
+ * los reportes de margen, y nadie vuelve a mirar si el producto estaba bien.
+ */
+function conversacionDeProducto() {
+  const financeData = fakeFinanceData([]);
+  const state = new ConversationStateService();
+
+  const turno = (
+    intent: Partial<WhatsAppIntentOutput>,
+    request: Record<string, unknown> = {},
+  ) =>
+    new WhatsAppMessageService(
+      fakeLlm(intent),
+      financeData,
+      state,
+    ).handleMessage({ ...BASE_REQUEST, persist: true, ...request });
+
+  return { financeData, turno };
+}
+
+const producto = (parcial: Record<string, unknown>) => ({
+  type: 'product' as const,
+  movements: [],
+  product: {
+    name: null,
+    salePrice: null,
+    costPrice: null,
+    category: null,
+    stock: null,
+    ...parcial,
+  },
+  responseText: 'ok',
+});
+
+const COMPLETO = { name: 'Arroz Diana', salePrice: 5_000, costPrice: 3_500 };
+
+describe('WhatsAppMessageService · alta de producto', () => {
+  it('pide el nombre cuando el mensaje no lo dice', async () => {
+    const { turno, financeData } = conversacionDeProducto();
+
+    const result = await turno(producto({}));
+
+    expect(result.replyText).toContain('¿Qué producto quieres agregar?');
+    expect(financeData.products).toHaveLength(0);
+  });
+
+  it('con el nombre, pregunta en cuanto lo vende', async () => {
+    const { turno } = conversacionDeProducto();
+
+    const result = await turno(producto({ name: 'Arroz Diana' }));
+
+    expect(result.replyText).toContain('¿En cuánto vendes Arroz Diana?');
+  });
+
+  it('despues pregunta cuanto le cuesta, y dice para que', async () => {
+    // Si no explica por que lo pide, el usuario contesta "no sé" y se pierde
+    // el unico dato que hace util el catalogo.
+    const { turno } = conversacionDeProducto();
+
+    await turno(producto({ name: 'Arroz Diana' }));
+    const result = await turno(producto({ salePrice: 5_000 }));
+
+    expect(result.replyText).toContain('¿En cuánto te cuesta Arroz Diana?');
+    expect(result.replyText).toContain('cuánto te deja');
+  });
+
+  it('no olvida lo que ya le dijeron en los turnos anteriores', async () => {
+    const { turno } = conversacionDeProducto();
+
+    await turno(producto({ name: 'Arroz Diana' }));
+    await turno(producto({ salePrice: 5_000 }));
+    const tercero = await turno(producto({ costPrice: 3_500 }));
+
+    expect(tercero.replyText).toContain('Arroz Diana');
+    expect(tercero.replyText).toContain('$5.000');
+    expect(tercero.replyText).toContain('$3.500');
+  });
+
+  it('muestra el resumen con el margen y pide confirmacion', async () => {
+    const { turno, financeData } = conversacionDeProducto();
+
+    const result = await turno(producto(COMPLETO));
+
+    expect(result.replyText).toContain('Voy a agregar este producto');
+    expect(result.replyText).toContain('Te deja: $1.500');
+    expect(result.replyText).toContain('¿Lo agrego así?');
+    expect(financeData.products).toHaveLength(0);
+  });
+
+  it('avisa cuando los precios no dejan ganancia, pero no bloquea', async () => {
+    // Hay quien vende a perdida a proposito; lo normal es que sea un precio
+    // mal dictado, y en ese caso el resumen es la ultima oportunidad de verlo.
+    const { turno } = conversacionDeProducto();
+
+    const result = await turno(
+      producto({ name: 'Arroz', salePrice: 3_000, costPrice: 3_500 }),
+    );
+
+    expect(result.replyText).toContain('con esos precios no ganas nada');
+    expect(result.replyText).toContain('¿Lo agrego así?');
+  });
+
+  it('sin categoria lo guarda igual, sin clasificar', async () => {
+    // La columna es obligatoria en la base; que el usuario no la diga no
+    // puede impedir que el producto entre.
+    const { turno, financeData } = conversacionDeProducto();
+
+    await turno(producto(COMPLETO));
+    await turno({ type: 'confirmation', confirmed: true, responseText: 'ok' });
+
+    expect(financeData.products[0]).toMatchObject({
+      name: 'Arroz Diana',
+      category: 'Sin categoría',
+      stock: 0,
+    });
+  });
+
+  it('respeta la categoria y el stock cuando si los dice', async () => {
+    const { turno, financeData } = conversacionDeProducto();
+
+    await turno(producto({ ...COMPLETO, category: 'Abarrotes', stock: 20 }));
+    await turno({ type: 'confirmation', confirmed: true, responseText: 'ok' });
+
+    expect(financeData.products[0]).toMatchObject({
+      category: 'Abarrotes',
+      stock: 20,
+    });
+  });
+
+  it('guarda solo despues del si, y lo dice claro', async () => {
+    const { turno, financeData } = conversacionDeProducto();
+
+    await turno(producto(COMPLETO));
+    const result = await turno({
+      type: 'confirmation',
+      confirmed: true,
+      responseText: 'ok',
+    });
+
+    expect(financeData.products).toHaveLength(1);
+    expect(financeData.products[0]).toMatchObject({
+      businessId: 'b1',
+      name: 'Arroz Diana',
+      salePrice: 5_000,
+      costPrice: 3_500,
+    });
+    expect(result.replyText).toContain('Agregué Arroz Diana a tu catálogo');
+  });
+
+  it('un no lo descarta sin guardar nada', async () => {
+    const { turno, financeData } = conversacionDeProducto();
+
+    await turno(producto(COMPLETO));
+    const result = await turno({
+      type: 'confirmation',
+      confirmed: false,
+      responseText: 'ok',
+    });
+
+    expect(financeData.products).toHaveLength(0);
+    expect(result.replyText).toContain('no lo agregué al catálogo');
+  });
+
+  it('si el producto ya existe lo dice, y no crea un segundo', async () => {
+    // Dos productos con el mismo nombre en la misma sede dejan la venta sin
+    // saber a cual descontarle el stock.
+    const { turno, financeData } = conversacionDeProducto();
+
+    await turno(producto(COMPLETO));
+    await turno({ type: 'confirmation', confirmed: true, responseText: 'ok' });
+
+    await turno(producto({ ...COMPLETO, salePrice: 6_000 }));
+    const result = await turno({
+      type: 'confirmation',
+      confirmed: true,
+      responseText: 'ok',
+    });
+
+    expect(financeData.products).toHaveLength(1);
+    expect(result.replyText).toContain('Ya tienes un producto llamado');
+    expect(result.replyText).toContain('desde el panel');
+  });
+
+  it('el duplicado no distingue mayusculas', async () => {
+    const { turno, financeData } = conversacionDeProducto();
+
+    await turno(producto(COMPLETO));
+    await turno({ type: 'confirmation', confirmed: true, responseText: 'ok' });
+
+    await turno(producto({ ...COMPLETO, name: 'arroz diana' }));
+    const result = await turno({
+      type: 'confirmation',
+      confirmed: true,
+      responseText: 'ok',
+    });
+
+    expect(financeData.products).toHaveLength(1);
+    expect(result.replyText).toContain('Ya tienes un producto llamado');
+  });
+
+  it('dar de alta un producto no registra ningun movimiento', async () => {
+    // No se compro ni se vendio nada: solo se anoto que el producto existe.
+    const { turno, financeData } = conversacionDeProducto();
+
+    await turno(producto(COMPLETO));
+    await turno({ type: 'confirmation', confirmed: true, responseText: 'ok' });
+
+    expect(financeData.saved).toHaveLength(0);
+  });
+
+  it('un precio en cero se trata como si no lo hubiera dicho', async () => {
+    const { turno } = conversacionDeProducto();
+
+    const result = await turno(producto({ name: 'Arroz Diana', salePrice: 0 }));
+
+    expect(result.replyText).toContain('¿En cuánto vendes');
+  });
+
+  it('con persist en false responde igual pero no toca la base', async () => {
+    const { turno, financeData } = conversacionDeProducto();
+
+    await turno(producto(COMPLETO), { persist: false });
+    const result = await turno(
+      { type: 'confirmation', confirmed: true, responseText: 'ok' },
+      { persist: false },
+    );
+
+    expect(financeData.products).toHaveLength(0);
+    expect(result.replyText).toContain('Agregué Arroz Diana');
   });
 });

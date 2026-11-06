@@ -19,6 +19,12 @@ export type MessageIntentType =
   | 'breakdown'
   /** Reparto de utilidades entre el dueno y los trabajadores. */
   | 'profit_share'
+  /** Pago de nomina a un trabajador: nombre, porcentaje y monto. */
+  | 'payroll'
+  /** Un suministro que queda a deber al proveedor, con su plan de pagos. */
+  | 'supply_debt'
+  /** Alta de un producto en el catalogo de la sede. */
+  | 'product'
   /** Le pidieron algo que no son las finanzas del negocio (codigo, poemas...). */
   | 'out_of_scope'
   /** Pidio una funcion que solo existe en los planes pagos. */
@@ -45,7 +51,25 @@ export type MessageIntentType =
 /** Solo estas tres intenciones producen un movimiento contable. */
 export type TransactionType = 'income' | 'expense' | 'investment';
 
-export type QueryPeriod = 'day' | 'week' | 'month';
+/**
+ * El periodo por el que pregunta el usuario. El rango real lo calcula
+ * `periodRange`, en dias colombianos.
+ *
+ * Antes solo existian los tres "en curso" (hoy, esta semana, este mes) y el
+ * modelo metia "la semana pasada" en uno de ellos: el 4 de noviembre eso daba
+ * del 1 o del 2 de noviembre en adelante, y los registros de finales de
+ * octubre desaparecian de la respuesta. Los periodos hacia atras se nombran
+ * aparte y el rango cruza el cambio de mes o de año sin recortarse.
+ */
+export type QueryPeriod =
+  | 'day'
+  | 'yesterday'
+  | 'week'
+  | 'last_week'
+  | 'month'
+  | 'last_month'
+  /** "Ultimos N dias", contando hoy. */
+  | `last_${number}_days`;
 
 /** Categorias cerradas por tipo de movimiento. */
 export const EXPENSE_CATEGORIES = [
@@ -189,6 +213,15 @@ export interface MovementDraft {
   /** A quien se le fio, cuando se menciona. */
   customerName: string | null;
   /**
+   * Fecha maxima de pago acordada para un fiado, en YYYY-MM-DD.
+   *
+   * Solo aplica cuando `isCredit` es true, y entonces es obligatoria: sin
+   * plazo no hay deuda vencida, nadie sabe cuando cobrar y el recordatorio de
+   * fiados no tiene contra que comparar. null = el usuario no la dijo todavia
+   * y el sistema se la pregunta antes de guardar.
+   */
+  dueDate: string | null;
+  /**
    * Cuantas unidades, cuando el mensaje o la factura lo dicen.
    *
    * No cambia el monto (ese ya viene total), pero se conserva en la
@@ -212,6 +245,78 @@ export interface MovementDraft {
  * El monto puede faltar: "Rosa ya me pago" no dice cuanto, y lo correcto es
  * saldar toda su deuda, no adivinar una cifra.
  */
+/**
+ * Un pago de nomina a medio armar.
+ *
+ * Los tres datos se piden de a uno, asi que el borrador viaja incompleto entre
+ * turnos: cada respuesta del usuario rellena un hueco y el resto se conserva.
+ * Pedirlos todos juntos en un solo mensaje de WhatsApp termina en que la gente
+ * contesta solo el primero.
+ */
+export interface PayrollDraft {
+  /** A quien se le paga. */
+  workerName: string | null;
+  /** Porcentaje acordado, de 0 a 100. */
+  percentage: number | null;
+  /** Lo que se le paga de verdad, en la moneda del negocio. */
+  amount: number | null;
+  /** Fecha del pago en YYYY-MM-DD. null = hoy. */
+  date: string | null;
+}
+
+/**
+ * Una deuda con proveedor a medio armar.
+ *
+ * Son seis datos y casi nunca llegan juntos: el mensaje suele traer el
+ * proveedor y poco mas ("la harina de Molinos quedo a deber"). El borrador
+ * viaja entre turnos y cada respuesta rellena un hueco.
+ */
+export interface SupplyDebtDraft {
+  /** A quien se le debe. Sin proveedor no hay a quien pagarle. */
+  supplierName: string | null;
+  /** Que se compro: "harina y levadura". */
+  supply: string | null;
+  /** Lo que se debe en total, antes de intereses. */
+  amount: number | null;
+  /** Fecha limite de pago en YYYY-MM-DD. Con cuotas, la de la ULTIMA. */
+  dueDate: string | null;
+  /** 'unico' = un solo pago; 'cuotas' = varias mensuales. */
+  mode: 'unico' | 'cuotas' | null;
+  /** Cuantas cuotas, cuando la modalidad es 'cuotas'. */
+  installments: number | null;
+  /**
+   * Interes mensual en porcentaje. 0 = sin interes.
+   *
+   * Se distingue de null a proposito: null es "no lo ha dicho" y 0 es "dijo
+   * que no cobra interes". Sin esa diferencia, quien compra sin recargo se
+   * queda atascado en la misma pregunta.
+   */
+  interestRate: number | null;
+}
+
+/**
+ * Un producto del catalogo a medio armar.
+ *
+ * Obligatorios: nombre, precio de venta y precio de compra. Son los tres que
+ * la tabla exige y sin los cuales el producto no sirve para nada: sin precio
+ * de compra no hay margen, y un catalogo sin margen no responde la unica
+ * pregunta que el dueno le hace ("¿que me deja mas?").
+ *
+ * Categoria y stock son opcionales: se pueden completar despues desde el
+ * panel, y pedirlos por WhatsApp alargaria la conversacion sin necesidad.
+ */
+export interface ProductDraft {
+  name: string | null;
+  /** A cuanto lo vende. */
+  salePrice: number | null;
+  /** A cuanto lo compra. */
+  costPrice: number | null;
+  /** Opcional: si no la dice, se guarda sin clasificar. */
+  category: string | null;
+  /** Opcional: unidades con las que arranca. null = 0. */
+  stock: number | null;
+}
+
 export interface PaymentDraft {
   /** A quien se le cobro. Sin nombre no hay a que deuda aplicarlo. */
   customerName: string | null;
@@ -336,6 +441,12 @@ export interface MessageIntent {
   correction: CorrectionRequest | null;
   /** El abono, cuando el mensaje avisa que le pagaron un fiado. */
   payment: PaymentDraft | null;
+  /** Pago de nomina detectado. null en todo lo demas. */
+  payroll: PayrollDraft | null;
+  /** Suministro que queda pendiente de pago. null en todo lo demas. */
+  supplyDebt: SupplyDebtDraft | null;
+  /** Producto que se esta dando de alta. null en todo lo demas. */
+  product: ProductDraft | null;
   /**
    * Respuesta a una pregunta de si o no. null cuando el mensaje no contesta
    * ninguna, o cuando contesto algo que no es ni si ni no.
@@ -406,6 +517,11 @@ export interface Transaction {
   pendingAmount?: number | null;
   /** Cliente al que se le fio. */
   customerName?: string | null;
+  /**
+   * Fecha maxima de pago del fiado, en YYYY-MM-DD. La acuerda el usuario con
+   * su cliente y se la pregunta Luka al registrar. null en lo que no es fiado.
+   */
+  dueDate?: string | null;
   productName?: string | null;
   productId?: string | null;
   quantity?: number | null;

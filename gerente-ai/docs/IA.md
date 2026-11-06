@@ -328,7 +328,7 @@ Dos endpoints que consume n8n, ambos detrás de `N8nApiKeyGuard`:
 | Endpoint | Cuándo | Qué devuelve |
 | --- | --- | --- |
 | `GET /ai/recordatorios/nocturno` | Cron 21:00 | Sedes que hoy no registraron ningún movimiento. |
-| `GET /ai/recordatorios/fiados` | Cron 10:00 | Fiados con saldo y 5 días sin cobrar, con el texto ya armado. |
+| `GET /ai/recordatorios/fiados` | Cron 10:00 | Fiados abiertos cuyo vencimiento está dentro de los próximos cinco días, con el texto ya armado. |
 
 Los dos preguntan lo mismo primero: **¿a quién puedo escribirle?** Esa respuesta
 vive en

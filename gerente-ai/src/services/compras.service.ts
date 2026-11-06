@@ -8,6 +8,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from './prisma.service';
 import { NegociosService } from './negocios.service';
 import { CreateCompraDto } from '../dto/compras/create-compra.dto';
+import { calcularPlanDePagos } from './plan-pagos-proveedor';
 
 @Injectable()
 export class ComprasService {
@@ -31,12 +32,33 @@ export class ComprasService {
     const fechaVencimiento = dto.fechaVencimiento
       ? new Date(dto.fechaVencimiento)
       : null;
+    const numeroCuotas = dto.numeroCuotas ?? 1;
+    const interesMensualPorcentaje = dto.interesMensualPorcentaje ?? 0;
     if (fechaVencimiento && Number.isNaN(fechaVencimiento.getTime())) {
       throw new BadRequestException('La fecha de vencimiento no es válida');
     }
-    if (fechaVencimiento && !proveedorId) {
+    if (
+      !Number.isInteger(numeroCuotas) ||
+      numeroCuotas < 1 ||
+      numeroCuotas > 60
+    ) {
+      throw new BadRequestException('El número de cuotas debe estar entre 1 y 60');
+    }
+    if (
+      !Number.isFinite(interesMensualPorcentaje) ||
+      interesMensualPorcentaje < 0 ||
+      interesMensualPorcentaje > 100
+    ) {
+      throw new BadRequestException('El interés mensual debe estar entre 0 y 100');
+    }
+    if ((fechaVencimiento || dto.numeroCuotas || interesMensualPorcentaje) && !proveedorId) {
       throw new BadRequestException(
         'Una compra a crédito requiere un proveedor',
+      );
+    }
+    if ((dto.numeroCuotas || interesMensualPorcentaje) && !fechaVencimiento) {
+      throw new BadRequestException(
+        'Un plan de pagos requiere la fecha de vencimiento de la primera cuota',
       );
     }
     if (proveedorId) {
@@ -103,6 +125,19 @@ export class ComprasService {
         );
       }
 
+      const cuotas = fechaVencimiento && proveedorId
+        ? calcularPlanDePagos(
+            total.toNumber(),
+            numeroCuotas,
+            interesMensualPorcentaje,
+            fechaVencimiento,
+          )
+        : [];
+      const saldoFinanciado = cuotas.reduce(
+        (saldo, cuota) => saldo.add(new Prisma.Decimal(cuota.monto)),
+        new Prisma.Decimal(0),
+      );
+
       // Sumar stock nunca puede dejarlo negativo, así que aquí no hace falta el
       // update condicional que sí usa Ventas. El precioCompra queda en el último
       // costo pagado; el histórico de cada compra vive en DetalleCompra.costo.
@@ -129,14 +164,31 @@ export class ComprasService {
                     proveedorId,
                     sedeId: dto.sedeId,
                     montoOriginal: total,
-                    saldoPendiente: total,
-                    fechaVencimiento,
+                    saldoPendiente: saldoFinanciado,
+                    fechaVencimiento: cuotas[0].fechaVencimiento,
+                    numeroCuotas,
+                    interesMensualPorcentaje: new Prisma.Decimal(
+                      interesMensualPorcentaje,
+                    ),
+                    cuotas: {
+                      create: cuotas.map((cuota) => ({
+                        numero: cuota.numero,
+                        capital: new Prisma.Decimal(cuota.capital),
+                        interes: new Prisma.Decimal(cuota.interes),
+                        monto: new Prisma.Decimal(cuota.monto),
+                        saldoPendiente: new Prisma.Decimal(cuota.monto),
+                        fechaVencimiento: cuota.fechaVencimiento,
+                      })),
+                    },
                   },
                 },
               }
             : {}),
         },
-        include: { detalles: true, cuentaPorPagar: true },
+        include: {
+          detalles: true,
+          cuentaPorPagar: { include: { cuotas: true } },
+        },
       });
     });
   }

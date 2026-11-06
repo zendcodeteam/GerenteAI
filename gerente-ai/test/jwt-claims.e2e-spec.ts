@@ -7,6 +7,7 @@ import { AuthService } from '../src/auth/auth.service';
 import { MailService } from '../src/auth/mail/mail.service';
 import { AUDIENCIA, JWT_ISSUER } from '../src/auth/jwt-claims';
 import { NegociosService } from '../src/services/negocios.service';
+import { UserContextCacheService } from '../src/services/user-context-cache.service';
 import { PlanesService } from '../src/services/planes.service';
 import { PrismaService } from '../src/services/prisma.service';
 import { limpiar } from './helpers/contexto';
@@ -54,6 +55,7 @@ describe('Emisor y audiencia por tipo de token (contra Postgres real)', () => {
         AuthService,
         PrismaService,
         NegociosService,
+        UserContextCacheService,
         PlanesService,
         {
           provide: JwtService,

@@ -9,6 +9,7 @@ import type { JwtPayload } from '../src/auth/interfaces/jwt-payload.interface';
 import { NegociosService } from '../src/services/negocios.service';
 import { PlanesService } from '../src/services/planes.service';
 import { PrismaService } from '../src/services/prisma.service';
+import { UserContextCacheService } from '../src/services/user-context-cache.service';
 import { limpiar } from './helpers/contexto';
 
 /**
@@ -49,6 +50,7 @@ describe('Reseteo de contraseña y sesiones (contra Postgres real)', () => {
         AuthService,
         PrismaService,
         NegociosService,
+        UserContextCacheService,
         PlanesService,
         {
           provide: JwtService,
@@ -65,8 +67,14 @@ describe('Reseteo de contraseña y sesiones (contra Postgres real)', () => {
     auth = moduleRef.get(AuthService);
     jwt = moduleRef.get(JwtService);
     await prisma.$connect();
-    estrategia = new JwtStrategy(prisma);
+    // La MISMA instancia que usa AuthService, no una nueva: en la app el
+    // modulo de Prisma es @Global y hay una sola cache compartida. Con dos
+    // instancias, invalidar al cambiar la contrasena no llegaba a la
+    // estrategia y la sesion vieja seguia sirviendo... solo en la prueba.
+    const cache = moduleRef.get(UserContextCacheService);
+    estrategia = new JwtStrategy(prisma, cache);
     cerrar = async () => {
+      cache.onModuleDestroy();
       await prisma.$disconnect();
       await moduleRef.close();
     };

@@ -73,6 +73,12 @@ describe('Fiados detallados (contra Postgres real)', () => {
       expect(dias).toBe(15);
     });
 
+    it('mantiene el saldo pendiente del cliente alineado con el fiado registrado', async () => {
+      await fiar(2);
+
+      expect(await saldoDe(ctx.prisma, s.clienteAId)).toBe(3001);
+    });
+
     it('una venta de contado no lleva deuda ni vencimiento', async () => {
       const venta = await ctx.ventas.create(s.duenoId, 'CLIENTE', {
         sedeId: s.sedeAId,
@@ -95,6 +101,67 @@ describe('Fiados detallados (contra Postgres real)', () => {
           detalles: [{ productoId: s.gaseosaId, cantidad: 1 }],
         }),
       ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('backfill de datos históricos', () => {
+    it('recalcula el saldo del cliente con la suma de sus fiados aún abiertos', async () => {
+      const ventaAntigua = await fiar(1);
+      const ventaNueva = await fiar(1);
+      await ctx.abonos.create(s.duenoId, 'CLIENTE', {
+        clienteId: s.clienteAId,
+        ventaId: ventaAntigua.id,
+        monto: 1000,
+      });
+      await ctx.prisma.cliente.update({
+        where: { id: s.clienteAId },
+        data: { saldoPendiente: 0 },
+      });
+
+      await ctx.prisma.$executeRaw`
+        UPDATE "Cliente" c
+        SET "saldoPendiente" = COALESCE(
+          (
+            SELECT SUM(v."saldoPendiente")
+            FROM "Venta" v
+            WHERE v."clienteId" = c.id
+              AND v."saldoPendiente" > 0
+          ),
+          0
+        )
+      `;
+
+      expect(await saldoDe(ctx.prisma, s.clienteAId)).toBe(2001);
+      expect(await saldoDeLaVenta(ventaAntigua.id)).toBe(500.5);
+      expect(await saldoDeLaVenta(ventaNueva.id)).toBe(1500.5);
+    });
+
+    it('asigna 30 días a los fiados sin vencimiento y conserva avisos ya enviados', async () => {
+      const venta = await fiar(1);
+      const fechaVenta = venta.fecha;
+      await ctx.prisma.venta.update({
+        where: { id: venta.id },
+        data: { fechaVencimiento: null },
+      });
+      await ctx.prisma.recordatorioFiado.create({
+        data: { ventaId: venta.id, saldo: venta.saldoPendiente },
+      });
+
+      await ctx.prisma.$executeRaw`
+        UPDATE "Venta"
+        SET "fechaVencimiento" = "fecha" + INTERVAL '30 days'
+        WHERE "tipo" = 'FIADO'
+          AND "fechaVencimiento" IS NULL
+      `;
+
+      const actualizada = await ctx.prisma.venta.findUnique({
+        where: { id: venta.id },
+        include: { recordatorios: true },
+      });
+      expect(actualizada!.fechaVencimiento!.getTime()).toBe(
+        fechaVenta.getTime() + 30 * 86_400_000,
+      );
+      expect(actualizada!.recordatorios).not.toBeNull();
     });
   });
 

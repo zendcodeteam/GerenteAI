@@ -15,7 +15,11 @@ import type {
   FinanceDataPort,
   PaymentRequest,
   PaymentResult,
+  PayrollPayment,
+  ProductRegistration,
+  ProductRegistrationResult,
   ProfitDistribution,
+  SupplyDebt,
   TransactionChanges,
   TransactionQuery,
 } from '../ports/finance-data.port';
@@ -35,6 +39,9 @@ export class InMemoryFinanceDataAdapter implements FinanceDataPort {
 
   private readonly transactions: Transaction[] = seedTransactions();
   private readonly profitDistributions: ProfitDistribution[] = [];
+  readonly payrolls: PayrollPayment[] = [];
+  readonly products: ProductRegistration[] = [];
+  readonly supplyDebts: SupplyDebt[] = [];
 
   getSnapshot(businessId: string): Promise<BusinessSnapshot> {
     const rows = this.transactions.filter(
@@ -254,6 +261,31 @@ export class InMemoryFinanceDataAdapter implements FinanceDataPort {
         ),
       ),
     };
+  }
+
+  savePayroll(payment: PayrollPayment): Promise<PayrollPayment> {
+    this.payrolls.push(payment);
+    return Promise.resolve(payment);
+  }
+
+  saveSupplyDebt(debt: SupplyDebt): Promise<SupplyDebt> {
+    this.supplyDebts.push(debt);
+    return Promise.resolve(debt);
+  }
+
+  saveProduct(
+    product: ProductRegistration,
+  ): Promise<ProductRegistrationResult> {
+    const repetido = this.products.some(
+      (fila) =>
+        fila.businessId === product.businessId &&
+        fila.name.toLowerCase() === product.name.toLowerCase(),
+    );
+
+    if (repetido) return Promise.resolve({ created: false, product });
+
+    this.products.push(product);
+    return Promise.resolve({ created: true, product });
   }
 
   saveProfitDistribution(
