@@ -12,6 +12,7 @@ import {
 } from '@prisma/client';
 
 import { PrismaService } from '../../../services/prisma.service';
+import { normalizarNombreDeProducto } from '../domain/texto-producto';
 import {
   fechaColombiana,
   finDelDia,
@@ -1108,10 +1109,10 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
       const products = await this.prisma.producto.findMany({
         where: { sedeId: transaction.businessId },
       });
-      const query = normalizeProductText(transaction.productName!);
+      const query = normalizarNombreDeProducto(transaction.productName!);
       const matches = products.filter((product) =>
         [product.nombre, ...product.alias].some(
-          (value) => normalizeProductText(value) === query,
+          (value) => normalizarNombreDeProducto(value) === query,
         ),
       );
 
@@ -1227,15 +1228,6 @@ const SIN_CLIENTE = 'sin-cliente';
 
 function sumarDiasAFecha(fecha: Date, dias: number): Date {
   return new Date(fecha.getTime() + dias * UN_DIA_MS);
-}
-
-function normalizeProductText(value: string): string {
-  return value
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, ' ');
 }
 
 /** Dias completos entre dos fechas YYYY-MM-DD. Nunca negativo. */

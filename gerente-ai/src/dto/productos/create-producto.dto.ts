@@ -1,5 +1,6 @@
 import {
   IsArray,
+  IsBoolean,
   IsInt,
   IsNotEmpty,
   IsNumber,
@@ -104,6 +105,20 @@ export class CreateProductoDto {
   @IsArray({ message: 'Los alias deben ser un arreglo de cadenas' })
   @IsString({ each: true, message: 'Cada alias debe ser una cadena de texto' })
   alias?: string[];
+
+  /**
+   * Visto bueno para registrar el producto a pérdida (precio de venta por
+   * debajo del costo).
+   *
+   * NO se guarda en la base: es una decisión del momento de la petición. Está
+   * aquí porque el `ValidationPipe` corre con `forbidNonWhitelisted`, así que
+   * un campo que no esté declarado hace rebotar la petición entera.
+   */
+  @IsOptional()
+  @IsBoolean({
+    message: 'aceptoVenderConPerdida debe ser verdadero o falso',
+  })
+  aceptoVenderConPerdida?: boolean;
 
   @IsString({ message: 'La sede es obligatoria' })
   @IsNotEmpty({ message: 'La sede es obligatoria' })
