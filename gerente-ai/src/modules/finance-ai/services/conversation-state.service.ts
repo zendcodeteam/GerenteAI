@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 
 import type {
   PayrollDraft,
+  ProductDraft,
   QueryPeriod,
   SupplyDebtDraft,
   Transaction,
@@ -117,12 +118,27 @@ export interface PendingSupplyDebt {
   at: number;
 }
 
+/**
+ * Un producto del catalogo a medio armar.
+ *
+ * Mismo patron que la nomina y la deuda con proveedor: los datos se piden de
+ * a uno y el borrador sobrevive entre turnos.
+ */
+export interface PendingProduct {
+  kind: 'product';
+  draft: ProductDraft;
+  /** `datos` = falta algo. `confirmacion` = ya vio el resumen y falta el si. */
+  stage: 'datos' | 'confirmacion';
+  at: number;
+}
+
 export type PendingAction =
   | PendingCorrection
   | PendingDeletion
   | PendingRegistration
   | PendingPayroll
-  | PendingSupplyDebt;
+  | PendingSupplyDebt
+  | PendingProduct;
 
 @Injectable()
 export class ConversationStateService {
@@ -206,6 +222,17 @@ export class ConversationStateService {
     });
   }
 
+  recordarProducto(
+    businessId: string,
+    pendiente: Omit<PendingProduct, 'at' | 'kind'>,
+  ): void {
+    this.recordar(businessId, {
+      ...pendiente,
+      kind: 'product',
+      at: Date.now(),
+    });
+  }
+
   /** La pregunta abierta de esa sede, si sigue vigente. */
   pendiente(businessId: string): PendingAction | null {
     const abierta = this.pendientes.get(businessId);
@@ -242,6 +269,11 @@ export class ConversationStateService {
   deudaProveedorPendiente(businessId: string): PendingSupplyDebt | null {
     const abierta = this.pendiente(businessId);
     return abierta?.kind === 'supply-debt' ? abierta : null;
+  }
+
+  productoPendiente(businessId: string): PendingProduct | null {
+    const abierta = this.pendiente(businessId);
+    return abierta?.kind === 'product' ? abierta : null;
   }
 
   /** Se resolvio (o el usuario cambio de tema): deja de haber pregunta abierta. */

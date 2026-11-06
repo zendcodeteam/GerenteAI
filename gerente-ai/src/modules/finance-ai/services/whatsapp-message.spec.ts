@@ -12,6 +12,7 @@ import type {
   PaymentRequest,
   PaymentResult,
   PayrollPayment,
+  ProductRegistration,
   SupplyDebt,
   TransactionChanges,
 } from '../ports/finance-data.port';
@@ -125,6 +126,8 @@ interface FakeFinanceData extends FinanceDataPort {
   payrolls: PayrollPayment[];
   /** Deudas con proveedor guardadas, para comprobar cuando se registran. */
   supplyDebts: SupplyDebt[];
+  /** Productos dados de alta en el catalogo. */
+  products: ProductRegistration[];
   updated: { id: string; changes: TransactionChanges }[];
   deleted: string[];
   /** Abonos que se pidieron aplicar, para comprobar que llegan bien. */
@@ -142,6 +145,7 @@ function fakeFinanceData(rows: Transaction[] = SEED): FakeFinanceData {
   const distributions: ProfitDistribution[] = [];
   const payrolls: PayrollPayment[] = [];
   const supplyDebts: SupplyDebt[] = [];
+  const products: ProductRegistration[] = [];
   const updated: { id: string; changes: TransactionChanges }[] = [];
   const deleted: string[] = [];
 
@@ -192,6 +196,14 @@ function fakeFinanceData(rows: Transaction[] = SEED): FakeFinanceData {
     saveSupplyDebt: (debt: SupplyDebt) => {
       supplyDebts.push(debt);
       return Promise.resolve(debt);
+    },
+    products,
+    saveProduct: (producto: ProductRegistration) => {
+      const repetido = products.some(
+        (fila) => fila.name.toLowerCase() === producto.name.toLowerCase(),
+      );
+      if (!repetido) products.push(producto);
+      return Promise.resolve({ created: !repetido, product: producto });
     },
     updated,
     deleted,
@@ -4753,5 +4765,244 @@ describe('WhatsAppMessageService · suministro pendiente de pago', () => {
 
     expect(financeData.supplyDebts).toHaveLength(0);
     expect(result.replyText).toContain('le debes');
+  });
+});
+
+// ===========================================================================
+// SCRUM-28 · dar de alta un producto por conversacion
+// ===========================================================================
+
+/**
+ * Nombre, precio de venta y precio de compra son obligatorios; categoria y
+ * stock no. Nada entra al catalogo sin que el usuario vea el resumen —con el
+ * margen— y diga que si: un precio mal dictado aqui contamina despues todos
+ * los reportes de margen, y nadie vuelve a mirar si el producto estaba bien.
+ */
+function conversacionDeProducto() {
+  const financeData = fakeFinanceData([]);
+  const state = new ConversationStateService();
+
+  const turno = (
+    intent: Partial<WhatsAppIntentOutput>,
+    request: Record<string, unknown> = {},
+  ) =>
+    new WhatsAppMessageService(
+      fakeLlm(intent),
+      financeData,
+      state,
+    ).handleMessage({ ...BASE_REQUEST, persist: true, ...request });
+
+  return { financeData, turno };
+}
+
+const producto = (parcial: Record<string, unknown>) => ({
+  type: 'product' as const,
+  movements: [],
+  product: {
+    name: null,
+    salePrice: null,
+    costPrice: null,
+    category: null,
+    stock: null,
+    ...parcial,
+  },
+  responseText: 'ok',
+});
+
+const COMPLETO = { name: 'Arroz Diana', salePrice: 5_000, costPrice: 3_500 };
+
+describe('WhatsAppMessageService · alta de producto', () => {
+  it('pide el nombre cuando el mensaje no lo dice', async () => {
+    const { turno, financeData } = conversacionDeProducto();
+
+    const result = await turno(producto({}));
+
+    expect(result.replyText).toContain('¿Qué producto quieres agregar?');
+    expect(financeData.products).toHaveLength(0);
+  });
+
+  it('con el nombre, pregunta en cuanto lo vende', async () => {
+    const { turno } = conversacionDeProducto();
+
+    const result = await turno(producto({ name: 'Arroz Diana' }));
+
+    expect(result.replyText).toContain('¿En cuánto vendes Arroz Diana?');
+  });
+
+  it('despues pregunta cuanto le cuesta, y dice para que', async () => {
+    // Si no explica por que lo pide, el usuario contesta "no sé" y se pierde
+    // el unico dato que hace util el catalogo.
+    const { turno } = conversacionDeProducto();
+
+    await turno(producto({ name: 'Arroz Diana' }));
+    const result = await turno(producto({ salePrice: 5_000 }));
+
+    expect(result.replyText).toContain('¿En cuánto te cuesta Arroz Diana?');
+    expect(result.replyText).toContain('cuánto te deja');
+  });
+
+  it('no olvida lo que ya le dijeron en los turnos anteriores', async () => {
+    const { turno } = conversacionDeProducto();
+
+    await turno(producto({ name: 'Arroz Diana' }));
+    await turno(producto({ salePrice: 5_000 }));
+    const tercero = await turno(producto({ costPrice: 3_500 }));
+
+    expect(tercero.replyText).toContain('Arroz Diana');
+    expect(tercero.replyText).toContain('$5.000');
+    expect(tercero.replyText).toContain('$3.500');
+  });
+
+  it('muestra el resumen con el margen y pide confirmacion', async () => {
+    const { turno, financeData } = conversacionDeProducto();
+
+    const result = await turno(producto(COMPLETO));
+
+    expect(result.replyText).toContain('Voy a agregar este producto');
+    expect(result.replyText).toContain('Te deja: $1.500');
+    expect(result.replyText).toContain('¿Lo agrego así?');
+    expect(financeData.products).toHaveLength(0);
+  });
+
+  it('avisa cuando los precios no dejan ganancia, pero no bloquea', async () => {
+    // Hay quien vende a perdida a proposito; lo normal es que sea un precio
+    // mal dictado, y en ese caso el resumen es la ultima oportunidad de verlo.
+    const { turno } = conversacionDeProducto();
+
+    const result = await turno(
+      producto({ name: 'Arroz', salePrice: 3_000, costPrice: 3_500 }),
+    );
+
+    expect(result.replyText).toContain('con esos precios no ganas nada');
+    expect(result.replyText).toContain('¿Lo agrego así?');
+  });
+
+  it('sin categoria lo guarda igual, sin clasificar', async () => {
+    // La columna es obligatoria en la base; que el usuario no la diga no
+    // puede impedir que el producto entre.
+    const { turno, financeData } = conversacionDeProducto();
+
+    await turno(producto(COMPLETO));
+    await turno({ type: 'confirmation', confirmed: true, responseText: 'ok' });
+
+    expect(financeData.products[0]).toMatchObject({
+      name: 'Arroz Diana',
+      category: 'Sin categoría',
+      stock: 0,
+    });
+  });
+
+  it('respeta la categoria y el stock cuando si los dice', async () => {
+    const { turno, financeData } = conversacionDeProducto();
+
+    await turno(producto({ ...COMPLETO, category: 'Abarrotes', stock: 20 }));
+    await turno({ type: 'confirmation', confirmed: true, responseText: 'ok' });
+
+    expect(financeData.products[0]).toMatchObject({
+      category: 'Abarrotes',
+      stock: 20,
+    });
+  });
+
+  it('guarda solo despues del si, y lo dice claro', async () => {
+    const { turno, financeData } = conversacionDeProducto();
+
+    await turno(producto(COMPLETO));
+    const result = await turno({
+      type: 'confirmation',
+      confirmed: true,
+      responseText: 'ok',
+    });
+
+    expect(financeData.products).toHaveLength(1);
+    expect(financeData.products[0]).toMatchObject({
+      businessId: 'b1',
+      name: 'Arroz Diana',
+      salePrice: 5_000,
+      costPrice: 3_500,
+    });
+    expect(result.replyText).toContain('Agregué Arroz Diana a tu catálogo');
+  });
+
+  it('un no lo descarta sin guardar nada', async () => {
+    const { turno, financeData } = conversacionDeProducto();
+
+    await turno(producto(COMPLETO));
+    const result = await turno({
+      type: 'confirmation',
+      confirmed: false,
+      responseText: 'ok',
+    });
+
+    expect(financeData.products).toHaveLength(0);
+    expect(result.replyText).toContain('no lo agregué al catálogo');
+  });
+
+  it('si el producto ya existe lo dice, y no crea un segundo', async () => {
+    // Dos productos con el mismo nombre en la misma sede dejan la venta sin
+    // saber a cual descontarle el stock.
+    const { turno, financeData } = conversacionDeProducto();
+
+    await turno(producto(COMPLETO));
+    await turno({ type: 'confirmation', confirmed: true, responseText: 'ok' });
+
+    await turno(producto({ ...COMPLETO, salePrice: 6_000 }));
+    const result = await turno({
+      type: 'confirmation',
+      confirmed: true,
+      responseText: 'ok',
+    });
+
+    expect(financeData.products).toHaveLength(1);
+    expect(result.replyText).toContain('Ya tienes un producto llamado');
+    expect(result.replyText).toContain('desde el panel');
+  });
+
+  it('el duplicado no distingue mayusculas', async () => {
+    const { turno, financeData } = conversacionDeProducto();
+
+    await turno(producto(COMPLETO));
+    await turno({ type: 'confirmation', confirmed: true, responseText: 'ok' });
+
+    await turno(producto({ ...COMPLETO, name: 'arroz diana' }));
+    const result = await turno({
+      type: 'confirmation',
+      confirmed: true,
+      responseText: 'ok',
+    });
+
+    expect(financeData.products).toHaveLength(1);
+    expect(result.replyText).toContain('Ya tienes un producto llamado');
+  });
+
+  it('dar de alta un producto no registra ningun movimiento', async () => {
+    // No se compro ni se vendio nada: solo se anoto que el producto existe.
+    const { turno, financeData } = conversacionDeProducto();
+
+    await turno(producto(COMPLETO));
+    await turno({ type: 'confirmation', confirmed: true, responseText: 'ok' });
+
+    expect(financeData.saved).toHaveLength(0);
+  });
+
+  it('un precio en cero se trata como si no lo hubiera dicho', async () => {
+    const { turno } = conversacionDeProducto();
+
+    const result = await turno(producto({ name: 'Arroz Diana', salePrice: 0 }));
+
+    expect(result.replyText).toContain('¿En cuánto vendes');
+  });
+
+  it('con persist en false responde igual pero no toca la base', async () => {
+    const { turno, financeData } = conversacionDeProducto();
+
+    await turno(producto(COMPLETO), { persist: false });
+    const result = await turno(
+      { type: 'confirmation', confirmed: true, responseText: 'ok' },
+      { persist: false },
+    );
+
+    expect(financeData.products).toHaveLength(0);
+    expect(result.replyText).toContain('Agregué Arroz Diana');
   });
 });

@@ -34,6 +34,8 @@ import type {
   PaymentRequest,
   PaymentResult,
   PayrollPayment,
+  ProductRegistration,
+  ProductRegistrationResult,
   ProfitDistribution,
   SupplyDebt,
   TransactionChanges,
@@ -454,6 +456,43 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
       data: { nombre: limpio, sedeId },
     });
     return creado.id;
+  }
+
+  async saveProduct(
+    product: ProductRegistration,
+  ): Promise<ProductRegistrationResult> {
+    // Se compara sin mayusculas: quien dicta "arroz diana" y quien dicta
+    // "Arroz Diana" esta hablando del mismo producto.
+    const existente = await this.prisma.producto.findFirst({
+      where: {
+        sedeId: product.businessId,
+        nombre: { equals: product.name, mode: 'insensitive' },
+      },
+    });
+
+    if (existente) {
+      this.logger.log(
+        `Producto repetido: "${product.name}" ya existe en sede ${product.businessId}.`,
+      );
+      return { created: false, product };
+    }
+
+    await this.prisma.producto.create({
+      data: {
+        nombre: product.name,
+        categoria: product.category,
+        stock: product.stock,
+        precioCompra: new Prisma.Decimal(product.costPrice),
+        precioVenta: new Prisma.Decimal(product.salePrice),
+        sedeId: product.businessId,
+      },
+    });
+
+    this.logger.log(
+      `Producto nuevo: ${product.name} · compra ${product.costPrice} · venta ${product.salePrice} en sede ${product.businessId}.`,
+    );
+
+    return { created: true, product };
   }
 
   async saveProfitDistribution(

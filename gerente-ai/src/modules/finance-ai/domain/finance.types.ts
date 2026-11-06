@@ -23,6 +23,8 @@ export type MessageIntentType =
   | 'payroll'
   /** Un suministro que queda a deber al proveedor, con su plan de pagos. */
   | 'supply_debt'
+  /** Alta de un producto en el catalogo de la sede. */
+  | 'product'
   /** Le pidieron algo que no son las finanzas del negocio (codigo, poemas...). */
   | 'out_of_scope'
   /** Pidio una funcion que solo existe en los planes pagos. */
@@ -292,6 +294,29 @@ export interface SupplyDebtDraft {
   interestRate: number | null;
 }
 
+/**
+ * Un producto del catalogo a medio armar.
+ *
+ * Obligatorios: nombre, precio de venta y precio de compra. Son los tres que
+ * la tabla exige y sin los cuales el producto no sirve para nada: sin precio
+ * de compra no hay margen, y un catalogo sin margen no responde la unica
+ * pregunta que el dueno le hace ("¿que me deja mas?").
+ *
+ * Categoria y stock son opcionales: se pueden completar despues desde el
+ * panel, y pedirlos por WhatsApp alargaria la conversacion sin necesidad.
+ */
+export interface ProductDraft {
+  name: string | null;
+  /** A cuanto lo vende. */
+  salePrice: number | null;
+  /** A cuanto lo compra. */
+  costPrice: number | null;
+  /** Opcional: si no la dice, se guarda sin clasificar. */
+  category: string | null;
+  /** Opcional: unidades con las que arranca. null = 0. */
+  stock: number | null;
+}
+
 export interface PaymentDraft {
   /** A quien se le cobro. Sin nombre no hay a que deuda aplicarlo. */
   customerName: string | null;
@@ -420,6 +445,8 @@ export interface MessageIntent {
   payroll: PayrollDraft | null;
   /** Suministro que queda pendiente de pago. null en todo lo demas. */
   supplyDebt: SupplyDebtDraft | null;
+  /** Producto que se esta dando de alta. null en todo lo demas. */
+  product: ProductDraft | null;
   /**
    * Respuesta a una pregunta de si o no. null cuando el mensaje no contesta
    * ninguna, o cuando contesto algo que no es ni si ni no.

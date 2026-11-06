@@ -32,6 +32,14 @@ import {
  * backend.
  *
  * ---------------------------------------------------------------------------
+ * v23: dar de alta un producto por conversacion.
+ *
+ * "Voy a vender arroz a 5.000, me cuesta 3.500" es un producto nuevo del
+ * catalogo, no una venta ni un gasto. Se extrae lo que venga y el backend
+ * pregunta lo que falte, de a un dato por mensaje, y ensena un resumen con el
+ * margen antes de guardar.
+ *
+ * ---------------------------------------------------------------------------
  * v22: un suministro que queda a deber tiene plan de pagos.
  *
  * "La harina de Molinos quedo a deber" no es un gasto cualquiera: es una
@@ -141,7 +149,7 @@ import {
  * ---------------------------------------------------------------------------
  */
 
-export const WHATSAPP_ASSISTANT_PROMPT_VERSION = 'asistente-whatsapp/v22';
+export const WHATSAPP_ASSISTANT_PROMPT_VERSION = 'asistente-whatsapp/v23';
 
 /**
  * Forma CRUDA de la respuesta del modelo.
@@ -152,6 +160,13 @@ export const WHATSAPP_ASSISTANT_PROMPT_VERSION = 'asistente-whatsapp/v22';
  */
 export interface WhatsAppIntentOutput {
   type?: string;
+  product?: {
+    name?: string | null;
+    salePrice?: number | string | null;
+    costPrice?: number | string | null;
+    category?: string | null;
+    stock?: number | string | null;
+  } | null;
   payroll?: {
     workerName?: string | null;
     percentage?: number | string | null;
@@ -502,6 +517,39 @@ REGLAS DE INTERPRETACIÓN:
    NO lo confundas con una compra a crédito normal (regla 4): si solo dice "a
    30 días" sin hablar de cuotas ni intereses, eso sigue siendo un gasto con
    isSupplierCredit. Esto es para cuando hay un PLAN de pago detrás.
+
+7D. DAR DE ALTA UN PRODUCTO (type: "product"):
+   El dueño agrega un producto a su catálogo.
+
+   - "Voy a vender arroz a 5.000, me cuesta 3.500"
+   - "Agrega un producto nuevo: gaseosa"
+   - "Mete al catálogo el jabón Rey, lo compro en 2.000 y lo vendo en 3.000"
+
+   Pon en "product" lo que el mensaje diga y deja en null lo que no diga:
+
+   - name: el nombre del producto.
+   - salePrice: a cuánto LO VENDE.
+   - costPrice: a cuánto LE CUESTA.
+   - category: si la menciona. Opcional.
+   - stock: unidades con las que arranca. Opcional, y el 0 es válido.
+
+   REGLAS:
+   - NO inventes precios. El sistema pregunta lo que falte, de a uno por
+     mensaje, y se acuerda de lo que ya le dijeron. No uses "unclear" por eso.
+   - Cuidado con cuál precio es cuál: "lo vendo en X" y "me cuesta X" no son
+     lo mismo, y confundirlos deja el margen al revés.
+   - "movements" va SIEMPRE vacío: []. Dar de alta un producto NO mueve plata:
+     no se compró ni se vendió nada todavía. Si lo registras como gasto o como
+     venta, inventas un movimiento que nunca ocurrió.
+   - Cuando el usuario viene contestando una pregunta tuya, devuelve otra vez
+     type "product" con el dato que acaba de dar. Una cifra suelta ahí es un
+     precio del producto, no una venta.
+   - El resumen y la confirmación los arma el sistema. En responseText escribe
+     algo breve: se reemplaza.
+
+   NO lo confundas con una compra (regla 2): "compré 20 arroces en 70.000" es
+   un gasto de mercancía que SÍ movió plata. Esto es solo registrar que el
+   producto existe y a qué precios.
 
 8. CONSULTAS (type: "query"):
    Elige el "queryKind" según lo que pidió:
@@ -1118,6 +1166,7 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
     'payment',
     'payroll',
     'supplyDebt',
+    'product',
     'confirmed',
     'confirmedCount',
     'concept',
@@ -1138,6 +1187,7 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
         'profit_share',
         'payroll',
         'supply_debt',
+        'product',
         'query',
         'correction',
         'confirmation',
@@ -1438,6 +1488,35 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
           type: ['number', 'null'],
           description:
             'Interes mensual en porcentaje. 0 si dijo que no le cobran. null si no lo ha dicho.',
+        },
+      },
+    },
+    product: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      required: ['name', 'salePrice', 'costPrice', 'category', 'stock'],
+      description:
+        'Producto que se da de alta en el catalogo. null si el mensaje no habla de eso.',
+      properties: {
+        name: {
+          type: ['string', 'null'],
+          description: 'Nombre del producto. null si no lo dijo todavia.',
+        },
+        salePrice: {
+          type: ['number', 'null'],
+          description: 'A cuanto lo vende. null si no lo dijo todavia.',
+        },
+        costPrice: {
+          type: ['number', 'null'],
+          description: 'A cuanto lo compra. null si no lo dijo todavia.',
+        },
+        category: {
+          type: ['string', 'null'],
+          description: 'Categoria, si la menciona. Es opcional.',
+        },
+        stock: {
+          type: ['number', 'null'],
+          description: 'Unidades con las que arranca. Opcional; 0 es valido.',
         },
       },
     },

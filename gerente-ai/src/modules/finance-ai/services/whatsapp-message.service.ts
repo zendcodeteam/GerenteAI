@@ -30,6 +30,7 @@ import {
   type PaymentDraft,
   type PaymentMethod,
   type PayrollDraft,
+  type ProductDraft,
   type SupplyDebtDraft,
   type PeriodSummary,
   type ProfitBeneficiary,
@@ -46,6 +47,7 @@ import {
   type FinanceDataPort,
   type PaymentResult,
   type PayrollPayment,
+  type ProductRegistration,
   type SupplyDebt,
 } from '../ports/finance-data.port';
 import {
@@ -59,6 +61,7 @@ import {
   type PendingDeletion,
   type PendingPayroll,
   type PendingRegistration,
+  type PendingProduct,
   type PendingSupplyDebt,
 } from './conversation-state.service';
 import {
@@ -320,7 +323,8 @@ export class WhatsAppMessageService {
       intent.type !== 'confirmation' &&
       intent.type !== 'unclear' &&
       intent.type !== 'payroll' &&
-      intent.type !== 'supply_debt'
+      intent.type !== 'supply_debt' &&
+      intent.type !== 'product'
     ) {
       this.state.olvidar(request.businessId);
     }
@@ -367,6 +371,9 @@ export class WhatsAppMessageService {
 
       case 'supply_debt':
         return this.handleSupplyDebt(intent, request, currency, meta);
+
+      case 'product':
+        return this.handleProduct(intent, request, currency, meta);
 
       case 'income':
       case 'expense':
@@ -590,6 +597,7 @@ export class WhatsAppMessageService {
         payment: null,
         payroll: null,
         supplyDebt: null,
+        product: null,
         confirmed: null,
         confirmedCount: null,
         discount: null,
@@ -620,6 +628,18 @@ export class WhatsAppMessageService {
     referenceDate: string,
     meta: WhatsAppMessageResult['meta'],
   ): Promise<WhatsAppMessageResult> {
+    const producto = this.state.productoPendiente(request.businessId);
+
+    if (producto?.stage === 'confirmacion') {
+      return this.confirmarProducto(
+        producto,
+        intent,
+        request,
+        currency,
+        meta,
+      );
+    }
+
     const deuda = this.state.deudaProveedorPendiente(request.businessId);
 
     if (deuda?.stage === 'confirmacion') {
@@ -1703,6 +1723,93 @@ export class WhatsAppMessageService {
     );
   }
 
+  // ----------------------------------------------------------- catalogo
+
+  /**
+   * Da de alta un producto del catalogo.
+   *
+   * Tres datos obligatorios —nombre, a cuanto lo vende y a cuanto lo compra—
+   * que se piden de a uno, igual que en el resto de altas por conversacion. El
+   * precio de compra no se salta: sin el no hay margen, y el margen es lo
+   * unico que el dueno le va a preguntar despues a este catalogo.
+   *
+   * Categoria y stock son opcionales a proposito. Se completan desde el panel
+   * cuando haga falta, y pedirlos aqui alargaria la conversacion para datos
+   * que no cambian lo que el producto hace.
+   */
+  private handleProduct(
+    intent: MessageIntent,
+    request: WhatsAppMessageRequest,
+    currency: string,
+    meta: WhatsAppMessageResult['meta'],
+  ): Promise<WhatsAppMessageResult> {
+    const abierta = this.state.productoPendiente(request.businessId);
+    const borrador = mezclarProducto(abierta?.draft, intent.product);
+
+    const falta = primerDatoDeProductoQueFalta(borrador);
+
+    if (falta) {
+      this.state.recordarProducto(request.businessId, {
+        draft: borrador,
+        stage: 'datos',
+      });
+
+      return Promise.resolve(
+        this.plainResult(intent, preguntaDeProducto(falta, borrador), meta),
+      );
+    }
+
+    this.state.recordarProducto(request.businessId, {
+      draft: borrador,
+      stage: 'confirmacion',
+    });
+
+    return Promise.resolve(
+      this.plainResult(intent, renderProductSummary(borrador, currency), meta),
+    );
+  }
+
+  /** Guarda el producto que el usuario acaba de confirmar. */
+  private async confirmarProducto(
+    pendiente: PendingProduct,
+    intent: MessageIntent,
+    request: WhatsAppMessageRequest,
+    currency: string,
+    meta: WhatsAppMessageResult['meta'],
+  ): Promise<WhatsAppMessageResult> {
+    this.state.olvidar(request.businessId);
+
+    if (intent.confirmed !== true) {
+      return this.plainResult(
+        intent,
+        'Listo, no lo agregué al catálogo. Si quieres lo hacemos de nuevo 😊',
+        meta,
+      );
+    }
+
+    const producto = aProductoDelCatalogo(pendiente.draft, request.businessId);
+
+    // Sin persistencia no hay a quien preguntarle si ya existe: se responde
+    // como si hubiera entrado, que es lo que espera quien esta probando.
+    if (!request.persist) {
+      return this.plainResult(
+        intent,
+        renderProductRegistered(producto, currency),
+        meta,
+      );
+    }
+
+    const resultado = await this.financeData.saveProduct(producto);
+
+    return this.plainResult(
+      intent,
+      resultado.created
+        ? renderProductRegistered(producto, currency)
+        : renderProductDuplicado(producto),
+      meta,
+    );
+  }
+
   // -------------------------------------------------------------- resultados
 
   /** Resultado sin movimientos ni reparto: solo texto. */
@@ -1791,6 +1898,7 @@ export class WhatsAppMessageService {
       payment,
       payroll: normalizePayroll(output?.payroll),
       supplyDebt: normalizeSupplyDebt(output?.supplyDebt),
+      product: normalizeProduct(output?.product),
       confirmed: normalizeConfirmed(output?.confirmed),
       confirmedCount: normalizePosition(output?.confirmedCount),
       amount,
@@ -2022,6 +2130,7 @@ const INTENT_TYPES: MessageIntentType[] = [
   'profit_share',
   'payroll',
   'supply_debt',
+  'product',
   'query',
   'correction',
   'unclear',
@@ -2541,6 +2650,173 @@ function normalizeInterestRate(value: unknown): number | null {
   const numero = Number(value);
   if (!Number.isFinite(numero) || numero < 0 || numero > 100) return null;
   return round2(numero);
+}
+
+
+// ----------------------------------------------------------------- catalogo
+
+/** Lo obligatorio de un producto, en el orden en que se pregunta. */
+type DatoDeProducto = 'name' | 'salePrice' | 'costPrice';
+
+/** Lo que se guarda cuando el usuario no dijo categoria. */
+const CATEGORIA_SIN_CLASIFICAR = 'Sin categoría';
+
+/**
+ * Funde lo que ya se sabia con lo que acaba de decir el usuario.
+ *
+ * Lo nuevo manda, pero solo cuando viene: el modelo devuelve en null lo que
+ * este mensaje no menciona, y eso no puede borrar lo de antes.
+ */
+function mezclarProducto(
+  previo: ProductDraft | undefined,
+  nuevo: ProductDraft | null,
+): ProductDraft {
+  return {
+    name: nuevo?.name ?? previo?.name ?? null,
+    salePrice: nuevo?.salePrice ?? previo?.salePrice ?? null,
+    costPrice: nuevo?.costPrice ?? previo?.costPrice ?? null,
+    category: nuevo?.category ?? previo?.category ?? null,
+    stock: nuevo?.stock ?? previo?.stock ?? null,
+  };
+}
+
+/** El primer dato obligatorio que falta, o null si ya se puede guardar. */
+function primerDatoDeProductoQueFalta(
+  draft: ProductDraft,
+): DatoDeProducto | null {
+  if (!draft.name) return 'name';
+  if (draft.salePrice === null) return 'salePrice';
+  if (draft.costPrice === null) return 'costPrice';
+  return null;
+}
+
+/** La pregunta por el dato que falta, nombrando el producto si ya se sabe. */
+function preguntaDeProducto(
+  falta: DatoDeProducto,
+  draft: ProductDraft,
+): string {
+  if (falta === 'name') {
+    return '¿Qué producto quieres agregar? Dime el nombre.';
+  }
+
+  const que = draft.name ?? 'ese producto';
+
+  if (falta === 'salePrice') {
+    return `¿En cuánto vendes ${que}?`;
+  }
+
+  return `¿En cuánto te cuesta ${que}? Lo necesito para saber cuánto te deja.`;
+}
+
+/** El borrador completo, como producto listo para el catalogo. */
+function aProductoDelCatalogo(
+  draft: ProductDraft,
+  businessId: string,
+): ProductRegistration {
+  return {
+    businessId,
+    name: draft.name ?? '',
+    salePrice: draft.salePrice ?? 0,
+    costPrice: draft.costPrice ?? 0,
+    category: draft.category ?? CATEGORIA_SIN_CLASIFICAR,
+    stock: draft.stock ?? 0,
+  };
+}
+
+/**
+ * El resumen que se le ensena antes de guardar.
+ *
+ * Lleva el margen calculado: es el dato por el que se registra un producto, y
+ * verlo aqui es lo que permite cazar un precio mal dictado antes de que entre
+ * al catalogo y contamine los reportes.
+ */
+export function renderProductSummary(
+  draft: ProductDraft,
+  currency: string,
+): string {
+  const producto = aProductoDelCatalogo(draft, '');
+  const margen = round2(producto.salePrice - producto.costPrice);
+
+  const lineas = [
+    'Voy a agregar este producto a tu catálogo:',
+    `• Producto: ${producto.name}`,
+    `• Lo vendes en: ${formatMoney(producto.salePrice, currency)}`,
+    `• Te cuesta: ${formatMoney(producto.costPrice, currency)}`,
+    `• Te deja: ${formatMoney(margen, currency)} por unidad`,
+    `• Categoría: ${producto.category}`,
+    `• Stock inicial: ${producto.stock}`,
+  ];
+
+  if (margen <= 0) {
+    // No se bloquea —hay quien vende a perdida a proposito— pero no puede
+    // pasar inadvertido: lo normal es que sea un precio mal dictado.
+    lineas.push(
+      '',
+      '⚠️ Ojo: con esos precios no ganas nada. ¿Están bien?',
+    );
+  }
+
+  lineas.push('', '¿Lo agrego así? Responde sí o no.');
+  return lineas.join('\n');
+}
+
+/** Confirmacion del producto ya guardado. */
+export function renderProductRegistered(
+  producto: ProductRegistration,
+  currency: string,
+): string {
+  const margen = round2(producto.salePrice - producto.costPrice);
+
+  return [
+    `✅ Agregué ${producto.name} a tu catálogo.`,
+    `Lo vendes en ${formatMoney(producto.salePrice, currency)} y te deja ${formatMoney(margen, currency)} por unidad.`,
+  ].join('\n');
+}
+
+/**
+ * Lo que se responde cuando el producto ya estaba.
+ *
+ * No se crea un segundo: dos productos con el mismo nombre en la misma sede
+ * dejan la venta sin saber a cual descontarle el stock. Se dice que ya existe
+ * y donde cambiarlo, que es lo accionable.
+ */
+export function renderProductDuplicado(producto: ProductRegistration): string {
+  return [
+    `Ya tienes un producto llamado "${producto.name}" en tu catálogo, así que no lo agregué de nuevo.`,
+    'Si querías cambiarle el precio, puedes hacerlo desde el panel.',
+  ].join('\n');
+}
+
+/**
+ * El borrador de producto tal como lo devolvio el modelo.
+ *
+ * Todo puede venir en null: el usuario va contestando de a uno y el servicio
+ * pregunta lo que falte.
+ */
+function normalizeProduct(value: unknown): ProductDraft | null {
+  if (!value || typeof value !== 'object') return null;
+
+  const crudo = value as Record<string, unknown>;
+
+  return {
+    name: cleanText(crudo.name),
+    salePrice: normalizeAmount(crudo.salePrice),
+    costPrice: normalizeAmount(crudo.costPrice),
+    category: cleanText(crudo.category),
+    stock: normalizeStock(crudo.stock),
+  };
+}
+
+/**
+ * Unidades iniciales: un entero de 0 en adelante.
+ *
+ * El 0 es valido y distinto de null: "no tengo ninguno todavia" es una
+ * respuesta, y `normalizeQuantity` no sirve aqui porque descarta el 0.
+ */
+function normalizeStock(value: unknown): number | null {
+  const numero = Number(value);
+  if (!Number.isFinite(numero) || numero < 0) return null;
+  return Math.round(numero);
 }
 
 /** Unidades: un entero positivo, o nada. */
@@ -3719,6 +3995,10 @@ export function renderPendingQuestion(
     return renderPendingSupplyDebt(pendiente, currency);
   }
 
+  if (pendiente.kind === 'product') {
+    return renderPendingProduct(pendiente, currency);
+  }
+
   return renderPendingCorrection(pendiente, currency);
 }
 
@@ -3808,6 +4088,50 @@ function renderPendingSupplyDebt(
     'Lo que conteste es ese dato: devuelve type "supply_debt" con el puesto',
     'donde corresponde. NO vuelvas a pedir lo que ya esta arriba y NO lo',
     'trates como un gasto nuevo.',
+  ].join('\n');
+}
+
+/**
+ * El producto a medio armar, contado para el modelo.
+ *
+ * Sin esto, el usuario contesta "5.000" y el modelo no sabe que eso es el
+ * precio de un producto que se esta dando de alta: lo lee como un ingreso y
+ * registra una venta que nadie hizo.
+ */
+function renderPendingProduct(
+  pendiente: PendingProduct,
+  currency: string,
+): string {
+  const d = pendiente.draft;
+  const sabido = [
+    `- producto: ${d.name ?? 'todavia no lo dijo'}`,
+    `- precio de venta: ${d.salePrice === null ? 'todavia no lo dijo' : formatMoney(d.salePrice, currency)}`,
+    `- precio de compra: ${d.costPrice === null ? 'todavia no lo dijo' : formatMoney(d.costPrice, currency)}`,
+    `- categoria: ${d.category ?? 'no la dijo (es opcional)'}`,
+    `- stock inicial: ${d.stock ?? 'no lo dijo (es opcional)'}`,
+  ];
+
+  if (pendiente.stage === 'confirmacion') {
+    return [
+      'PREGUNTA ABIERTA (lo mas importante de este turno):',
+      'Le acabas de enseñar este producto y le preguntaste si lo agregas al',
+      'catalogo:',
+      ...sabido,
+      'Si dice que si, devuelve type "confirmation" con confirmed true.',
+      'Si dice que no, confirmed false.',
+      'Si te CORRIGE un dato ("no, lo vendo en 6.000"), no es una',
+      'confirmacion: devuelve type "product" con ese dato ya corregido.',
+    ].join('\n');
+  }
+
+  return [
+    'PREGUNTA ABIERTA (lo mas importante de este turno):',
+    'Estas dando de alta un producto y le preguntaste por el dato que falta.',
+    'Esto es lo que ya sabes:',
+    ...sabido,
+    'Lo que conteste es ese dato: devuelve type "product" con el puesto donde',
+    'corresponde. Una cifra suelta aqui es un precio del producto, NO una',
+    'venta ni un gasto.',
   ].join('\n');
 }
 
