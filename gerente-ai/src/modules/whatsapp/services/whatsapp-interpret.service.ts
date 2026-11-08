@@ -1,4 +1,10 @@
-import { BadRequestException, Injectable, Logger, Optional } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  Optional,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 import { LlmError, type LlmErrorCode } from '../../../ai/core/llm.errors';
@@ -55,6 +61,8 @@ export type PublicIntentType =
   | 'deuda_proveedor'
   /** Alta de un producto en el catalogo. */
   | 'producto'
+  /** Ajuste de existencias de un producto. */
+  | 'inventario'
   /** Le pagaron un fiado: baja la deuda, no crea un movimiento. */
   | 'abono'
   /** Contesto si o no a una pregunta de Luka. */
@@ -133,6 +141,7 @@ const TYPE_LABELS: Record<MessageIntentType, PublicIntentType> = {
   payroll: 'nomina',
   supply_debt: 'deuda_proveedor',
   product: 'producto',
+  stock: 'inventario',
   payment: 'abono',
   confirmation: 'confirmacion',
   query: 'consulta',
@@ -293,7 +302,21 @@ export class WhatsappInterpretService {
 
     try {
       const respuesta = await this.process(dto, sender, startedAt);
-      this.dedupe.remember(dto.messageId, respuesta);
+
+      /*
+       * Una respuesta degradada NO se memoriza.
+       *
+       * Se recuerda para que un reintento de Meta no registre el movimiento
+       * dos veces, y eso solo tiene sentido cuando algo se registro. Si el
+       * mensaje fallo, memorizar el error lo congela: el reintento recibia el
+       * mismo "No pude procesar tu mensaje" sin volver a intentarlo, y n8n se
+       * lo mandaba al usuario por segunda vez. Dejandolo fuera, el reintento
+       * vuelve a intentarlo de verdad, que es justo lo que se quiere ante un
+       * fallo pasajero.
+       */
+      if (respuesta.ok) {
+        this.dedupe.remember(dto.messageId, respuesta);
+      }
       return respuesta;
     } catch (error) {
       // El mensaje no llego a atenderse: se libera el id para que el reintento
@@ -402,6 +425,29 @@ export class WhatsappInterpretService {
       });
     } catch (error) {
       if (typeof this.usage?.releaseWhatsAppMessage === 'function') await this.usage.releaseWhatsAppMessage(context.negocioId, requestId);
+
+      /*
+       * Un "no se puede, y esto es lo que pasa" NO es una averia.
+       *
+       * El dominio lanza BadRequest/Conflict con mensajes escritos para una
+       * persona: "No encontré X en el inventario de esta sede. Registra
+       * primero el producto", "No hay stock suficiente de X. Disponible: 3".
+       * Antes todos caian en el mismo saco que una caida del modelo y se
+       * sustituian por "No pude procesar tu mensaje 😔", que no dice nada y
+       * deja al tendero sin saber que hacer. El mensaje util se tiraba.
+       */
+      const conversable = mensajeDeNegocio(error);
+      if (conversable) {
+        this.logger.log(
+          `Regla de negocio en la sede ${context.sedeId}: ${conversable}`,
+        );
+        return this.businessRuleResponse(
+          conversable,
+          context,
+          Date.now() - startedAt,
+        );
+      }
+
       return this.degradedResponse(error, context, Date.now() - startedAt);
     }
 
@@ -588,6 +634,53 @@ export class WhatsappInterpretService {
       );
       return false;
     }
+  }
+
+  /**
+   * Una regla de negocio impidio la operacion y el usuario tiene que saberlo.
+   *
+   * Se responde `ok: true` a proposito: el mensaje se entendio y la respuesta
+   * es correcta, simplemente no se registro nada. Un `ok: false` haria que
+   * n8n lo tratara como fallo del backend y lo reintentara, y el reintento
+   * chocaria con la misma regla.
+   *
+   * El tipo publico es `no_claro`, el mismo que ya usa Luka cuando necesita un
+   * dato del usuario. Asi el contrato con n8n no cambia.
+   */
+  private businessRuleResponse(
+    mensaje: string,
+    context: WhatsappContext,
+    durationMs: number,
+  ): InterpretResponse {
+    return {
+      ok: true,
+      reply: mensaje,
+      interpreted: {
+        type: 'no_claro',
+        rawType: null,
+        amount: null,
+        category: null,
+        categoryLabel: null,
+        concept: null,
+        confidence: 0,
+        period: null,
+        saved: false,
+        transactionId: null,
+        movements: [],
+      },
+      meta: {
+        negocioId: context.negocioId,
+        sedeId: context.sedeId,
+        duplicate: false,
+        assistantMessageId: null,
+        promptVersion: null,
+        provider: null,
+        model: null,
+        latencyMs: null,
+        costUsd: null,
+        durationMs,
+      },
+    };
   }
 
   /** La IA fallo: se responde algo util y se deja constancia del codigo real. */
@@ -840,3 +933,28 @@ function describeSender(sender: WhatsappSender): string {
 /** "Angelica Marcillo" -> "¡Hola Angelica! 👋". Solo el primer nombre. */
 const SALUDO_CON_NOMBRE = (name: string): string =>
   `¡Hola ${name.trim().split(' ')[0]}! 👋`;
+
+/**
+ * El texto de una excepcion de negocio, o null si no lo es.
+ *
+ * Solo BadRequest y Conflict: son las dos que el dominio usa para decirle algo
+ * al usuario. Cualquier otra cosa —una caida de Prisma, un fallo de red, un
+ * TypeError— no lleva un mensaje que una persona deba leer, y sigue saliendo
+ * como respuesta degradada.
+ */
+function mensajeDeNegocio(error: unknown): string | null {
+  if (
+    !(error instanceof BadRequestException) &&
+    !(error instanceof ConflictException)
+  ) {
+    return null;
+  }
+
+  const cuerpo = error.getResponse();
+  const mensaje =
+    typeof cuerpo === 'string'
+      ? cuerpo
+      : (cuerpo as { message?: unknown }).message;
+
+  return typeof mensaje === 'string' && mensaje.trim() ? mensaje : null;
+}

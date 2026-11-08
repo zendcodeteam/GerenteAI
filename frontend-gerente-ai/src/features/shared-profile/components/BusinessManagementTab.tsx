@@ -86,6 +86,7 @@ export function BusinessManagementTab({
     cerrarPaywall,
     verificarCreacionNegocio,
     verificarCreacionSede,
+    planUsuarioId,
   } = usePlanPermissions();
 
   const promptDeleteBusiness = (negocio: Negocio) => {
@@ -455,6 +456,7 @@ export function BusinessManagementTab({
         isOpen={isPaywallOpen}
         onClose={cerrarPaywall}
         motivo={paywallMotivo}
+        planActualId={planUsuarioId}
         planRecomendadoId={paywallPlanRecomendadoId}
         catalogo={catalogo}
       />

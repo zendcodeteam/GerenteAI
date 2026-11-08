@@ -532,6 +532,7 @@ export function InsightsView() {
         isOpen={isPaywallOpen}
         onClose={cerrarPaywall}
         motivo={paywallMotivo}
+        planActualId={planUsuarioId}
         planRecomendadoId={paywallPlanRecomendadoId}
       />
     </div>

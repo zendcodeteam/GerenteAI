@@ -143,6 +143,7 @@ export function CashflowView() {
           isOpen={isPaywallOpen}
           onClose={cerrarPaywall}
           motivo={paywallMotivo}
+          planActualId={planUsuarioId}
           planRecomendadoId={paywallPlanRecomendadoId}
         />
       </div>
@@ -317,6 +318,7 @@ export function CashflowView() {
         isOpen={isPaywallOpen}
         onClose={cerrarPaywall}
         motivo={paywallMotivo}
+        planActualId={planUsuarioId}
         planRecomendadoId={paywallPlanRecomendadoId}
       />
     </div>

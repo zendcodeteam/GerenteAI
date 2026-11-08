@@ -1182,4 +1182,174 @@ describe('Registro de productos por HTTP (e2e)', () => {
       expect(new Set(llaves).size).toBe(llaves.length);
     });
   });
+
+  /**
+   * El inventario es de planes pagos, y la comprobacion vive en el BACKEND.
+   *
+   * Si viviera solo en el frontend, cualquiera con la URL del API seguiria
+   * registrando productos en un negocio gratuito: es justo como se colaron los
+   * que ya estan en produccion.
+   */
+  describe('el inventario solo esta disponible en los planes pagos', () => {
+    /** Baja el negocio de la semilla al plan Asistente (gratuito). */
+    async function conPlanGratuito() {
+      await prisma.negocio.update({
+        where: { id: s.negocioId },
+        data: { plan: 1, planVenceEl: null },
+      });
+    }
+
+    /** Un plan de pago que caduco: cae a Asistente por si solo. */
+    async function conPlanVencido() {
+      await prisma.negocio.update({
+        where: { id: s.negocioId },
+        data: { plan: 3, planVenceEl: new Date(Date.now() - 86_400_000) },
+      });
+    }
+
+    const listar = (token: string) =>
+      request(app.getHttpServer())
+        .get('/productos')
+        .set('Authorization', `Bearer ${token}`);
+
+    const editar = (
+      token: string,
+      id: string,
+      cuerpo: Record<string, unknown>,
+    ) =>
+      request(app.getHttpServer())
+        .patch(`/productos/${id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send(cuerpo);
+
+    const borrar = (token: string, id: string) =>
+      request(app.getHttpServer())
+        .delete(`/productos/${id}`)
+        .set('Authorization', `Bearer ${token}`);
+
+    it('registrar un producto con plan gratuito es 403', async () => {
+      await conPlanGratuito();
+
+      const res = await crear(dueno, productoCompleto());
+
+      expect(res.status).toBe(403);
+      expect(
+        await prisma.producto.count({ where: { nombre: 'Panela cuadrada' } }),
+      ).toBe(0);
+    });
+
+    /*
+     * Consultar NO se bloquea. La regla ya estaba en el repositorio
+     * (aislamiento.e2e-spec): "leer nunca depende del plan; un negocio con el
+     * plan vencido conserva el historico de todas sus sedes". Esconderle a
+     * alguien lo que registro no vende un plan, solo le hace pensar que perdio
+     * sus datos. Quien no lo ve es el panel, que no le pinta la seccion.
+     */
+    it('pero consultarlos SI se puede: sus datos no desaparecen', async () => {
+      await conPlanGratuito();
+
+      const res = await listar(dueno);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveLength(3);
+    });
+
+    it('editarlos tambien', async () => {
+      await conPlanGratuito();
+
+      const res = await editar(dueno, s.panId, { precioVenta: 900 });
+
+      expect(res.status).toBe(403);
+      // El precio sigue siendo el de antes: el 403 corta antes de escribir.
+      expect(
+        Number(
+          (await prisma.producto.findUniqueOrThrow({ where: { id: s.panId } }))
+            .precioVenta,
+        ),
+      ).toBe(500);
+    });
+
+    it('y borrarlos', async () => {
+      await conPlanGratuito();
+
+      const res = await borrar(dueno, s.panId);
+
+      expect(res.status).toBe(403);
+      expect(
+        await prisma.producto.findUnique({ where: { id: s.panId } }),
+      ).not.toBeNull();
+    });
+
+    /*
+     * Lo mas importante de todo esto: bloquear NO es borrar. Los productos que
+     * se registraron cuando la distincion no existia siguen en la base,
+     * intactos, esperando a que el negocio vuelva a un plan de pago.
+     */
+    it('los productos que ya existian NO se borran', async () => {
+      await conPlanGratuito();
+
+      await borrar(dueno, s.panId);
+      await editar(dueno, s.panId, { precioVenta: 900 });
+
+      expect(
+        await prisma.producto.count({ where: { sedeId: s.sedeAId } }),
+      ).toBe(2);
+    });
+
+    it('y vuelve a poder gestionarlos en cuanto renueva', async () => {
+      await conPlanGratuito();
+      expect((await crear(dueno, productoCompleto())).status).toBe(403);
+
+      await prisma.negocio.update({
+        where: { id: s.negocioId },
+        data: { plan: 2, planVenceEl: new Date(Date.now() + 86_400_000) },
+      });
+
+      expect((await crear(dueno, productoCompleto())).status).toBe(201);
+    });
+
+    // Un plan de pago vencido cae a Asistente por `PlanesService.estado`: no
+    // hay logica de vencimiento propia del inventario que mantener aparte.
+    // Un plan de pago vencido cae a Asistente por `PlanesService.estado`: no
+    // hay logica de vencimiento propia del inventario que mantener aparte.
+    it('un plan de pago vencido tampoco puede registrar', async () => {
+      await conPlanVencido();
+
+      const res = await crear(dueno, productoCompleto());
+
+      expect(res.status).toBe(403);
+      expect(mensajeDe(res)).toMatch(/vencido/i);
+    });
+
+    it('y se le dice que sus productos siguen ahi', async () => {
+      await conPlanVencido();
+
+      expect(mensajeDe(await crear(dueno, productoCompleto()))).toMatch(
+        /recuperas al renovar/i,
+      );
+    });
+
+    it('un plan vencido tampoco pierde de vista su catalogo', async () => {
+      await conPlanVencido();
+
+      const res = await listar(dueno);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveLength(3);
+    });
+
+    it('al gratuito se le explica que si puede registrar ventas y gastos', async () => {
+      await conPlanGratuito();
+
+      expect(mensajeDe(await crear(dueno, productoCompleto()))).toMatch(
+        /ventas y gastos/i,
+      );
+    });
+
+    it('con un plan de pago todo sigue funcionando', async () => {
+      const res = await crear(dueno, productoCompleto());
+
+      expect(res.status).toBe(201);
+    });
+  });
 });

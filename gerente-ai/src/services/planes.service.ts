@@ -27,7 +27,9 @@ export type Funcionalidad =
   | 'recomendaciones_estadisticas'
   | 'anotaciones_por_foto'
   | 'anotaciones_por_audio'
-  | 'ia_avanzada';
+  | 'ia_avanzada'
+  /** Catalogo de productos: registrar, consultar y gestionar el inventario. */
+  | 'inventario';
 
 /** La cuota de IA se mide en bloques de 30 dias, no en meses de calendario. */
 const DIAS_DE_CUOTA_MS = 30 * 86_400_000;
@@ -57,8 +59,13 @@ export interface DefinicionPlan {
 }
 
 /**
- * Las seis funciones Premium. Van juntas en todos los planes de pago: lo que
+ * Las siete funciones Premium. Van juntas en todos los planes de pago: lo que
  * diferencia un plan de otro son las sedes y la cuota de IA, no las funciones.
+ *
+ * El Asistente (gratuito) tiene la lista vacia, asi que no hay que excluirlo
+ * de nada: lo que se anada aqui queda fuera de su plan automaticamente. Y un
+ * plan de pago vencido cae a Asistente en `estado()`, con lo que pierde el
+ * acceso sin que nadie tenga que acordarse de quitarselo.
  */
 const TODAS_LAS_FUNCIONES: Funcionalidad[] = [
   'reportes_por_producto',
@@ -67,6 +74,7 @@ const TODAS_LAS_FUNCIONES: Funcionalidad[] = [
   'anotaciones_por_foto',
   'anotaciones_por_audio',
   'ia_avanzada',
+  'inventario',
 ];
 
 /**

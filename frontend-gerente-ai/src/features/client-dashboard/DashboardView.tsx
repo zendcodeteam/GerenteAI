@@ -16,11 +16,13 @@ import { InventoryPanel } from "./components/InventoryPanel";
 
 export function DashboardView() {
   const {
+    puedeGestionarInventario,
     isPaywallOpen,
     paywallMotivo,
     paywallPlanRecomendadoId,
     catalogo,
     cerrarPaywall,
+    planUsuarioId,
   } = usePlanPermissions();
 
   const {
@@ -163,7 +165,11 @@ export function DashboardView() {
               <FinancialSimulator metrics={metrics} fiados={fiados} />
             )}
 
-            <InventoryPanel sedeId={sedeId} transactions={transactions} />
+            <InventoryPanel
+              sedeId={sedeId}
+              transactions={transactions}
+              puedeGestionarInventario={puedeGestionarInventario}
+            />
 
             {!isLoading && !hasNoBusiness && (
               <WeeklySummary transactions={transactions} fiados={fiados} />
@@ -192,6 +198,7 @@ export function DashboardView() {
         isOpen={isPaywallOpen}
         onClose={cerrarPaywall}
         motivo={paywallMotivo}
+        planActualId={planUsuarioId}
         planRecomendadoId={paywallPlanRecomendadoId}
         catalogo={catalogo}
         negocioNombre={businessName}

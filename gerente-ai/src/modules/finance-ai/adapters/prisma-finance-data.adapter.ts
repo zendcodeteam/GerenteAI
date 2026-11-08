@@ -287,10 +287,20 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
               where: { id: producto.id, stock: { gte: producto.quantity } },
               data: { stock: { decrement: producto.quantity } },
             });
+
+            /*
+             * Vendió más de lo que tenía anotado: el estante queda en 0.
+             *
+             * Antes esto tumbaba la venta. Pero la venta OCURRIÓ en el mundo
+             * real, y negarse a anotarla no devuelve las unidades: solo pierde
+             * el ingreso. Lo que estaba mal era el conteo, no la venta. El
+             * aviso de que las cuentas no cuadran ya salió en la respuesta.
+             */
             if (updated.count === 0) {
-              throw new ConflictException(
-                'El stock cambió mientras se registraba la venta. Intenta de nuevo.',
-              );
+              await tx.producto.update({
+                where: { id: producto.id },
+                data: { stock: 0 },
+              });
             }
           } else {
             await tx.producto.update({
@@ -457,6 +467,58 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
       data: { nombre: limpio, sedeId },
     });
     return creado.id;
+  }
+
+  async hasCatalog(businessId: string): Promise<boolean> {
+    const cuantos = await this.prisma.producto.count({
+      where: { sedeId: businessId },
+    });
+    return cuantos > 0;
+  }
+
+  async findProductByName(
+    businessId: string,
+    name: string,
+  ): Promise<{ id: string; name: string; stock: number } | null> {
+    // Se traen los de la sede y se comparan en memoria, igual que en
+    // `resolveProducts`: los operadores de texto de Postgres no quitan
+    // acentos, y "arroz" tiene que encontrar a "Arróz".
+    const productos = await this.prisma.producto.findMany({
+      where: { sedeId: businessId },
+      select: { id: true, nombre: true, alias: true, stock: true },
+    });
+
+    const buscado = normalizarNombreDeProducto(name);
+    const encontrado = productos.find((producto) =>
+      [producto.nombre, ...producto.alias].some(
+        (valor) => normalizarNombreDeProducto(valor) === buscado,
+      ),
+    );
+
+    return encontrado
+      ? {
+          id: encontrado.id,
+          name: encontrado.nombre,
+          stock: encontrado.stock,
+        }
+      : null;
+  }
+
+  async setProductStock(
+    businessId: string,
+    productId: string,
+    units: number,
+  ): Promise<void> {
+    // El `sedeId` en el where no sobra: sin el, un id de otra sede ajustaria
+    // un inventario ajeno.
+    await this.prisma.producto.updateMany({
+      where: { id: productId, sedeId: businessId },
+      data: { stock: units },
+    });
+
+    this.logger.log(
+      `Inventario ajustado: producto ${productId} queda en ${units} unidades (sede ${businessId}).`,
+    );
   }
 
   async saveProduct(
@@ -1099,12 +1161,10 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
     >();
 
     for (const transaction of candidates) {
+      // Sin unidades no hay nada que descontar, pero el movimiento se guarda:
+      // el monto es el dato que no se puede perder.
       const quantity = transaction.quantity;
-      if (!quantity || quantity < 1) {
-        throw new BadRequestException(
-          `¿Cuántas unidades de "${transaction.productName}" se vendieron?`,
-        );
-      }
+      if (!quantity || quantity < 1) continue;
 
       const products = await this.prisma.producto.findMany({
         where: { sedeId: transaction.businessId },
@@ -1116,11 +1176,19 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
         ),
       );
 
-      if (!matches.length) {
-        throw new BadRequestException(
-          `No encontré "${transaction.productName}" en el inventario de esta sede. Registra primero el producto o dime otro nombre.`,
-        );
-      }
+      /*
+       * Lo que no está en el catálogo simplemente no lleva inventario.
+       *
+       * Antes esto lanzaba y tumbaba el movimiento entero: una peluquería que
+       * cobrara un corte, o una tienda vendiendo algo que aún no dio de alta,
+       * se quedaba sin registrar la venta. Registrar la venta es LA función
+       * del producto; el inventario es un añadido y nunca puede ser un peaje.
+       *
+       * Quien sí lleva catálogo recibe un aviso al final de la respuesta: lo
+       * arma `WhatsAppMessageService`, que es quien sabe si vale la pena
+       * mencionarlo.
+       */
+      if (!matches.length) continue;
       if (matches.length > 1) {
         throw new ConflictException(
           `Encontré varios productos para "${transaction.productName}". Indica el nombre exacto.`,
@@ -1128,11 +1196,6 @@ export class PrismaFinanceDataAdapter implements FinanceDataPort {
       }
 
       const product = matches[0];
-      if (product.stock < quantity) {
-        throw new ConflictException(
-          `No hay stock suficiente de "${product.nombre}". Disponible: ${product.stock}; solicitado: ${quantity}.`,
-        );
-      }
 
       result.set(transaction.id, {
         id: product.id,

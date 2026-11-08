@@ -25,6 +25,14 @@ export type MessageIntentType =
   | 'supply_debt'
   /** Alta de un producto en el catalogo de la sede. */
   | 'product'
+  /**
+   * Ajuste de existencias: cuantas unidades QUEDAN de un producto.
+   *
+   * No es un movimiento de dinero. Un conteo, una merma o una rotura cambian
+   * el estante sin que entre ni salga un peso, y registrarlos como venta o
+   * gasto ensuciaria la contabilidad con plata que nunca existio.
+   */
+  | 'stock'
   /** Le pidieron algo que no son las finanzas del negocio (codigo, poemas...). */
   | 'out_of_scope'
   /** Pidio una funcion que solo existe en los planes pagos. */
@@ -305,6 +313,19 @@ export interface SupplyDebtDraft {
  * Categoria y stock son opcionales: se pueden completar despues desde el
  * panel, y pedirlos por WhatsApp alargaria la conversacion sin necesidad.
  */
+/**
+ * Un ajuste de existencias a medio armar.
+ *
+ * `units` son las unidades que QUEDAN, no las que se fueron: un numero
+ * absoluto es verificable mirando el estante, y un incremento ("se rompieron
+ * dos") depende de que el sistema y la persona partan del mismo numero, que es
+ * justo lo que no se puede dar por hecho cuando alguien va a corregir el stock.
+ */
+export interface StockDraft {
+  productName: string | null;
+  units: number | null;
+}
+
 export interface ProductDraft {
   name: string | null;
   /** A cuanto lo vende. */
@@ -447,6 +468,8 @@ export interface MessageIntent {
   supplyDebt: SupplyDebtDraft | null;
   /** Producto que se esta dando de alta. null en todo lo demas. */
   product: ProductDraft | null;
+  /** Ajuste de existencias que se esta armando. null en todo lo demas. */
+  stock: StockDraft | null;
   /**
    * Respuesta a una pregunta de si o no. null cuando el mensaje no contesta
    * ninguna, o cuando contesto algo que no es ni si ni no.

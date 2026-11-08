@@ -112,10 +112,23 @@ export function usePlanPermissions() {
               activeNegocioId,
             );
 
+          /*
+           * Manda el plan VIGENTE, no el contratado.
+           *
+           * El backend autoriza contra el vigente: un plan vencido cae a
+           * Asistente y pierde las funciones de pago. Si aquí leyéramos el
+           * contratado, la interfaz le enseñaría al usuario botones que el
+           * servidor va a rechazar con un 403 — por ejemplo el de agregar
+           * productos al inventario.
+           *
+           * `plan` queda de respaldo por si la respuesta no trae el vigente.
+           */
+          const planEfectivo =
+            negocioPlan?.planVigente ?? negocioPlan?.plan;
+
           const backendPlan =
-            negocioPlan?.plan !== null &&
-            negocioPlan?.plan !== undefined
-              ? Number(negocioPlan.plan)
+            planEfectivo !== null && planEfectivo !== undefined
+              ? Number(planEfectivo)
               : NaN;
 
           if (
@@ -401,6 +414,9 @@ export function usePlanPermissions() {
 
   // Flags de características según plan
   const puedeVerFiados = planUsuarioId >= 2;
+  // El catálogo de productos es de planes pagos. Esta bandera solo decide qué
+  // se PINTA: quien manda es el backend, que responde 403 a un plan gratuito.
+  const puedeGestionarInventario = planUsuarioId >= 2;
   const puedeVerRecomendaciones = planUsuarioId >= 2;
   const puedeExportarExcel = planUsuarioId >= 3;
   const esMultiSede = planUsuarioId >= 3;
@@ -481,6 +497,8 @@ export function usePlanPermissions() {
     puedeCrearNegocio,
 
     puedeVerFiados,
+
+    puedeGestionarInventario,
 
     puedeVerRecomendaciones,
 
