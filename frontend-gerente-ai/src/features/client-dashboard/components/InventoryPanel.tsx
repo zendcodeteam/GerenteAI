@@ -34,6 +34,25 @@ interface InventoryPanelProps {
    * llama se queda con su propio estado aislado.
    */
   puedeGestionarInventario: boolean;
+  /**
+   * Si el plan contratado caduco, y como se llamaba.
+   *
+   * Sirven solo para el texto: a quien se le vencio el plan NO se le puede
+   * decir que el inventario "es de los planes pagos", porque pago. Y sus
+   * productos siguen guardados, que es lo unico que le urge saber.
+   */
+  planVencido?: boolean;
+  planContratadoNombre?: string | null;
+  /**
+   * Abre el modal de planes.
+   *
+   * Viene de fuera porque el modal lo monta DashboardView: `usePlanPermissions`
+   * es un hook con `useState`, asi que si este panel lo llamara por su cuenta
+   * abriria un modal que vive en otro estado y nadie veria nada.
+   *
+   * Si no se pasa, el boton sigue llevando a la pagina de planes.
+   */
+  onUpgrade?: () => void;
   transactions: Array<{
     type?: string;
     productLines?: Array<{ productId: string; quantity: number }>;
@@ -50,6 +69,9 @@ export function InventoryPanel({
   sedeId,
   transactions,
   puedeGestionarInventario,
+  planVencido = false,
+  planContratadoNombre = null,
+  onUpgrade,
 }: InventoryPanelProps) {
   const [productos, setProductos] = useState<Producto[]>([]);
   const [loading, setLoading] = useState(true);
@@ -300,26 +322,42 @@ export function InventoryPanel({
           <h2 className="text-lg font-black text-foreground">Inventario básico</h2>
         </div>
         <p className="mt-1 text-xs text-muted-foreground">
-          Llevar catálogo de productos está disponible en los planes pagos.
+          {planVencido
+            ? planContratadoNombre
+              ? `Tu plan ${planContratadoNombre} está vencido.`
+              : "Tu plan está vencido."
+            : "Llevar catálogo de productos está disponible en los planes pagos."}
         </p>
         <p className="mt-4 text-sm text-muted-foreground">
-          Con tu plan actual puedes registrar tus ventas y gastos con normalidad.
-          Si quieres además controlar existencias, precios y reposición, mejora
-          tu plan y tus productos aparecerán aquí.
+          {planVencido
+            ? "Tus productos siguen guardados: no has perdido nada. Al renovar vuelven a aparecer aquí con sus existencias y precios tal como los dejaste."
+            : "Con tu plan actual puedes registrar tus ventas y gastos con normalidad. Si quieres además controlar existencias, precios y reposición, mejora tu plan y tus productos aparecerán aquí."}
         </p>
         {/*
-          Lleva a la página de planes y no al modal de paywall: ese modal da
-          por hecho que quien llega está en plan Gerente y siempre ofrece
-          Administrador. A un negocio gratuito o vencido le diría que su plan
-          actual es uno que no tiene, y le vendería un plan más caro del que
-          necesita —con Gerente ya hay inventario—.
+          El modal ya no afirma un plan que el negocio no tiene: recibe el
+          plan actual y lo lee del catalogo. Lo que sigue pendiente es cual
+          OFRECE, que es siempre Administrador aunque con Gerente ya haya
+          inventario; esa es una decision comercial y toca el cobro por Wompi.
+
+          Sin `onUpgrade` el boton sigue llevando a la pagina de planes, para
+          que el panel sirva tambien fuera del Dashboard.
         */}
-        <Link
-          to="/subscription"
-          className="mt-4 inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-emerald-700"
-        >
-          Ver planes
-        </Link>
+        {onUpgrade ? (
+          <button
+            type="button"
+            onClick={onUpgrade}
+            className="mt-4 inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-emerald-700"
+          >
+            {planVencido ? "Renovar plan" : "Ver planes"}
+          </button>
+        ) : (
+          <Link
+            to="/subscription"
+            className="mt-4 inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white transition-colors hover:bg-emerald-700"
+          >
+            {planVencido ? "Renovar plan" : "Ver planes"}
+          </Link>
+        )}
       </section>
     );
   }

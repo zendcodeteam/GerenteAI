@@ -17,10 +17,13 @@ import { InventoryPanel } from "./components/InventoryPanel";
 export function DashboardView() {
   const {
     puedeGestionarInventario,
+    planVencido,
+    planContratadoNombre,
     isPaywallOpen,
     paywallMotivo,
     paywallPlanRecomendadoId,
     catalogo,
+    abrirPaywall,
     cerrarPaywall,
     planUsuarioId,
   } = usePlanPermissions();
@@ -169,6 +172,18 @@ export function DashboardView() {
               sedeId={sedeId}
               transactions={transactions}
               puedeGestionarInventario={puedeGestionarInventario}
+              planVencido={planVencido}
+              planContratadoNombre={planContratadoNombre}
+              onUpgrade={() =>
+                abrirPaywall(
+                  planVencido
+                    ? `Tu plan${
+                        planContratadoNombre ? ` ${planContratadoNombre}` : ""
+                      } está vencido y el inventario dejó de estar disponible. Renuévalo para volver a gestionar tu catálogo; tus productos siguen guardados.`
+                    : "El inventario está disponible a partir del Plan Gerente ($39.900/mes). Mejora tu plan para llevar catálogo de productos, existencias y alertas de reposición.",
+                  2,
+                )
+              }
             />
 
             {!isLoading && !hasNoBusiness && (

@@ -74,6 +74,14 @@ export interface RealCashflowProps {
   isChartLoading: boolean;
   planNombre?: string;
   esPagoPlan?: boolean;
+  /**
+   * Si el plan contratado caduco, y como se llamaba.
+   *
+   * Viajan desde CashflowView por lo mismo que `esPagoPlan`: alli ya estan
+   * calculados y volver a pedirlos seria una llamada de mas a /negocios/:id.
+   */
+  planVencido?: boolean;
+  planContratadoNombre?: string | null;
 }
 
 function RealCashflowComponent({
@@ -85,6 +93,8 @@ function RealCashflowComponent({
   isChartLoading,
   planNombre,
   esPagoPlan,
+  planVencido,
+  planContratadoNombre,
 }: RealCashflowProps) {
   const [busqueda, setBusqueda] =
     useState("");
@@ -108,6 +118,11 @@ function RealCashflowComponent({
     cargando: esPagoPlan !== undefined ? false : planFallback.cargando,
     esPago: esPagoPlan !== undefined ? esPagoPlan : planFallback.esPago,
     nombre: planNombre || planFallback.nombre,
+    vencido: planVencido !== undefined ? planVencido : planFallback.vencido,
+    contratadoNombre:
+      planContratadoNombre !== undefined
+        ? planContratadoNombre
+        : planFallback.contratadoNombre,
   };
 
   /*
@@ -644,6 +659,8 @@ function RealCashflowComponent({
           negocioNombre={negocioNombre}
           esPago={plan.esPago}
           planNombre={plan.nombre}
+          planVencido={plan.vencido}
+          planContratadoNombre={plan.contratadoNombre}
           onClose={() =>
             setExportando(false)
           }
