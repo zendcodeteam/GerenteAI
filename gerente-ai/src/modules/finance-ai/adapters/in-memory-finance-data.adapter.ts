@@ -273,6 +273,42 @@ export class InMemoryFinanceDataAdapter implements FinanceDataPort {
     return Promise.resolve(debt);
   }
 
+  hasCatalog(businessId: string): Promise<boolean> {
+    return Promise.resolve(
+      this.products.some((producto) => producto.businessId === businessId),
+    );
+  }
+
+  findProductByName(
+    businessId: string,
+    name: string,
+  ): Promise<{ id: string; name: string; stock: number } | null> {
+    const buscado = name.trim().toLowerCase();
+    const fila = this.products.find(
+      (producto) =>
+        producto.businessId === businessId &&
+        producto.name.trim().toLowerCase() === buscado,
+    );
+
+    return Promise.resolve(
+      fila ? { id: fila.name, name: fila.name, stock: fila.stock } : null,
+    );
+  }
+
+  setProductStock(
+    businessId: string,
+    productId: string,
+    units: number,
+  ): Promise<void> {
+    const fila = this.products.find(
+      (producto) =>
+        producto.businessId === businessId && producto.name === productId,
+    );
+    if (fila) fila.stock = units;
+
+    return Promise.resolve();
+  }
+
   saveProduct(
     product: ProductRegistration,
   ): Promise<ProductRegistrationResult> {

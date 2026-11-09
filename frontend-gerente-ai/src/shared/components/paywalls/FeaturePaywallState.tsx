@@ -42,6 +42,17 @@ interface FeaturePaywallStateProps {
   features: FeatureItem[];
 
   planDescription?: string;
+
+  /**
+   * Si el plan contratado caduco, y como se llamaba.
+   *
+   * Con esto la tarjeta deja de decirle "mejora tu plan" a quien ya pago uno
+   * mas alto: lo que necesita es renovar, y le hace falta saber que no ha
+   * perdido sus datos. Mismo criterio que el backend, que ya distingue los
+   * dos casos en sus mensajes de 403.
+   */
+  planVencido?: boolean;
+  planContratadoNombre?: string | null;
 }
 
 const iconConfig = {
@@ -78,6 +89,8 @@ const colorConfig = {
 
 export function FeaturePaywallState({
   onUpgrade,
+  planVencido = false,
+  planContratadoNombre = null,
   badge,
   title,
   description,
@@ -101,7 +114,13 @@ export function FeaturePaywallState({
         <div className="inline-flex items-center gap-1.5 sm:gap-2 px-3 py-1 rounded-full bg-emerald-500/10 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 text-[11px] sm:text-xs font-bold mb-2.5 sm:mb-4 shadow-xs">
           <Sparkles className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 animate-pulse" />
 
-          <span>{badge}</span>
+          <span>
+            {planVencido
+              ? planContratadoNombre
+                ? `Tu plan ${planContratadoNombre} está vencido`
+                : "Tu plan está vencido"
+              : badge}
+          </span>
         </div>
 
         <h2 className="text-xl sm:text-3xl font-black text-foreground tracking-tight max-w-2xl mx-auto leading-tight">
@@ -172,7 +191,9 @@ export function FeaturePaywallState({
           </h3>
 
           <p className="text-[11px] sm:text-xs text-muted-foreground mt-1 max-w-xs sm:max-w-md leading-relaxed">
-            {planDescription}
+            {planVencido
+              ? "Tus datos siguen guardados: no has perdido nada. Al renovar vuelve a estar disponible tal como lo dejaste."
+              : planDescription}
           </p>
 
           <button
@@ -182,7 +203,7 @@ export function FeaturePaywallState({
           >
             <Sparkles className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-950" />
 
-            <span>Mejorar mi Plan</span>
+            <span>{planVencido ? "Renovar mi Plan" : "Mejorar mi Plan"}</span>
 
             <ArrowRight className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-950" />
           </button>

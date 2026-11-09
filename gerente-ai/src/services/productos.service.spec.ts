@@ -8,13 +8,14 @@ import { Prisma } from '@prisma/client';
 import { ProductosService } from './productos.service';
 import { PrismaService } from './prisma.service';
 import { NegociosService } from './negocios.service';
+import { PlanesService } from './planes.service';
 import { CreateProductoDto } from '../dto/productos/create-producto.dto';
 import { UpdateProductoDto } from '../dto/productos/update-producto.dto';
 
 type MockFn = jest.Mock;
 
 interface MockPrisma {
-  sede: { findUnique: MockFn };
+  sede: { findUnique: MockFn; findMany: MockFn };
   producto: {
     create: MockFn;
     findMany: MockFn;
@@ -34,18 +35,32 @@ describe('ProductosService', () => {
   let negociosService: {
     verificarAccesoSede: MockFn;
     filtroDeSedes: MockFn;
+    sedesVisibles: MockFn;
+  };
+  let planes: {
+    tieneFuncionalidad: MockFn;
+    estado: MockFn;
   };
 
   const sedeMock = {
     id: 'sede-1',
     negocioId: 'negocio-1',
     nombre: 'Sede Central',
+    // La comprobacion de plan lee el negocio desde la sede.
+    negocio: { plan: 2, planVenceEl: null },
   };
 
   beforeEach(() => {
     prisma = {
       sede: {
         findUnique: jest.fn().mockResolvedValue(sedeMock),
+        // Lo que usa el listado sin sede concreta para saber que negocios
+        // tienen inventario en su plan.
+        findMany: jest
+          .fn()
+          .mockResolvedValue([
+            { id: 'sede-1', negocio: { plan: 2, planVenceEl: null } },
+          ]),
       },
       producto: {
         create: jest
@@ -79,11 +94,24 @@ describe('ProductosService', () => {
     negociosService = {
       verificarAccesoSede: jest.fn().mockResolvedValue(undefined),
       filtroDeSedes: jest.fn().mockResolvedValue({ in: ['sede-1'] }),
+      sedesVisibles: jest.fn().mockResolvedValue(['sede-1']),
+    };
+
+    // Por defecto, un negocio con plan de pago: es el caso corriente y el que
+    // recorren casi todas estas pruebas. Las del plan gratuito lo cambian.
+    planes = {
+      tieneFuncionalidad: jest.fn().mockReturnValue(true),
+      estado: jest.fn().mockReturnValue({
+        vigente: { id: 2, nombre: 'Gerente' },
+        contratado: { id: 2, nombre: 'Gerente' },
+        vencido: false,
+      }),
     };
 
     service = new ProductosService(
       prisma as unknown as PrismaService,
       negociosService as unknown as NegociosService,
+      planes as unknown as PlanesService,
     );
   });
 
@@ -1506,6 +1534,172 @@ describe('ProductosService', () => {
           nombre: '     ',
         }),
       ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  /**
+   * El inventario es de planes pagos.
+   *
+   * Lo que importa aqui es DONDE se comprueba: en el backend. Si viviera solo
+   * en el frontend, cualquiera con la URL del API seguiria registrando
+   * productos en un negocio gratuito, que es justo como se colaron los que ya
+   * estan en la base.
+   */
+  describe('El inventario solo esta en los planes pagos', () => {
+    const dto = {
+      nombre: 'Arroz Diana 1kg',
+      categoria: 'Abarrotes',
+      precioCompra: 3500,
+      precioVenta: 4200,
+      sedeId: 'sede-1',
+    } as CreateProductoDto;
+
+    /** Un negocio con plan Asistente (gratuito). */
+    function conPlanGratuito() {
+      planes.tieneFuncionalidad.mockReturnValue(false);
+      planes.estado.mockReturnValue({
+        vigente: { id: 1, nombre: 'Asistente' },
+        contratado: { id: 1, nombre: 'Asistente' },
+        vencido: false,
+      });
+    }
+
+    /** Un plan de pago que caduco: cae a Asistente y pierde el acceso. */
+    function conPlanVencido() {
+      planes.tieneFuncionalidad.mockReturnValue(false);
+      planes.estado.mockReturnValue({
+        vigente: { id: 1, nombre: 'Asistente' },
+        contratado: { id: 3, nombre: 'Administrador' },
+        vencido: true,
+      });
+    }
+
+    beforeEach(() => {
+      prisma.sede.findUnique.mockResolvedValue(sedeMock);
+      prisma.producto.findUnique.mockResolvedValue({
+        id: 'prod-1',
+        sedeId: 'sede-1',
+        nombre: 'Arroz Diana 1kg',
+        alias: [] as string[],
+        precioCompra: new Prisma.Decimal(3500),
+        precioVenta: new Prisma.Decimal(4200),
+      });
+    });
+
+    it('un negocio gratuito no puede registrar productos', async () => {
+      conPlanGratuito();
+
+      await expect(service.create('user-1', 'CLIENTE', dto)).rejects.toThrow(
+        ForbiddenException,
+      );
+
+      expect(prisma.producto.create).not.toHaveBeenCalled();
+    });
+
+    /*
+     * Leer NO depende del plan, y es una regla que el repositorio ya tenia
+     * escrita (aislamiento.e2e-spec): "un negocio con el plan vencido conserva
+     * el historico de todas sus sedes". Si vencer la suscripcion escondiera lo
+     * que el tendero registro, el castigo por dejar de pagar seria perder de
+     * vista su propia contabilidad.
+     */
+    it('pero SI puede seguir viendo lo que ya tiene registrado', async () => {
+      conPlanGratuito();
+
+      await expect(
+        service.findAll('user-1', 'CLIENTE', { sedeId: 'sede-1' }),
+      ).resolves.toBeDefined();
+    });
+
+    it('y consultar un producto suelto tampoco se bloquea', async () => {
+      conPlanGratuito();
+
+      await expect(
+        service.findOne('prod-1', 'user-1', 'CLIENTE'),
+      ).resolves.toMatchObject({ id: 'prod-1' });
+    });
+
+    it('ni editarlos', async () => {
+      conPlanGratuito();
+
+      await expect(
+        service.update('prod-1', 'user-1', 'CLIENTE', { precioVenta: 5000 }),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(prisma.producto.update).not.toHaveBeenCalled();
+    });
+
+    it('ni borrarlos', async () => {
+      conPlanGratuito();
+
+      await expect(
+        service.remove('prod-1', 'user-1', 'CLIENTE'),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(prisma.producto.delete).not.toHaveBeenCalled();
+    });
+
+    // Lo que ya registraron durante las pruebas NO se borra. El bloqueo es de
+    // acceso, no de datos.
+    it('el bloqueo no borra nada de lo que ya estaba', async () => {
+      conPlanGratuito();
+
+      await expect(
+        service.remove('prod-1', 'user-1', 'CLIENTE'),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(prisma.producto.delete).not.toHaveBeenCalled();
+      expect(prisma.producto.update).not.toHaveBeenCalled();
+    });
+
+    it('se comprueba contra el plan VIGENTE, no el contratado', async () => {
+      conPlanVencido();
+
+      await expect(service.create('user-1', 'CLIENTE', dto)).rejects.toThrow(
+        ForbiddenException,
+      );
+
+      // No hay logica propia de vencimiento: se delega en PlanesService, que
+      // ya hace caer un plan caducado a Asistente.
+      expect(planes.tieneFuncionalidad).toHaveBeenCalledWith(
+        2,
+        null,
+        'inventario',
+      );
+    });
+
+    // Quien deja vencer su plan tiene que entender que no perdio nada.
+    it('a un plan vencido se le dice que sus productos siguen ahi', async () => {
+      conPlanVencido();
+
+      await expect(service.create('user-1', 'CLIENTE', dto)).rejects.toThrow(
+        /los recuperas al renovar/i,
+      );
+    });
+
+    it('al gratuito se le explica que si puede registrar ventas y gastos', async () => {
+      conPlanGratuito();
+
+      await expect(service.create('user-1', 'CLIENTE', dto)).rejects.toThrow(
+        /ventas y gastos/i,
+      );
+    });
+
+    it('con un plan de pago, todo sigue funcionando', async () => {
+      await expect(
+        service.create('user-1', 'CLIENTE', dto),
+      ).resolves.toMatchObject({ nombre: 'Arroz Diana 1kg' });
+    });
+
+    // MASTER es soporte, no un cliente con plan: pasa igual que en la
+    // comprobacion de permisos.
+    it('MASTER no pasa por la comprobacion de plan', async () => {
+      conPlanGratuito();
+
+      await expect(
+        service.create('user-1', 'MASTER', dto),
+      ).resolves.toBeDefined();
+      expect(planes.tieneFuncionalidad).not.toHaveBeenCalled();
     });
   });
 });

@@ -149,7 +149,7 @@ import {
  * ---------------------------------------------------------------------------
  */
 
-export const WHATSAPP_ASSISTANT_PROMPT_VERSION = 'asistente-whatsapp/v23';
+export const WHATSAPP_ASSISTANT_PROMPT_VERSION = 'asistente-whatsapp/v25';
 
 /**
  * Forma CRUDA de la respuesta del modelo.
@@ -166,6 +166,10 @@ export interface WhatsAppIntentOutput {
     costPrice?: number | string | null;
     category?: string | null;
     stock?: number | string | null;
+  } | null;
+  stock?: {
+    productName?: string | null;
+    units?: number | string | null;
   } | null;
   payroll?: {
     workerName?: string | null;
@@ -285,6 +289,10 @@ código, sin markdown. El JSON debe tener esta estructura exacta:
     "settlesDebt": boolean,
     "date": "YYYY-MM-DD" | null
   } | null,
+  "stock": {
+    "productName": string | null,
+    "units": number | null
+  } | null,
   "concept": string | null,
   "queryKind": "summary" | "list" | "search" | "receivables" | null,
   "queryPeriod": "day" | "yesterday" | "week" | "last_week" | "month" | "last_month" | "last_7_days" | "last_15_days" | "last_30_days" | null,
@@ -297,14 +305,18 @@ código, sin markdown. El JSON debe tener esta estructura exacta:
 REGLA DE ORO: "movements" es una LISTA. Un mensaje puede traer varios movimientos y
 cada uno va como un elemento aparte. NUNCA los sumes en uno solo.
 
-REGLA OBLIGATORIA DE PRODUCTOS:
-   - Para cada venta, gasto de mercancía o fiado, debes extraer siempre
-     "productName" y "quantity" cuando el usuario los diga.
-   - Si no aparecen, deja esos campos en null. El backend le preguntará al
-     usuario antes de registrar el movimiento; nunca inventes el producto ni
-     la cantidad.
-   - Una venta o gasto de mercancía no debe considerarse completo solo porque
-     tenga monto: también necesita producto y unidades.
+PRODUCTOS EN LOS MOVIMIENTOS:
+   - Extrae "productName" y "quantity" SOLO cuando el usuario nombre una
+     mercancía concreta y sus unidades: "vendí 3 gaseosas", "compré 20 panes".
+   - Si no los dice, déjalos en null. Nunca los inventes ni los deduzcas.
+   - Un SERVICIO no tiene producto ni unidades. "Me pagaron 25.000 por un
+     corte", "cobré 40.000 por el domicilio", "pagué 50.000 de arriendo":
+     productName y quantity en null. No todos los negocios venden mercancía;
+     una peluquería o un restaurante no tienen nada que contar en un estante.
+   - UNA VENTA CON SU MONTO ESTÁ COMPLETA. El producto y las unidades sirven
+     para descontar existencias a quien lleva inventario, y no hacen falta
+     para registrar el movimiento. Nunca uses "unclear" porque falte el
+     producto o la cantidad de un ingreso o un gasto que ya trae su monto.
 
 REGLAS DE INTERPRETACIÓN:
 
@@ -452,6 +464,36 @@ REGLAS DE INTERPRETACIÓN:
    - SI NO DICE LOS PORCENTAJES ("hay que repartir las ganancias"), NO los
      inventes: usa type "unclear" y pregunta qué porcentaje le toca a cada uno.
    - Los montos los calcula el sistema: tú solo entregas los porcentajes.
+
+7A-bis. AJUSTE DE EXISTENCIAS (type: "stock"):
+   El dueño corrige cuántas unidades le quedan de un producto. NO es dinero.
+
+   - "Me quedan 3 gaseosas"                -> stock con productName y units 3
+   - "Quedan 0 panes"                      -> stock con units 0 (el 0 es válido)
+   - "Ajusta el inventario de arroz a 25"  -> stock con productName y units 25
+   - "Conté la bodega: 12 panelas"         -> stock con productName y units 12
+   - "Se me rompieron 2 gaseosas"          -> stock con productName y units null
+   - "Corrige el stock"                    -> stock con todo en null
+
+   REGLAS:
+   - "units" son las unidades que QUEDAN, nunca las que se fueron. Si el
+     mensaje solo dice cuántas se perdieron ("se rompieron 2", "se vencieron
+     3"), deja units en null: el sistema preguntará cuántas quedan. Restar por
+     tu cuenta exige saber de cuántas partía, y ese número puede estar mal:
+     es justo lo que el usuario está corrigiendo.
+   - El 0 es un valor válido y distinto de null. "Se acabaron las gaseosas"
+     es units 0, no units null.
+   - "movements" va SIEMPRE vacío: []. Contar el estante no mueve plata.
+
+   NO lo confundas con una VENTA, que es el error caro:
+     "Vendí 3 gaseosas"      -> income (entró dinero)
+     "Me quedan 3 gaseosas"  -> stock   (no entró nada)
+   Si lo marcas como stock cuando fue una venta, el ingreso desaparece de la
+   contabilidad. Ante la duda entre los dos, usa income.
+
+   NO lo confundas con dar de alta un producto (regla 7A):
+     "Agrega gaseosa, la vendo en 2.000"  -> product (no existe todavía)
+     "Me quedan 3 gaseosas"               -> stock   (ya existe)
 
 7B. PAGO DE NOMINA (type: "payroll"):
    El dueño le paga a un trabajador lo que le corresponde.
@@ -1167,6 +1209,7 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
     'payroll',
     'supplyDebt',
     'product',
+    'stock',
     'confirmed',
     'confirmedCount',
     'concept',
@@ -1188,6 +1231,7 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
         'payroll',
         'supply_debt',
         'product',
+        'stock',
         'query',
         'correction',
         'confirmation',
@@ -1517,6 +1561,24 @@ export const WHATSAPP_INTENT_SCHEMA: JsonSchema = {
         stock: {
           type: ['number', 'null'],
           description: 'Unidades con las que arranca. Opcional; 0 es valido.',
+        },
+      },
+    },
+    stock: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      required: ['productName', 'units'],
+      description:
+        'Ajuste de existencias de un producto del catalogo. null si el mensaje no habla de eso.',
+      properties: {
+        productName: {
+          type: ['string', 'null'],
+          description: 'Producto que se esta contando. null si no lo dijo.',
+        },
+        units: {
+          type: ['number', 'null'],
+          description:
+            'Unidades que QUEDAN, no las que se fueron. 0 es valido. null si no lo dijo.',
         },
       },
     },

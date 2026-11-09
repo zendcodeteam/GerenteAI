@@ -318,6 +318,31 @@ describe('Alta de producto por WhatsApp (e2e)', () => {
       expect(Number(guardado!.precioCompra)).toBe(1200);
     });
 
+    /*
+     * Lo que el usuario dijo en un turno tiene que sobrevivir a los
+     * siguientes. `normalizeStock` convertia el `stock: null` que el modelo
+     * manda cuando no habla de unidades en un 0 bien formado, y ese 0 pisaba
+     * las unidades que el tendero ya habia dicho: decia "tengo 20" y el
+     * producto acababa entrando con 0.
+     */
+    it('las unidades dichas al principio sobreviven a los turnos siguientes', async () => {
+      llm.guion(
+        producto({ name: 'Panela', salePrice: 2000, stock: 20 }),
+        producto({ costPrice: 1200 }),
+        si(),
+      );
+
+      await escribir('agrega panela, tengo 20 y la vendo en 2000');
+      const resumen = await escribir('me cuesta 1200');
+      expect(respuesta(resumen)).toContain('Stock inicial: 20');
+
+      await escribir('si');
+
+      expect(
+        await prisma.producto.findFirst({ where: { nombre: 'Panela' } }),
+      ).toMatchObject({ stock: 20 });
+    });
+
     // La categoria y el stock son opcionales a proposito: pedirlos alargaria
     // la conversacion sin cambiar lo que el producto hace.
     it('sin categoria entra como "Sin categoría", no se pregunta', async () => {
@@ -543,5 +568,208 @@ describe('Alta de producto por WhatsApp (e2e)', () => {
     expect(res.status).toBe(200);
     expect(respuesta(res)).toContain('Regístrate');
     expect(await prisma.producto.count()).toBe(3);
+  });
+
+  /**
+   * Dar de alta un producto por WhatsApp tambien es premium. El corte tiene
+   * que estar en el backend: por este canal no hay pantalla que esconder.
+   */
+  describe('el catalogo por WhatsApp es de planes pagos', () => {
+    beforeEach(async () => {
+      await prisma.negocio.update({
+        where: { id: s.negocioId },
+        data: { plan: 1, planVenceEl: null },
+      });
+    });
+
+    it('no da de alta el producto y ofrece mejorar el plan', async () => {
+      llm.guion(producto({ name: 'Panela', salePrice: 2000, costPrice: 1200 }));
+
+      const res = await escribir('agrega panela, la vendo en 2000');
+
+      expect(respuesta(res)).toMatch(/no está incluida en tu plan/i);
+      expect(await productosDeLaSedeA()).toHaveLength(2);
+    });
+
+    // El mensaje comercial lo arma el backend en un solo sitio: asi los
+    // precios y el enlace no se improvisan ni se contradicen entre canales.
+    it('el mensaje es el comercial de siempre, con el enlace a los planes', async () => {
+      llm.guion(producto({ name: 'Panela', salePrice: 2000, costPrice: 1200 }));
+
+      const res = await escribir('agrega panela');
+
+      expect(respuesta(res)).toMatch(/sigo registrando tus gastos/i);
+    });
+
+    it('ni siquiera llega a preguntar por los datos que faltan', async () => {
+      llm.guion(producto({ name: 'Panela' }));
+
+      const res = await escribir('agrega panela');
+
+      expect(respuesta(res)).not.toMatch(/En cuánto vendes/i);
+    });
+  });
+
+  /**
+   * Ajustar las existencias desde WhatsApp.
+   *
+   * Antes no existia: quien contaba su bodega y queria corregir el stock no
+   * tenia por donde, y Luka no sabia ni orientarle.
+   *
+   * El riesgo de esta funcion es confundir un conteo con una venta: si "me
+   * quedan 3 gaseosas" se registrara como ingreso, aparecerian pesos que nunca
+   * entraron. Por eso el ajuste NO crea ningun movimiento y el resumen se lo
+   * dice al usuario con todas las letras antes de aplicarlo.
+   */
+  describe('ajustar las existencias de un producto', () => {
+    const ajuste = (parcial: Record<string, unknown>): Intencion => ({
+      type: 'stock',
+      movements: [],
+      stock: { productName: null, units: null, ...parcial },
+    });
+
+    const stockDe = async (id: string) =>
+      (await prisma.producto.findUniqueOrThrow({ where: { id } })).stock;
+
+    it('ensena de cuanto a cuanto va, y pide confirmacion', async () => {
+      llm.guion(ajuste({ productName: 'Gaseosa', units: 3 }));
+
+      const res = await escribir('me quedan 3 gaseosas');
+
+      expect(respuesta(res)).toContain('Antes: 10 unidades');
+      expect(respuesta(res)).toContain('Después: 3 unidades');
+      expect(respuesta(res)).toContain('Bajan 7 unidades');
+    });
+
+    // La duda razonable de quien corrige un conteo: "¿esto me descuadra la
+    // plata?". Dejarla sin responder hace que no se use la funcion.
+    it('avisa de que no registra ninguna venta ni gasto', async () => {
+      llm.guion(ajuste({ productName: 'Gaseosa', units: 3 }));
+
+      const res = await escribir('me quedan 3 gaseosas');
+
+      expect(respuesta(res)).toMatch(
+        /no registra ninguna venta ni ningún gasto/i,
+      );
+    });
+
+    it('no toca nada hasta que el usuario dice que si', async () => {
+      llm.guion(ajuste({ productName: 'Gaseosa', units: 3 }));
+
+      await escribir('me quedan 3 gaseosas');
+
+      expect(await stockDe(s.gaseosaId)).toBe(10);
+    });
+
+    it('al confirmar, deja el stock en lo que dijo', async () => {
+      llm.guion(ajuste({ productName: 'Gaseosa', units: 3 }), si());
+
+      await escribir('me quedan 3 gaseosas');
+      const res = await escribir('sí');
+
+      expect(await stockDe(s.gaseosaId)).toBe(3);
+      expect(respuesta(res)).toContain('queda con 3 unidades');
+    });
+
+    // Lo mas importante de todo: el ajuste NO es dinero.
+    it('y no crea ninguna venta ni ningun gasto', async () => {
+      llm.guion(ajuste({ productName: 'Gaseosa', units: 3 }), si());
+
+      await escribir('me quedan 3 gaseosas');
+      await escribir('sí');
+
+      expect(await prisma.venta.count()).toBe(0);
+      expect(await prisma.gasto.count()).toBe(0);
+      expect(await prisma.detalleVenta.count()).toBe(0);
+    });
+
+    it('si dice que no, el stock se queda como estaba', async () => {
+      llm.guion(ajuste({ productName: 'Gaseosa', units: 3 }), no());
+
+      await escribir('me quedan 3 gaseosas');
+      const res = await escribir('no');
+
+      expect(await stockDe(s.gaseosaId)).toBe(10);
+      expect(respuesta(res)).toMatch(/dejé el inventario como estaba/i);
+    });
+
+    it('el 0 es un valor valido: se acabaron', async () => {
+      llm.guion(ajuste({ productName: 'Gaseosa', units: 0 }), si());
+
+      await escribir('se acabaron las gaseosas');
+      await escribir('sí');
+
+      expect(await stockDe(s.gaseosaId)).toBe(0);
+    });
+
+    it('subir el stock tambien funciona', async () => {
+      llm.guion(ajuste({ productName: 'Gaseosa', units: 40 }), si());
+
+      await escribir('conté la bodega: 40 gaseosas');
+      const res = await escribir('sí');
+
+      expect(await stockDe(s.gaseosaId)).toBe(40);
+      expect(res.status).toBe(200);
+    });
+
+    /*
+     * "Se me rompieron 2" dice cuantas se fueron, no cuantas quedan. Restar
+     * por cuenta propia exige saber de cuantas se partia, y ese numero puede
+     * estar mal: es justo lo que el usuario esta corrigiendo.
+     */
+    it('si no dice cuantas quedan, lo pregunta y dice cuantas tiene anotadas', async () => {
+      llm.guion(ajuste({ productName: 'Gaseosa' }));
+
+      const res = await escribir('se me rompieron 2 gaseosas');
+
+      expect(respuesta(res)).toMatch(/cuántas unidades de Gaseosa te quedan/i);
+      expect(respuesta(res)).toContain('10');
+      expect(await stockDe(s.gaseosaId)).toBe(10);
+    });
+
+    it('y con la respuesta del usuario completa el ajuste', async () => {
+      llm.guion(ajuste({ productName: 'Gaseosa' }), ajuste({ units: 8 }), si());
+
+      await escribir('se me rompieron 2 gaseosas');
+      await escribir('me quedan 8');
+      await escribir('sí');
+
+      expect(await stockDe(s.gaseosaId)).toBe(8);
+    });
+
+    it('si no dice el producto, lo pregunta', async () => {
+      llm.guion(ajuste({}));
+
+      const res = await escribir('corrige el inventario');
+
+      expect(respuesta(res)).toMatch(/de qué producto/i);
+    });
+
+    /*
+     * Lo que pedia el issue: que Luka no se limite a decir que no puede, sino
+     * que indique como continuar.
+     */
+    it('si el producto no esta en el catalogo, dice como agregarlo', async () => {
+      llm.guion(ajuste({ productName: 'Audifonos', units: 5 }));
+
+      const res = await escribir('me quedan 5 audífonos');
+
+      expect(respuesta(res)).toMatch(/no encontré "Audifonos"/i);
+      expect(respuesta(res)).toMatch(/agrega Audifonos/i);
+      expect(respuesta(res)).not.toMatch(/no puedo/i);
+    });
+
+    it('ajustar inventario tambien es de planes pagos', async () => {
+      await prisma.negocio.update({
+        where: { id: s.negocioId },
+        data: { plan: 1, planVenceEl: null },
+      });
+      llm.guion(ajuste({ productName: 'Gaseosa', units: 3 }));
+
+      const res = await escribir('me quedan 3 gaseosas');
+
+      expect(respuesta(res)).toMatch(/no está incluida en tu plan/i);
+      expect(await stockDe(s.gaseosaId)).toBe(10);
+    });
   });
 });

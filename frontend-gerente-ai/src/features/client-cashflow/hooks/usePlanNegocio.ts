@@ -21,6 +21,7 @@ const NOMBRES: Record<number, string> = {
   2: 'Gerente',
   3: 'Administrador',
   4: 'Socio',
+  5: 'Corporativo',
 };
 
 export interface EstadoPlan {
@@ -29,6 +30,15 @@ export interface EstadoPlan {
   /** true si el plan vigente NO es el gratuito. */
   esPago: boolean;
   nombre: string;
+  /**
+   * Si el plan contratado caduco, y como se llamaba.
+   *
+   * El vencimiento ya se calculaba aqui para decidir el vigente, pero se
+   * tiraba. Hace falta para hablarle al usuario: a quien pago y se le vencio
+   * no se le puede decir que la funcion "viene con los planes pagos".
+   */
+  vencido: boolean;
+  contratadoNombre: string | null;
 }
 
 export function usePlanNegocio(negocioId: string): EstadoPlan {
@@ -36,11 +46,19 @@ export function usePlanNegocio(negocioId: string): EstadoPlan {
     cargando: true,
     esPago: false,
     nombre: 'Asistente',
+    vencido: false,
+    contratadoNombre: null,
   });
 
   useEffect(() => {
     if (!negocioId) {
-      setEstado({ cargando: false, esPago: false, nombre: 'Asistente' });
+      setEstado({
+        cargando: false,
+        esPago: false,
+        nombre: 'Asistente',
+        vencido: false,
+        contratadoNombre: null,
+      });
       return;
     }
 
@@ -60,13 +78,21 @@ export function usePlanNegocio(negocioId: string): EstadoPlan {
           cargando: false,
           esPago: vigente !== PLAN_ASISTENTE,
           nombre: NOMBRES[vigente] ?? 'Asistente',
+          vencido,
+          contratadoNombre: NOMBRES[negocio.plan] ?? null,
         });
       })
       .catch(() => {
         // Ante un fallo se asume el plan gratuito: es preferible ofrecer de más
         // que regalar una función de pago por un error de red.
         if (!cancelado) {
-          setEstado({ cargando: false, esPago: false, nombre: 'Asistente' });
+          setEstado({
+            cargando: false,
+            esPago: false,
+            nombre: 'Asistente',
+            vencido: false,
+            contratadoNombre: null,
+          });
         }
       });
 

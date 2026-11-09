@@ -27,6 +27,9 @@ interface Props {
   /** false = plan gratuito: en vez del selector se muestra qué trae el Excel. */
   esPago: boolean;
   planNombre: string;
+  /** Si el plan contratado caduco, y como se llamaba. Ver EstadoPlan. */
+  planVencido?: boolean;
+  planContratadoNombre?: string | null;
   onClose: () => void;
 }
 
@@ -76,6 +79,8 @@ export function ExportarContabilidadModal({
   negocioNombre,
   esPago,
   planNombre,
+  planVencido = false,
+  planContratadoNombre = null,
   onClose,
 }: Props) {
   const [preset, setPreset] = useState<Preset>("mes");
@@ -206,13 +211,17 @@ export function ExportarContabilidadModal({
               <div className="flex items-center gap-2 mb-1">
                 <Lock className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                 <p className="text-sm font-bold text-foreground">
-                  Incluido en los planes Gerente y Administrador
+                  {planVencido
+                    ? planContratadoNombre
+                      ? `Tu plan ${planContratadoNombre} está vencido`
+                      : "Tu plan está vencido"
+                    : "Incluido en los planes Gerente y Administrador"}
                 </p>
               </div>
               <p className="text-xs text-muted-foreground leading-relaxed">
-                Tu plan {planNombre} registra tus movimientos y te da resúmenes por WhatsApp.
-                La contabilidad completa en Excel, lista para tu contador, viene con los planes
-                pagos.
+                {planVencido
+                  ? "Sigues registrando tus movimientos y recibiendo resúmenes por WhatsApp, y toda tu información sigue guardada. Al renovar vuelves a poder descargar la contabilidad completa en Excel."
+                  : `Tu plan ${planNombre} registra tus movimientos y te da resúmenes por WhatsApp. La contabilidad completa en Excel, lista para tu contador, viene con los planes pagos.`}
               </p>
             </div>
 

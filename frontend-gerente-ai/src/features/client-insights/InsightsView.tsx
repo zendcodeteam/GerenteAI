@@ -32,6 +32,8 @@ export function InsightsView() {
   const {
     planUsuarioId,
     planNombre,
+    planVencido,
+    planContratadoNombre,
     cantidadNegocios,
 
     isPaywallOpen,
@@ -272,10 +274,14 @@ export function InsightsView() {
           <FeaturePaywallState
             onUpgrade={() =>
               abrirPaywall(
-                "Las Recomendaciones de IA están disponibles a partir del Plan Gerente ($39.900/mes). Mejora tu plan para acceder a análisis predictivo y alertas en tiempo real.",
+                planVencido
+                  ? "Tu plan está vencido y las Recomendaciones de IA dejaron de estar disponibles. Renuévalo para volver a recibirlas; tu historial sigue guardado."
+                  : "Las Recomendaciones de IA están disponibles a partir del Plan Gerente ($39.900/mes). Mejora tu plan para acceder a análisis predictivo y alertas en tiempo real.",
                 2,
               )
             }
+            planVencido={planVencido}
+            planContratadoNombre={planContratadoNombre}
             badge="Disponible a partir del Plan Gerente ($39.900/mes)"
             title={
               <>
@@ -532,6 +538,7 @@ export function InsightsView() {
         isOpen={isPaywallOpen}
         onClose={cerrarPaywall}
         motivo={paywallMotivo}
+        planActualId={planUsuarioId}
         planRecomendadoId={paywallPlanRecomendadoId}
       />
     </div>

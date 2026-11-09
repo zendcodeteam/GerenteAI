@@ -25,6 +25,21 @@ export function usePlanPermissions() {
   const [planUsuarioId, setPlanUsuarioId] =
     useState<number>(1);
 
+  /*
+   * Lo contratado y si caduco.
+   *
+   * `planUsuarioId` es el VIGENTE y con el se autoriza, pero no basta para
+   * hablarle al usuario: a quien se le vencio el plan no se le puede decir
+   * lo mismo que a quien nunca pago. El backend ya distingue los dos casos
+   * (ver porQueNoHayInventario en productos.service.ts) y la interfaz tiene
+   * que decir lo mismo que el bot, no contradecirlo.
+   */
+  const [planVencido, setPlanVencido] =
+    useState<boolean>(false);
+
+  const [planContratadoId, setPlanContratadoId] =
+    useState<number | null>(null);
+
   const [isLoading, setIsLoading] =
     useState<boolean>(true);
 
@@ -89,6 +104,12 @@ export function usePlanPermissions() {
 
       let resolvedPlan = 1;
 
+      // Arrancan en "no vencido": MASTER y el caso sin negocio activo no
+      // tienen vencimiento que contar, y el estado anterior no debe quedarse
+      // pegado entre recargas.
+      let resolvedVencido = false;
+      let resolvedContratado: number | null = null;
+
       /*
        * MASTER
        *
@@ -112,10 +133,30 @@ export function usePlanPermissions() {
               activeNegocioId,
             );
 
-          const backendPlan =
-            negocioPlan?.plan !== null &&
-            negocioPlan?.plan !== undefined
+          /*
+           * Manda el plan VIGENTE, no el contratado.
+           *
+           * El backend autoriza contra el vigente: un plan vencido cae a
+           * Asistente y pierde las funciones de pago. Si aquí leyéramos el
+           * contratado, la interfaz le enseñaría al usuario botones que el
+           * servidor va a rechazar con un 403 — por ejemplo el de agregar
+           * productos al inventario.
+           *
+           * `plan` queda de respaldo por si la respuesta no trae el vigente.
+           */
+          const planEfectivo =
+            negocioPlan?.planVigente ?? negocioPlan?.plan;
+
+          resolvedVencido = negocioPlan?.planVencido === true;
+
+          resolvedContratado =
+            negocioPlan?.plan !== null && negocioPlan?.plan !== undefined
               ? Number(negocioPlan.plan)
+              : null;
+
+          const backendPlan =
+            planEfectivo !== null && planEfectivo !== undefined
+              ? Number(planEfectivo)
               : NaN;
 
           if (
@@ -162,6 +203,10 @@ export function usePlanPermissions() {
 
       setPlanUsuarioId(resolvedPlan);
 
+      setPlanVencido(resolvedVencido);
+
+      setPlanContratadoId(resolvedContratado);
+
       // ========================================================
       // CANTIDAD DE NEGOCIOS
       // ========================================================
@@ -202,6 +247,8 @@ export function usePlanPermissions() {
               (p) =>
                 p.id === resolvedPlan,
             )?.nombre,
+          planVencido: resolvedVencido,
+          planContratado: resolvedContratado,
           isMaster,
           cantidadNegocios:
             Array.isArray(perfil?.negocios)
@@ -401,6 +448,9 @@ export function usePlanPermissions() {
 
   // Flags de características según plan
   const puedeVerFiados = planUsuarioId >= 2;
+  // El catálogo de productos es de planes pagos. Esta bandera solo decide qué
+  // se PINTA: quien manda es el backend, que responde 403 a un plan gratuito.
+  const puedeGestionarInventario = planUsuarioId >= 2;
   const puedeVerRecomendaciones = planUsuarioId >= 2;
   const puedeExportarExcel = planUsuarioId >= 3;
   const esMultiSede = planUsuarioId >= 3;
@@ -470,6 +520,22 @@ export function usePlanPermissions() {
 
     planInfo,
 
+    /*
+     * Si el plan contratado caduco, y cual era.
+     *
+     * Quien pinte un mensaje de "esto es de planes pagos" tiene que mirar
+     * esto primero: a un vencido ese texto le miente, porque pago. El nombre
+     * sale del catalogo que este hook ya carga, con el respaldo de PLANES_FALLBACK.
+     */
+    planVencido,
+
+    planContratadoId,
+
+    planContratadoNombre:
+      planContratadoId !== null
+        ? (catalogo.find((p) => p.id === planContratadoId)?.nombre ?? null)
+        : null,
+
     catalogo,
 
     cantidadNegocios,
@@ -481,6 +547,8 @@ export function usePlanPermissions() {
     puedeCrearNegocio,
 
     puedeVerFiados,
+
+    puedeGestionarInventario,
 
     puedeVerRecomendaciones,
 

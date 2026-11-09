@@ -29,6 +29,8 @@ export function CashflowView() {
   const {
     planUsuarioId,
     planNombre,
+    planVencido,
+    planContratadoNombre,
     isPaywallOpen,
     paywallMotivo,
     paywallPlanRecomendadoId,
@@ -94,10 +96,14 @@ export function CashflowView() {
         <FeaturePaywallState
           onUpgrade={() =>
             abrirPaywall(
-              "El Flujo de Caja está disponible a partir del Plan Gerente ($39.900/mes). Mejora tu plan para acceder al control de liquidez, cartera y proyecciones financieras.",
+              planVencido
+                ? "Tu plan está vencido y el Flujo de Caja dejó de estar disponible. Renuévalo para volver a ver tu liquidez, cartera y proyecciones; tus datos siguen guardados."
+                : "El Flujo de Caja está disponible a partir del Plan Gerente ($39.900/mes). Mejora tu plan para acceder al control de liquidez, cartera y proyecciones financieras.",
               2,
             )
           }
+          planVencido={planVencido}
+          planContratadoNombre={planContratadoNombre}
           badge="Disponible a partir del Plan Gerente ($39.900/mes)"
           title={
             <>
@@ -143,6 +149,7 @@ export function CashflowView() {
           isOpen={isPaywallOpen}
           onClose={cerrarPaywall}
           motivo={paywallMotivo}
+          planActualId={planUsuarioId}
           planRecomendadoId={paywallPlanRecomendadoId}
         />
       </div>
@@ -297,6 +304,8 @@ export function CashflowView() {
             isChartLoading={isChartLoading}
             planNombre={planNombre}
             esPagoPlan={planUsuarioId >= 2}
+            planVencido={planVencido}
+            planContratadoNombre={planContratadoNombre}
           />
         </div>
 
@@ -317,6 +326,7 @@ export function CashflowView() {
         isOpen={isPaywallOpen}
         onClose={cerrarPaywall}
         motivo={paywallMotivo}
+        planActualId={planUsuarioId}
         planRecomendadoId={paywallPlanRecomendadoId}
       />
     </div>
