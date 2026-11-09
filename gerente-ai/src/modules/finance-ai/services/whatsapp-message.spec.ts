@@ -145,7 +145,31 @@ function fakeFinanceData(rows: Transaction[] = SEED): FakeFinanceData {
   const distributions: ProfitDistribution[] = [];
   const payrolls: PayrollPayment[] = [];
   const supplyDebts: SupplyDebt[] = [];
+  /** Lo que la prueba CREA. Las de alta de producto cuentan sobre esto. */
   const products: ProductRegistration[] = [];
+
+  /*
+   * Lo que ya estaba en el catalogo antes de empezar.
+   *
+   * Va aparte de `products` a proposito: aquello es "lo que se registro
+   * durante la prueba" y varias comprobaciones cuentan sus elementos.
+   *
+   * Hace falta porque desde que un plan de pago acompana el alta de lo que no
+   * esta registrado, un movimiento que nombra un producto desconocido ya no se
+   * guarda: arranca una conversacion para darlo de alta. Y `movimiento()` trae
+   * un nombre de producto por defecto, asi que sin esto las pruebas de fiados,
+   * descuentos o fechas acabarian todas en el flujo de alta.
+   */
+  const catalogoPrevio: ProductRegistration[] = [
+    {
+      businessId: 'b1',
+      name: 'producto de prueba',
+      salePrice: 1_000,
+      costPrice: 600,
+      category: 'Sin categoría',
+      stock: 1_000,
+    },
+  ];
   const updated: { id: string; changes: TransactionChanges }[] = [];
   const deleted: string[] = [];
 
@@ -198,6 +222,24 @@ function fakeFinanceData(rows: Transaction[] = SEED): FakeFinanceData {
       return Promise.resolve(debt);
     },
     products,
+    hasCatalog: () =>
+      Promise.resolve([...catalogoPrevio, ...products].length > 0),
+    findProductByName: (_businessId: string, nombre: string) => {
+      const fila = [...catalogoPrevio, ...products].find(
+        (producto) =>
+          producto.name.trim().toLowerCase() === nombre.trim().toLowerCase(),
+      );
+      return Promise.resolve(
+        fila ? { id: fila.name, name: fila.name, stock: fila.stock } : null,
+      );
+    },
+    setProductStock: (_businessId: string, productId: string, units: number) => {
+      const fila = [...catalogoPrevio, ...products].find(
+        (producto) => producto.name === productId,
+      );
+      if (fila) fila.stock = units;
+      return Promise.resolve();
+    },
     saveProduct: (producto: ProductRegistration) => {
       const repetido = products.some(
         (fila) => fila.name.toLowerCase() === producto.name.toLowerCase(),
@@ -283,7 +325,18 @@ const BASE_REQUEST = {
 };
 
 describe('WhatsAppMessageService', () => {
-  it('pide producto y unidades antes de registrar una venta incompleta', async () => {
+  /*
+   * Estas tres pruebas afirmaban lo contrario: que un movimiento sin producto
+   * ni cantidad se quedaba sin registrar hasta que el usuario los dijera.
+   *
+   * Esa regla llego con el inventario (992ca86) y se aplicaba a TODO: un
+   * arriendo, un transporte o un servicio respondian "¿que producto fue y
+   * cuantas unidades?", y como esa respuesta no persiste, el movimiento se
+   * perdia. El tendero veia a Luka contestar amable y luego no encontraba su
+   * gasto. Se reescriben a la regla correcta: la cantidad solo se pregunta
+   * cuando el mensaje NOMBRA un producto y el plan tiene inventario.
+   */
+  it('una venta sin producto se registra: no todo lo que se vende esta en un catalogo', async () => {
     const { service, financeData } = buildService({
       type: 'income',
       movements: [
@@ -302,19 +355,18 @@ describe('WhatsAppMessageService', () => {
       persist: true,
     });
 
-    expect(result.intent.type).toBe('unclear');
-    expect(result.replyText).toContain('producto');
-    expect(result.replyText).toContain('unidades');
-    expect(financeData.saved).toHaveLength(0);
+    expect(financeData.saved).toHaveLength(1);
+    expect(result.replyText).not.toContain('unidades');
   });
 
-  it('pide producto y unidades antes de registrar un gasto incompleto', async () => {
+  it('un gasto sin producto tampoco pregunta nada', async () => {
     const { service, financeData } = buildService({
       type: 'expense',
       movements: [
         movimiento({
-          amount: 20_000,
-          category: 'mercancia',
+          amount: 50_000,
+          category: 'renta',
+          concept: 'arriendo',
           productName: null,
           quantity: null,
         }),
@@ -326,13 +378,11 @@ describe('WhatsAppMessageService', () => {
       persist: true,
     });
 
-    expect(result.intent.type).toBe('unclear');
-    expect(result.replyText).toContain('producto');
-    expect(result.replyText).toContain('unidades');
-    expect(financeData.saved).toHaveLength(0);
+    expect(financeData.saved).toHaveLength(1);
+    expect(result.replyText).not.toContain('producto');
   });
 
-  it('también exige producto y unidades en un fiado incompleto', async () => {
+  it('un fiado sin producto se registra igual', async () => {
     const { service, financeData } = buildService({
       type: 'income',
       movements: [
@@ -342,7 +392,36 @@ describe('WhatsAppMessageService', () => {
           category: 'ventas',
           isCredit: true,
           customerName: 'Carlos',
+          // El plazo es obligatorio en los fiados desde SCRUM-43: sin el,
+          // Luka lo pregunta y no registra. Nada que ver con el inventario.
+          dueDate: PLAZO,
           productName: null,
+          quantity: null,
+        }),
+      ],
+    });
+
+    await service.handleMessage({ ...BASE_REQUEST, persist: true });
+
+    expect(financeData.saved).toHaveLength(1);
+    expect(financeData.saved[0].isCredit).toBe(true);
+  });
+
+  /*
+   * La cantidad solo se pregunta cuando el producto ESTA en el catalogo.
+   *
+   * Es el unico caso en que hace falta: si va a salir del estante, hay que
+   * saber cuanto sale. Para lo que no se controla, el monto basta.
+   */
+  it('si nombra un producto DEL CATALOGO sin cantidad, pregunta por las unidades', async () => {
+    const { service, financeData } = buildService({
+      type: 'income',
+      movements: [
+        movimiento({
+          type: 'income',
+          amount: 3_000,
+          category: 'ventas',
+          productName: 'producto de prueba',
           quantity: null,
         }),
       ],
@@ -353,10 +432,109 @@ describe('WhatsAppMessageService', () => {
       persist: true,
     });
 
-    expect(result.intent.type).toBe('unclear');
-    expect(result.replyText).toContain('producto');
     expect(result.replyText).toContain('unidades');
     expect(financeData.saved).toHaveLength(0);
+  });
+
+  /*
+   * El caso de la peluqueria. "Me pagaron 25.000 por un corte": el modelo saca
+   * productName "corte", que no esta en ningun catalogo. Antes eso arrancaba
+   * un alta de producto y la venta no se registraba; ahora se registra y punto.
+   */
+  it('un producto que no esta en el catalogo NO bloquea ni pregunta nada', async () => {
+    const { service, financeData } = buildService({
+      type: 'income',
+      movements: [
+        movimiento({
+          type: 'income',
+          amount: 25_000,
+          category: 'servicios_prestados',
+          productName: 'corte de cabello',
+          quantity: null,
+        }),
+      ],
+    });
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    expect(financeData.saved).toHaveLength(1);
+    expect(result.replyText).not.toContain('unidades');
+  });
+
+  // Pero si el negocio SI lleva catalogo, se le avisa de que eso no descuenta.
+  it('con catalogo, avisa de que ese producto no lleva existencias', async () => {
+    const { service } = buildService({
+      type: 'income',
+      movements: [
+        movimiento({
+          type: 'income',
+          amount: 80_000,
+          category: 'ventas',
+          productName: 'audifonos',
+          quantity: 1,
+        }),
+      ],
+    });
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      persist: true,
+    });
+
+    expect(result.replyText).toContain('no está en tu catálogo');
+  });
+
+  // El inventario es de planes pagos: al gratuito no se le pregunta nada y su
+  // movimiento se guarda sin enganche con el catalogo.
+  it('en el plan gratuito no se pregunta por unidades aunque nombre un producto', async () => {
+    const { service, financeData } = buildService({
+      type: 'income',
+      movements: [
+        movimiento({
+          type: 'income',
+          amount: 3_000,
+          category: 'ventas',
+          productName: 'Gaseosa',
+          quantity: null,
+        }),
+      ],
+    });
+
+    const result = await service.handleMessage({
+      ...BASE_REQUEST,
+      planIsFree: true,
+      persist: true,
+    });
+
+    expect(result.replyText).not.toContain('unidades');
+    expect(financeData.saved).toHaveLength(1);
+  });
+
+  it('y al gratuito no se le engancha el movimiento con el catalogo', async () => {
+    const { service, financeData } = buildService({
+      type: 'income',
+      movements: [
+        movimiento({
+          type: 'income',
+          amount: 3_000,
+          category: 'ventas',
+          productName: 'Gaseosa',
+          quantity: 2,
+        }),
+      ],
+    });
+
+    await service.handleMessage({
+      ...BASE_REQUEST,
+      planIsFree: true,
+      persist: true,
+    });
+
+    expect(financeData.saved[0].productName).toBeNull();
+    expect(financeData.saved[0].quantity).toBeNull();
   });
 
   it('registra un gasto y responde con el texto del modelo', async () => {

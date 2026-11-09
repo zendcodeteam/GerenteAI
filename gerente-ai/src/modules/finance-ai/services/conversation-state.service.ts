@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import type {
   PayrollDraft,
   ProductDraft,
+  StockDraft,
   QueryPeriod,
   SupplyDebtDraft,
   Transaction,
@@ -132,13 +133,31 @@ export interface PendingProduct {
   at: number;
 }
 
+/**
+ * Un ajuste de existencias esperando el visto bueno.
+ *
+ * Guarda el producto ya resuelto y las unidades que tenia ANTES: el resumen
+ * que se le ensena al usuario dice de cuanto a cuanto va, y ese "antes" hay
+ * que haberlo leido en el momento de armarlo, no al confirmar.
+ */
+export interface PendingStock {
+  kind: 'stock';
+  draft: StockDraft;
+  stage: 'datos' | 'confirmacion';
+  productoId: string | null;
+  nombreGuardado: string | null;
+  unidadesAntes: number | null;
+  at: number;
+}
+
 export type PendingAction =
   | PendingCorrection
   | PendingDeletion
   | PendingRegistration
   | PendingPayroll
   | PendingSupplyDebt
-  | PendingProduct;
+  | PendingProduct
+  | PendingStock;
 
 @Injectable()
 export class ConversationStateService {
@@ -269,6 +288,22 @@ export class ConversationStateService {
   deudaProveedorPendiente(businessId: string): PendingSupplyDebt | null {
     const abierta = this.pendiente(businessId);
     return abierta?.kind === 'supply-debt' ? abierta : null;
+  }
+
+  recordarStock(
+    businessId: string,
+    pendiente: Omit<PendingStock, 'at' | 'kind'>,
+  ): void {
+    this.recordar(businessId, {
+      ...pendiente,
+      kind: 'stock',
+      at: Date.now(),
+    });
+  }
+
+  stockPendiente(businessId: string): PendingStock | null {
+    const abierta = this.pendiente(businessId);
+    return abierta?.kind === 'stock' ? abierta : null;
   }
 
   productoPendiente(businessId: string): PendingProduct | null {

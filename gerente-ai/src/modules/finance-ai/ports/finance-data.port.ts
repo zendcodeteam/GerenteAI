@@ -202,6 +202,46 @@ export interface FinanceDataPort {
    */
   saveProduct(product: ProductRegistration): Promise<ProductRegistrationResult>;
 
+  /**
+   * ¿Esta sede lleva catálogo de productos?
+   *
+   * Es la señal, sin preguntarle nada a nadie, de si al negocio le interesa el
+   * inventario. Una peluquería o un restaurante nunca dan de alta productos,
+   * así que no se les menciona el inventario jamás. Una tienda con su catálogo
+   * sí quiere enterarse cuando algo no cuadra.
+   */
+  hasCatalog(businessId: string): Promise<boolean>;
+
+  /**
+   * ¿Existe ya este producto en el catálogo de la sede?
+   *
+   * Se compara como lo hace el bot al resolver un producto de un mensaje: sin
+   * acentos, sin mayúsculas y con un solo espacio. Devuelve el nombre tal como
+   * está guardado, que es el que hay que enseñarle al usuario.
+   *
+   * Sirve para saber ANTES de guardar si una venta se puede registrar o si
+   * primero hay que dar de alta el producto. Preguntarlo antes permite
+   * acompañar al usuario; descubrirlo al fallar solo permite disculparse.
+   */
+  findProductByName(
+    businessId: string,
+    name: string,
+  ): Promise<{ id: string; name: string; stock: number } | null>;
+
+  /**
+   * Deja el producto con las unidades indicadas.
+   *
+   * Es un ajuste de conteo, no un movimiento: no toca ventas, gastos ni
+   * precios. Se fija el valor ABSOLUTO en vez de sumar o restar porque quien
+   * corrige el stock lo hace mirando el estante, y el numero que tiene delante
+   * es el que queda, no la diferencia.
+   */
+  setProductStock(
+    businessId: string,
+    productId: string,
+    units: number,
+  ): Promise<void>;
+
   /** Guarda un reparto de utilidades. */
   saveProfitDistribution(
     distribution: ProfitDistribution,
@@ -242,10 +282,7 @@ export interface FinanceDataPort {
   ): Promise<boolean>;
 
   /** Consulta la bitácora de auditoría de operaciones destructivas. */
-  listAuditLogs?(
-    businessId: string,
-    limit?: number,
-  ): Promise<unknown[]>;
+  listAuditLogs?(businessId: string, limit?: number): Promise<unknown[]>;
 }
 
 export const FINANCE_DATA_PORT = Symbol('FINANCE_DATA_PORT');

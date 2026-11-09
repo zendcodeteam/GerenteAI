@@ -31,6 +31,7 @@ import {
   type PaymentMethod,
   type PayrollDraft,
   type ProductDraft,
+  type StockDraft,
   type SupplyDebtDraft,
   type PeriodSummary,
   type ProfitBeneficiary,
@@ -62,6 +63,7 @@ import {
   type PendingPayroll,
   type PendingRegistration,
   type PendingProduct,
+  type PendingStock,
   type PendingSupplyDebt,
 } from './conversation-state.service';
 import {
@@ -324,7 +326,11 @@ export class WhatsAppMessageService {
       intent.type !== 'unclear' &&
       intent.type !== 'payroll' &&
       intent.type !== 'supply_debt' &&
-      intent.type !== 'product'
+      intent.type !== 'product' &&
+      // "stock" conserva por lo mismo: el ajuste se arma en dos turnos
+      // —que producto y cuantas quedan— y cada respuesta llega como un
+      // stock nuevo con un solo dato.
+      intent.type !== 'stock'
     ) {
       this.state.olvidar(request.businessId);
     }
@@ -375,6 +381,9 @@ export class WhatsAppMessageService {
       case 'product':
         return this.handleProduct(intent, request, currency, meta);
 
+      case 'stock':
+        return this.handleStock(intent, request, meta);
+
       case 'income':
       case 'expense':
       case 'investment':
@@ -415,25 +424,6 @@ export class WhatsAppMessageService {
       return this.needsClarification(
         intent,
         'No alcancé a identificar el monto. ¿Me lo confirmas para registrarlo?',
-        meta,
-      );
-    }
-
-    const movimientoSinProductoOCantidad = intent.movements.find(
-      (movimiento) => !movimiento.productName || !movimiento.quantity,
-    );
-
-    if (movimientoSinProductoOCantidad) {
-      const faltaProducto = !movimientoSinProductoOCantidad.productName;
-      const faltaCantidad = !movimientoSinProductoOCantidad.quantity;
-
-      return this.needsClarification(
-        intent,
-        faltaProducto && faltaCantidad
-          ? '¿Qué producto fue y cuántas unidades? Necesito esos datos para registrar correctamente el movimiento y actualizar el inventario.'
-          : faltaProducto
-            ? '¿Qué producto fue? Necesito el nombre exacto para actualizar el inventario.'
-            : '¿Cuántas unidades fueron? Necesito la cantidad para actualizar el inventario.',
         meta,
       );
     }
@@ -556,6 +546,22 @@ export class WhatsAppMessageService {
       };
     }
 
+    /*
+     * El inventario se mira ANTES de guardar, porque el aviso habla del estante
+     * tal como estaba: después de guardar, las existencias ya cambiaron.
+     */
+    const revision = request.persist
+      ? await this.revisarInventario(transactions, request)
+      : { faltaCantidad: null, avisos: [] };
+
+    if (revision.faltaCantidad) {
+      return this.needsClarification(
+        intent,
+        `¿Cuántas unidades de ${revision.faltaCantidad.productName} fueron? Lo necesito para descontarlas de tu inventario.`,
+        meta,
+      );
+    }
+
     if (request.persist) {
       await this.financeData.saveTransactions(transactions);
     }
@@ -572,10 +578,12 @@ export class WhatsAppMessageService {
       // pone quien tiene los datos. El plazo del fiado se agrega aparte por lo
       // mismo: que salga o no en la confirmacion no puede depender de que al
       // modelo se le ocurra mencionarlo.
-      replyText:
+      replyText: [
         transactions.length === 1 && !intent.discount
           ? intent.responseText + lineaDePlazo(transactions[0])
           : renderMovementsRegistered(transactions, currency, intent.discount),
+        ...revision.avisos,
+      ].join('\n\n'),
       meta,
     };
   }
@@ -598,6 +606,7 @@ export class WhatsAppMessageService {
         payroll: null,
         supplyDebt: null,
         product: null,
+        stock: null,
         confirmed: null,
         confirmedCount: null,
         discount: null,
@@ -628,6 +637,12 @@ export class WhatsAppMessageService {
     referenceDate: string,
     meta: WhatsAppMessageResult['meta'],
   ): Promise<WhatsAppMessageResult> {
+    const ajuste = this.state.stockPendiente(request.businessId);
+
+    if (ajuste?.stage === 'confirmacion') {
+      return this.confirmarStock(ajuste, intent, request, meta);
+    }
+
     const producto = this.state.productoPendiente(request.businessId);
 
     if (producto?.stage === 'confirmacion') {
@@ -1737,12 +1752,234 @@ export class WhatsAppMessageService {
    * cuando haga falta, y pedirlos aqui alargaria la conversacion para datos
    * que no cambian lo que el producto hace.
    */
+  /**
+   * Qué tiene que ver el inventario con estos movimientos.
+   *
+   * La regla, entera: **se lleva inventario de lo que está en el catálogo, y
+   * de nada más**. El catálogo es la declaración de intenciones del tendero;
+   * no hace falta preguntarle en qué modo quiere trabajar.
+   *
+   * De ahí salen los tres casos:
+   *
+   * - Producto EN el catálogo: la venta descuenta existencias, automático.
+   * - Producto que no está: la venta se registra igual. Si el negocio lleva
+   *   catálogo, se le avisa; si no lleva ninguno —una peluquería, un
+   *   restaurante— no se le menciona el inventario jamás.
+   * - Vendió más de lo anotado: también se registra. La venta ocurrió; lo que
+   *   estaba mal era el conteo.
+   *
+   * Nada de esto bloquea. Registrar el movimiento es LA función del producto.
+   */
+  private async revisarInventario(
+    transactions: Transaction[],
+    request: WhatsAppMessageRequest,
+  ): Promise<{ faltaCantidad: Transaction | null; avisos: string[] }> {
+    const vacio = { faltaCantidad: null, avisos: [] };
+
+    // El gratuito llega aquí sin productName: `buildTransactions` ya se lo
+    // quitó. La comprobación es por si acaso y para ahorrarse las consultas.
+    if (request.planIsFree) return vacio;
+
+    const conProducto = transactions.filter(
+      (movimiento) => movimiento.type === 'income' && movimiento.productName,
+    );
+    if (!conProducto.length) return vacio;
+
+    // Sin catálogo, este negocio no lleva inventario y no hay nada que decirle.
+    if (!(await this.financeData.hasCatalog(request.businessId))) return vacio;
+
+    const avisos: string[] = [];
+
+    for (const movimiento of conProducto) {
+      const producto = await this.financeData.findProductByName(
+        request.businessId,
+        movimiento.productName!,
+      );
+
+      if (!producto) {
+        avisos.push(
+          `Ojo: "${movimiento.productName}" no está en tu catálogo, así que no descontó existencias. Si quieres llevarle inventario, dime "agrega ${movimiento.productName}".`,
+        );
+        continue;
+      }
+
+      // El producto SÍ está en el catálogo: aquí la cantidad sí hace falta,
+      // porque sin ella no se sabe cuántas unidades salieron del estante.
+      if (!movimiento.quantity) {
+        return { faltaCantidad: movimiento, avisos: [] };
+      }
+
+      if (movimiento.quantity > producto.stock) {
+        avisos.push(
+          `Ojo: tenías ${producto.stock} ${producto.name} anotadas y vendiste ${movimiento.quantity}. Dejé el estante en 0; revisa el conteo cuando puedas.`,
+        );
+      }
+    }
+
+    return { faltaCantidad: null, avisos };
+  }
+
+  /**
+   * Corrige cuántas unidades quedan de un producto.
+   *
+   * Un conteo, una merma o una rotura cambian el estante sin mover un peso. No
+   * se registra ningún movimiento, y el resumen se lo dice al usuario con todas
+   * las letras: confundir un ajuste con una venta es el error que esconde
+   * ingresos, y más vale sobrar en avisar.
+   *
+   * Se pide confirmación mostrando de cuánto a cuánto va. Un stock mal dictado
+   * no da la cara: no se nota hasta que la venta falla por existencias o hasta
+   * que el reporte de reposición manda comprar lo que ya está en la bodega.
+   */
+  private async handleStock(
+    intent: MessageIntent,
+    request: WhatsAppMessageRequest,
+    meta: WhatsAppMessageResult['meta'],
+  ): Promise<WhatsAppMessageResult> {
+    if (request.planIsFree) {
+      return this.plainResult(
+        { ...intent, type: 'premium' },
+        'Llevar inventario está disponible en los planes pagos.',
+        meta,
+      );
+    }
+
+    const abierta = this.state.stockPendiente(request.businessId);
+    const borrador: StockDraft = {
+      productName:
+        intent.stock?.productName ?? abierta?.draft.productName ?? null,
+      units: intent.stock?.units ?? abierta?.draft.units ?? null,
+    };
+
+    if (!borrador.productName) {
+      this.state.recordarStock(request.businessId, {
+        draft: borrador,
+        stage: 'datos',
+        productoId: null,
+        nombreGuardado: null,
+        unidadesAntes: null,
+      });
+
+      return this.plainResult(
+        intent,
+        '¿De qué producto quieres ajustar el inventario?',
+        meta,
+      );
+    }
+
+    const producto = await this.financeData.findProductByName(
+      request.businessId,
+      borrador.productName,
+    );
+
+    if (!producto) {
+      // No se deja al usuario con un "no existe" y nada mas: se le dice el
+      // camino exacto, que es darlo de alta primero.
+      this.state.olvidar(request.businessId);
+
+      return this.plainResult(
+        intent,
+        `No encontré "${borrador.productName}" en tu catálogo, así que no hay inventario que ajustar 😊
+
+Si quieres agregarlo, dime por ejemplo: "agrega ${borrador.productName}, lo vendo en 2.000 y me cuesta 1.200".`,
+        meta,
+      );
+    }
+
+    if (borrador.units === null) {
+      this.state.recordarStock(request.businessId, {
+        draft: borrador,
+        stage: 'datos',
+        productoId: producto.id,
+        nombreGuardado: producto.name,
+        unidadesAntes: producto.stock,
+      });
+
+      return this.plainResult(
+        intent,
+        `¿Cuántas unidades de ${producto.name} te quedan? Ahora tengo anotadas ${producto.stock}.`,
+        meta,
+      );
+    }
+
+    this.state.recordarStock(request.businessId, {
+      draft: borrador,
+      stage: 'confirmacion',
+      productoId: producto.id,
+      nombreGuardado: producto.name,
+      unidadesAntes: producto.stock,
+    });
+
+    return this.plainResult(
+      intent,
+      renderStockSummary(producto.name, producto.stock, borrador.units),
+      meta,
+    );
+  }
+
+  /** Aplica el ajuste de inventario que el usuario acaba de confirmar. */
+  private async confirmarStock(
+    pendiente: PendingStock,
+    intent: MessageIntent,
+    request: WhatsAppMessageRequest,
+    meta: WhatsAppMessageResult['meta'],
+  ): Promise<WhatsAppMessageResult> {
+    this.state.olvidar(request.businessId);
+
+    if (intent.confirmed !== true) {
+      return this.plainResult(
+        intent,
+        'Listo, dejé el inventario como estaba 😊',
+        meta,
+      );
+    }
+
+    const nombre = pendiente.nombreGuardado ?? '';
+    const antes = pendiente.unidadesAntes ?? 0;
+    const despues = pendiente.draft.units ?? 0;
+
+    if (request.persist && pendiente.productoId) {
+      await this.financeData.setProductStock(
+        request.businessId,
+        pendiente.productoId,
+        despues,
+      );
+    }
+
+    return this.plainResult(
+      intent,
+      renderStockAjustado(nombre, antes, despues),
+      meta,
+    );
+  }
+
   private handleProduct(
     intent: MessageIntent,
     request: WhatsAppMessageRequest,
     currency: string,
     meta: WhatsAppMessageResult['meta'],
   ): Promise<WhatsAppMessageResult> {
+    /*
+     * El catálogo es de planes pagos.
+     *
+     * Se devuelve la intención como `premium` en vez de un texto propio: el
+     * mensaje comercial —con los precios y el enlace— lo arma el backend en un
+     * solo sitio, y así no hay dos versiones del argumento de venta que acaben
+     * discrepando.
+     *
+     * No se bloquea aquí el resto del inventario (listar, vender contra él):
+     * eso ya no llega, porque `ajustarPorInventario` deja fuera al gratuito.
+     */
+    if (request.planIsFree) {
+      return Promise.resolve(
+        this.plainResult(
+          { ...intent, type: 'premium' },
+          'Llevar catálogo de productos está disponible en los planes pagos.',
+          meta,
+        ),
+      );
+    }
+
     const abierta = this.state.productoPendiente(request.businessId);
     const borrador = mezclarProducto(abierta?.draft, intent.product);
 
@@ -1899,6 +2136,7 @@ export class WhatsAppMessageService {
       payroll: normalizePayroll(output?.payroll),
       supplyDebt: normalizeSupplyDebt(output?.supplyDebt),
       product: normalizeProduct(output?.product),
+      stock: normalizeStockDraft(output?.stock),
       confirmed: normalizeConfirmed(output?.confirmed),
       confirmedCount: normalizePosition(output?.confirmedCount),
       amount,
@@ -1968,8 +2206,19 @@ export class WhatsAppMessageService {
       isCredit: movement.isCredit,
       customerName: movement.customerName,
       dueDate: movement.dueDate,
-      productName: movement.productName,
-      quantity: movement.quantity,
+      /*
+       * El enganche con el inventario solo existe en los planes pagos.
+       *
+       * Sin esto, un tendero del plan gratuito que dijera "vendi 2 gaseosas"
+       * acababa contra `resolveProducts`, que exige que el producto este dado
+       * de alta en el catalogo, y su venta se perdia. El inventario llego
+       * despues; su forma de registrar no puede romperse por eso.
+       *
+       * La descripcion SI conserva lo que vendio ("Venta de gaseosas"): se
+       * pierde el enganche con el catalogo, no el dato.
+       */
+      productName: request.planIsFree ? null : movement.productName,
+      quantity: request.planIsFree ? null : movement.quantity,
       supplierName: movement.supplierName,
       supplierCreditDays: movement.supplierCreditDays,
       isSupplierCredit: movement.isSupplierCredit,
@@ -2131,6 +2380,7 @@ const INTENT_TYPES: MessageIntentType[] = [
   'payroll',
   'supply_debt',
   'product',
+  'stock',
   'query',
   'correction',
   'unclear',
@@ -2760,6 +3010,80 @@ export function renderProductSummary(
   return lineas.join('\n');
 }
 
+/**
+ * El ajuste antes de aplicarlo, de cuanto a cuanto.
+ *
+ * Dice explicitamente que no se registra ninguna venta ni gasto. Es la duda
+ * razonable de quien corrige un conteo —"¿esto me va a descuadrar la plata?"—
+ * y dejarla sin responder hace que no se use la funcion.
+ */
+export function renderStockSummary(
+  nombre: string,
+  antes: number,
+  despues: number,
+): string {
+  const diferencia = despues - antes;
+
+  const cambio =
+    diferencia === 0
+      ? 'Queda igual que ahora.'
+      : diferencia > 0
+        ? `Suben ${diferencia} unidades.`
+        : `Bajan ${Math.abs(diferencia)} unidades.`;
+
+  return [
+    `Voy a ajustar el inventario de ${nombre}:`,
+    `\u2022 Antes: ${antes} unidades`,
+    `\u2022 Despu\u00e9s: ${despues} unidades`,
+    cambio,
+    '',
+    'Esto solo corrige el conteo: no registra ninguna venta ni ning\u00fan gasto.',
+    '',
+    '\u00bfLo ajusto as\u00ed? Responde s\u00ed o no.',
+  ].join('\n');
+}
+
+/** El ajuste ya aplicado. */
+export function renderStockAjustado(
+  nombre: string,
+  antes: number,
+  despues: number,
+): string {
+  return `\u2705 Listo, ${nombre} queda con ${despues} unidades (antes ten\u00eda ${antes}).`;
+}
+
+/** El ajuste a medio armar, contado para el modelo. */
+function renderPendingStock(pendiente: PendingStock): string {
+  const nombre =
+    pendiente.nombreGuardado ?? pendiente.draft.productName ?? 'un producto';
+
+  if (pendiente.stage === 'confirmacion') {
+    return `Hay un ajuste de inventario de ${nombre} esperando un s\u00ed o un no.`;
+  }
+
+  return pendiente.draft.productName
+    ? `Se est\u00e1 ajustando el inventario de ${nombre} y falta saber cu\u00e1ntas unidades quedan.`
+    : 'Se est\u00e1 ajustando un inventario y falta saber de qu\u00e9 producto.';
+}
+
+/**
+ * Las unidades que quedan, tal como las entiende el sistema.
+ *
+ * El 0 es valido y distinto de null: "se acabaron" es una respuesta. Por eso
+ * no vale `normalizeQuantity`, que descarta el cero, ni `Number(null)`, que lo
+ * convierte en uno.
+ */
+function normalizeStockDraft(value: unknown): StockDraft | null {
+  if (!value || typeof value !== 'object') return null;
+
+  const crudo = value as Record<string, unknown>;
+
+  return {
+    productName: cleanText(crudo.productName),
+    units: normalizeStock(crudo.units),
+  };
+}
+
 /** Confirmacion del producto ya guardado. */
 export function renderProductRegistered(
   producto: ProductRegistration,
@@ -2814,6 +3138,17 @@ function normalizeProduct(value: unknown): ProductDraft | null {
  * respuesta, y `normalizeQuantity` no sirve aqui porque descarta el 0.
  */
 function normalizeStock(value: unknown): number | null {
+  /*
+   * "No dijo nada" NO es cero.
+   *
+   * `Number(null)` es 0, asi que sin esta guarda un `stock: null` del modelo
+   * —lo que devuelve en cada turno que no habla de unidades— se convertia en
+   * un 0 bien formado. Y como `mezclarProducto` usa `??`, ese 0 PISABA lo que
+   * el usuario ya habia dicho: "agrega arroz, tengo 20" y al contestar la
+   * siguiente pregunta el stock volvia a 0.
+   */
+  if (value === null || value === undefined || value === '') return null;
+
   const numero = Number(value);
   if (!Number.isFinite(numero) || numero < 0) return null;
   return Math.round(numero);
@@ -3997,6 +4332,10 @@ export function renderPendingQuestion(
 
   if (pendiente.kind === 'product') {
     return renderPendingProduct(pendiente, currency);
+  }
+
+  if (pendiente.kind === 'stock') {
+    return renderPendingStock(pendiente);
   }
 
   return renderPendingCorrection(pendiente, currency);

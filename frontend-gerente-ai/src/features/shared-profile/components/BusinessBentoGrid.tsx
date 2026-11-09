@@ -85,6 +85,7 @@ export function BusinessBentoGrid({
     cerrarPaywall,
     verificarCreacionNegocio,
     verificarCreacionSede,
+    planUsuarioId,
   } = usePlanPermissions();
 
   // Responder a deep link action desde URL
@@ -439,6 +440,7 @@ export function BusinessBentoGrid({
         isOpen={isPaywallOpen}
         onClose={cerrarPaywall}
         motivo={paywallMotivo}
+        planActualId={planUsuarioId}
         planRecomendadoId={paywallPlanRecomendadoId}
         catalogo={catalogo}
       />

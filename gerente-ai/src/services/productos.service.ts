@@ -1,12 +1,14 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from './prisma.service';
 import { NegociosService } from './negocios.service';
+import { PlanesService } from './planes.service';
 import { normalizarNombreDeProducto } from '../modules/finance-ai/domain/texto-producto';
 import { CreateProductoDto } from '../dto/productos/create-producto.dto';
 import { UpdateProductoDto } from '../dto/productos/update-producto.dto';
@@ -16,7 +18,67 @@ export class ProductosService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly negociosService: NegociosService,
+    private readonly planes: PlanesService,
   ) {}
+
+  /**
+   * El inventario es de planes pagos.
+   *
+   * Se comprueba contra el plan VIGENTE, no el contratado: `PlanesService`
+   * hace caer un plan vencido a Asistente, asi que una suscripcion que expira
+   * pierde el acceso sola, sin logica aparte que mantener en dos sitios.
+   *
+   * Lo que ya esta registrado NO se toca. Un negocio que paso por un plan de
+   * pago conserva sus productos; lo que pierde es poder gestionarlos, y los
+   * recupera intactos al renovar.
+   *
+   * MASTER no pasa por aqui, igual que no pasa por la comprobacion de
+   * permisos: es soporte, no un cliente con plan.
+   */
+  private async exigirInventario(sedeId: string, rolGlobal: string) {
+    if (rolGlobal === 'MASTER') return;
+
+    const sede = await this.prisma.sede.findUnique({
+      where: { id: sedeId },
+      select: { negocio: { select: { plan: true, planVenceEl: true } } },
+    });
+
+    if (!sede) {
+      throw new NotFoundException('La sede indicada no existe');
+    }
+
+    if (
+      this.planes.tieneFuncionalidad(
+        sede.negocio.plan,
+        sede.negocio.planVenceEl,
+        'inventario',
+      )
+    ) {
+      return;
+    }
+
+    throw new ForbiddenException(
+      this.porQueNoHayInventario(sede.negocio.plan, sede.negocio.planVenceEl),
+    );
+  }
+
+  /**
+   * Por qué este negocio no tiene inventario, dicho para que se entienda.
+   *
+   * Distingue los dos casos porque al usuario le importan de forma muy
+   * distinta: uno nunca ha pagado y el otro pagó y se le venció. A ese segundo
+   * hay que decirle que no ha perdido nada.
+   */
+  private porQueNoHayInventario(
+    plan: number,
+    planVenceEl: Date | null,
+  ): string {
+    const estado = this.planes.estado(plan, planVenceEl);
+
+    return estado.vencido
+      ? `Tu plan ${estado.contratado.nombre} está vencido, así que el inventario no está disponible. Tus productos siguen guardados y los recuperas al renovar.`
+      : `El inventario es una función de los planes pagos. Con el plan ${estado.vigente.nombre} puedes registrar tus ventas y gastos, pero no llevar catálogo de productos.`;
+  }
 
   /**
    * Registra un nuevo producto cumpliendo los criterios de negocio:
@@ -95,6 +157,7 @@ export class ProductosService {
     await this.negociosService.verificarAccesoSede(userId, sede, rolGlobal, {
       escritura: true,
     });
+    await this.exigirInventario(dto.sedeId, rolGlobal);
     const alias = limpiarAlias(dto.alias, nombre);
     await this.verificarNombreYAliasLibres(dto.sedeId, nombre, alias);
 
@@ -125,6 +188,19 @@ export class ProductosService {
       stockBajo?: boolean;
     } = {},
   ) {
+    /*
+     * Consultar el catálogo NO depende del plan, y es deliberado.
+     *
+     * El repositorio ya fija esa regla en `aislamiento.e2e-spec`: "leer nunca
+     * depende del plan; un negocio con el plan vencido conserva el histórico
+     * de todas sus sedes". Si vencer una suscripción escondiera lo que el
+     * tendero registró, el castigo por dejar de pagar sería perder de vista su
+     * propia contabilidad, que es justo lo contrario de lo que se busca.
+     *
+     * Lo que sí exige plan es ESCRIBIR: registrar, editar y borrar. Y el panel
+     * no le pinta el inventario a un plan gratuito, así que tampoco lo ve por
+     * ahí; lo que queda abierto es el dato suyo, no la funcionalidad.
+     */
     const visibles = await this.negociosService.filtroDeSedes(
       userId,
       rolGlobal,
@@ -505,6 +581,12 @@ export class ProductosService {
       rolGlobal,
       opciones,
     );
+
+    // Solo al escribir: ver un producto que ya existe no es gestionar el
+    // inventario, y esconderle a alguien lo que registró no arregla nada.
+    if (opciones.escritura) {
+      await this.exigirInventario(sedeId, rolGlobal);
+    }
   }
 }
 

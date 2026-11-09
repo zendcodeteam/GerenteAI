@@ -24,6 +24,16 @@ interface PlanLimitPaywallModalProps {
   isOpen: boolean;
   onClose: () => void;
   motivo?: string;
+  /**
+   * Plan que el negocio tiene VIGENTE ahora mismo.
+   *
+   * Obligatorio a propósito. Antes se daba por hecho que quien llegaba aquí
+   * estaba en Gerente, y a un negocio gratuito o con el plan vencido el modal
+   * le decía que tenía un plan que no tiene. Como el frontend no tiene
+   * pruebas, el compilador es la única red que avisa si alguien abre el modal
+   * sin decir desde qué plan viene.
+   */
+  planActualId: number;
   planRecomendadoId?: number;
   catalogo?: PlanBackend[];
   negocioId?: string;
@@ -43,6 +53,7 @@ export function PlanLimitPaywallModal({
   isOpen,
   onClose,
   motivo,
+  planActualId,
   catalogo = PLANES_FALLBACK,
   negocioId = "",
   negocioNombre = "Tu Negocio",
@@ -75,17 +86,17 @@ export function PlanLimitPaywallModal({
     PLANES_FALLBACK[2];
 
   /*
-   * Para el estado actual de Luka, el usuario que llega a este
-   * bloqueo está en Plan Gerente.
+   * El plan que el negocio tiene de verdad.
    *
-   * Más adelante este valor puede recibirse directamente desde
-   * el hook de permisos, pero no alteramos la lógica comercial
-   * del bloqueo en este componente.
+   * Antes era una constante: se asumía que quien llegaba a este bloqueo era un
+   * Gerente topando el límite de sedes. Con el inventario y el flujo de caja
+   * también llegan aquí negocios gratuitos y con el plan vencido, y a esos el
+   * modal les afirmaba un plan que no tienen.
    */
   const planActual =
-    planesDisponibles.find((plan) => plan.id === 2) ||
-    PLANES_FALLBACK.find((plan) => plan.id === 2) ||
-    PLANES_FALLBACK[1];
+    planesDisponibles.find((plan) => plan.id === planActualId) ||
+    PLANES_FALLBACK.find((plan) => plan.id === planActualId) ||
+    PLANES_FALLBACK[0];
 
   // ============================================================
   // PRECIO
@@ -117,13 +128,24 @@ export function PlanLimitPaywallModal({
   // FEATURES
   // ============================================================
 
+  /*
+   * Lo que de verdad incluye el plan actual, leído del catálogo.
+   *
+   * Estaban escritos a mano describiendo a Gerente ("reportes avanzados"), así
+   * que a un plan gratuito le prometían funciones que no tiene. El número de
+   * sedes y la cuota de IA salen del catálogo; los reportes, de si el plan
+   * trae la funcionalidad correspondiente.
+   */
   const featuresPlanActual = [
-    "1 sede por negocio",
-    "Múltiples negocios simultáneos",
+    planActual.maxSedes === 1
+      ? "1 sede por negocio"
+      : `Hasta ${planActual.maxSedes} sedes por negocio`,
     MENSAJES_IA_POR_PLAN[planActual.id] ||
       "Mensajes con IA incluidos",
     "Registro ágil de ventas y gastos por WhatsApp 24/7",
-    "Reportes avanzados y control financiero",
+    planActual.funcionalidades?.includes("reportes_por_producto")
+      ? "Reportes avanzados y control financiero"
+      : "Reportes básicos",
   ];
 
   const featuresAdministrador = [
